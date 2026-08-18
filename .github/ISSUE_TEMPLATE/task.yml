@@ -1,0 +1,56 @@
+name: Task
+description: Something should work differently.
+labels: ["needs-triage", "task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A task proposes a change you already want. If you are reporting that something is
+        *broken*, the Bug form is the better fit.
+
+        If this repository has a `CONTEXT.md`, it is the glossary — using its words here saves a
+        round-trip.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what should change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: What happens today, and where you saw it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired
+    attributes:
+      label: Desired behaviour
+      description: What should happen instead. Concrete enough that someone else could tell whether it is done.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: >
+        One checkbox per thing that must be true before this is done, each one checkable by
+        someone who did not write it. The agent that implements this ticks every criterion it
+        delivered and leaves unticked — and explains — every one it did not.
+      value: |
+        - [ ] <what must be true>
+        - [ ] <what must be true>
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Alternatives you considered, prior attempts, links — whatever helps.

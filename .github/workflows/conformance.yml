@@ -1,54 +1,88 @@
 name: Conformance
 
-# The Organisation's conformance rules, served from `Jerome-Group/.github` and authored in the
-# management hub (ADR-0030). Central so that agreeing a convention once makes it true everywhere:
-# a rule added to the checker reaches this repository as a pin bump rather than as an edit
-# somebody has to remember to make here, and in every other repository as well.
+# The conformance rules, vendored into `conformance/` rather than called from the Organisation's
+# hub (ADR-0002). In Jerome-Group this file was a pinned `uses:` call so that a rule agreed once
+# reached every repository as a pin bump; standalone, there is no fleet to reach, and the call
+# would be permanently red — its gating rule reads required checks this repository cannot have on
+# a free private plan. The scripts are the hub's, unmodified; the manifest beside them is this
+# repository's own contract, edited in the same pull request as any file it binds.
 #
-# Its own file rather than a job inside `ci.yml`, because the two have different owners. This one
-# arrives written and is the Organisation's; `ci.yml` is this repository's to own and grow
-# (ADR-0026). Keeping them apart is what lets a repository rewrite its whole CI without touching
-# what the Organisation asks of it — and what lets the seed drop this file into a repository whose
-# CI it knows nothing about.
+# Its own file rather than a job inside `ci.yml`, still: `ci.yml` is the repository's checks and
+# grows with the code; this file asks whether the repository still keeps its own conventions, and
+# the two go red for different reasons.
 
 on:
   pull_request:
 
-  # A push as well as a pull request, and the reason is the ruleset rather than the rules: the
-  # `Required checks` ruleset names this job's context, and a context a repository has never
-  # produced is one every merge waits on forever. The push after this file arrives is what
-  # produces it once, before the first pull request needs it.
-  #
-  # No schedule, unlike `ci.yml` beside it. That one installs from a network and can rot in place
-  # while nothing is pushed; these rules are a pure function of the tree in front of them, so a
-  # run on an unchanged tree can only repeat its last answer.
+  # A push as well, so the tree rules run against `main` from the first commit — and so the
+  # `conformance` context exists on the branch history rather than only on pull requests. No
+  # schedule: these rules are a pure function of the tree, and a run on an unchanged tree can
+  # only repeat its last answer (`ci.yml` is the one that can rot in place, and carries the cron).
   push:
     branches: [main]
 
-jobs:
-  # The check context is this job id, then the job id inside the called workflow, joined by ` / ` —
-  # `conformance / check`. That is how GitHub reports a job that came from a reusable workflow, and
-  # it is the exact string the `Required checks` ruleset requires. Renaming this job renames the
-  # context, and the merge then blocks on a check that will never report.
-  conformance:
-    # A called workflow may only *narrow* what its caller granted, so the grant has to be made
-    # here: the linkage step reads the pull request against the issue it closes (ADR-0035), and a
-    # repository granting less than this cannot call the workflow at all — the job fails before
-    # any step runs.
-    permissions:
-      contents: read
-      issues: read
-      pull-requests: read
+# `issues` and `pull-requests` are for the linkage steps, which read the pull request against the
+# issue it closes. Granted at the top because every step here is the same check.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
 
-    # Pinned to a commit, never a branch or a tag. The hub this points at belongs to the
-    # Organisation and reaches every repository at once, so a floating reference would let one bad
-    # commit there turn every merge in the Organisation red simultaneously (ADR-0030). Pinned, a
-    # rule change arrives as one reviewable pull request per repository, opened by the publish that
-    # changed the rules and merged once this repository's own checks pass (ADR-0045, ADR-0047).
-    #
-    # Dependabot may open that bump too, and where it does `auto-merge-conformance-pin.yml` beside
-    # this file is what merges it. It can only offer one because the hub is *released*: the
-    # `github-actions` ecosystem resolves a version from tags and releases, and against an untagged
-    # repository it reports `No update needed` however stale the pin is (ADR-0046). It has never yet
-    # been seen doing so, which is why the publish no longer waits to find out.
-    uses: Jerome-Group/.github/.github/workflows/conformance.yml@85e9fd4033965968f364dfa80df7339bc16a5d2d
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions are pinned to a commit, not a tag, so a moved tag cannot change what runs here.
+      # Dependabot moves the pins forward (.github/dependabot.yml).
+      #
+      # `fetch-depth: 0` because the trailer and secret steps read the pull request's own commit
+      # range, and the whole span between base and head has to be reachable.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The tree rules: MAP.md coverage, required documents, skeleton headings, the ADR rules.
+      # Through `sh`, never `./` — the scripts' own headers say why. The repository name is
+      # passed for the originals comparison, which for this repository never matches: the
+      # manifest's `originals` names the seed these documents came from, not this tree.
+      - run: sh conformance/check-conformance.sh . "${{ github.repository }}"
+
+      # The attribution trailers, over the pull request's own commits — base to head by SHA,
+      # never `HEAD`, which on a pull_request event is a synthetic merge commit whose trailers
+      # are GitHub's. A push has no such range, so the step is guarded on the event.
+      - if: github.event_name == 'pull_request'
+        run: sh conformance/check-trailers.sh "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      # The secret scanner, pinned and checksum-verified rather than fetched fresh. Installed
+      # into the runner's temp rather than the tree, which is held to containing only what this
+      # repository committed. Its own step so toolchain failure and credential finding cannot be
+      # confused: red here is the install, red below is a credential.
+      - if: github.event_name == 'pull_request'
+        run: sh conformance/install-gitleaks.sh "$RUNNER_TEMP/scanners"
+
+      # On a free private repository GitHub's own secret scanning and push protection are paid
+      # features, so this scan is the only control there is. It fires **after** the push: by the
+      # time it goes red the credential has reached GitHub's servers, so the response is rotate
+      # first, then clean up — CONTRIBUTING.md carries the full order.
+      - if: github.event_name == 'pull_request'
+        env:
+          GITLEAKS: ${{ runner.temp }}/scanners/gitleaks
+        run: sh conformance/check-secrets.sh "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      # The pull request read against the issue it closes: an issue is linked, the acceptance
+      # boxes are ticked or explained, the drift block is present, the issue carries one state
+      # and one category label. Two commands because only the second can be exercised offline —
+      # the first is fetching, the second is judgement. The case directory goes to the runner's
+      # temp so the checked tree never contains a directory this repository did not commit.
+      - if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh conformance/resolve-issue-linkage.sh \
+            "${{ github.repository }}" "${{ github.event.pull_request.number }}" "$RUNNER_TEMP/linkage"
+          sh conformance/check-issue-linkage.sh "$RUNNER_TEMP/linkage"
+
+      # The hub's final step — required-checks gating (check-gating.sh, resolve-required-checks.sh)
+      # — is not vendored. It compares the workflows against the branch's required status checks,
+      # which a free-plan private repository cannot have (ADR-0003). Restore both scripts from
+      # Jerome-Group/.github if this repository ever gains rulesets.

@@ -1,0 +1,18 @@
+# Blank issues are off so that every issue arrives on `needs-triage` carrying the fields triage
+# needs — a blank issue would bypass both.
+#
+# "Off" means off for contributors, not for everyone: the chooser still offers a maintainer
+# "Blank issue", tagged `Maintainers only`. That tag is how you can tell the setting took effect
+# at all — seeing an untagged blank issue is the failure, not seeing none.
+#
+# Contact links take a literal URL, so they point at this repository's own documents.
+blank_issues_enabled: false
+
+contact_links:
+  - name: How work flows in this repository
+    url: https://github.com/jerome-queck/incypher-ctf/blob/main/CONTRIBUTING.md
+    about: Issue first, one change per pull request, squash merges, AI disclosed. Read this before filing.
+
+  - name: Reporting a vulnerability
+    url: https://github.com/jerome-queck/incypher-ctf/blob/main/SECURITY.md
+    about: Security problems go privately to security@jeromegroup.org, never into a public issue.

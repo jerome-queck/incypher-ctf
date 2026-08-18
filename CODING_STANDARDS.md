@@ -2,9 +2,13 @@
 
 This file is what `/code-review`'s **Standards** axis reads. It is layered:
 
-- **The core** (§1–§5) — shared by every repository, seeded from the template. Treat it as
-  fixed; it changes only by an org-level decision (see §7).
-- **Repo-specific standards** (§6) — each repository fills these in and evolves them freely.
+- **The general standards** (§1–§5) — seeded from the template this repository was born from, and
+  broadly true of any codebase. Change them rarely and deliberately (see §7).
+- **Repo-specific standards** (§6) — filled in and evolved as this codebase grows.
+
+Both layers are this repository's own now — the standards were seeded from an organisation this
+repository has since left (ADR-0002), so all of it evolves through this repository's own
+pull-request flow.
 
 ## 1. The principle: the code explains itself
 
@@ -90,10 +94,11 @@ Two shapes are settled, so no repository re-argues them:
 
 - **One workflow file for the checks, many jobs.** Jobs already give the parallelism and the
   separate check contexts, so a second file buys neither and splits the place a reader looks. A
-  workflow that is not a check — an automation that acts on a merge — is its own file. So is
-  `conformance.yml`, and for a reason the rule was never about: that file is not this repository's
-  to own. It arrives written, its pin is moved by Dependabot, and folding it into `ci.yml` would
-  make every rule the Organisation agrees an edit to a file this repository owns.
+  workflow that is not a check — an automation that acts on an event — is its own file. So is
+  `conformance.yml`, and for a reason of its own: `ci.yml` proves this repository's own artefact
+  and grows with the code, while `conformance.yml` asks whether the repository still keeps its
+  conventions. The two go red for different reasons and are read in different moods, so they stay
+  apart (ADR-0002).
 - **No path filters.** A filtered workflow never reports on a pull request it does not match, so
   a required check sits pending forever and the merge blocks on a report that will never arrive.
 
@@ -110,9 +115,10 @@ wrong.
 
 ## 7. Evolution — what is rigid, what moves
 
-- **The core (§1–§5) is rigid.** It is identical in every repository and changes only by an
-  org-level decision recorded as an ADR in the management hub, then rolled out through the
-  template (and to existing repositories as wanted). Do not quietly edit the core in one repo.
-- **§6 moves freely** per repository, through that repository's own pull requests.
-- **`MAP.md` is required everywhere, but its contents are repo-specific** and are updated
-  continuously alongside the code they describe.
+- **The general standards (§1–§5) move rarely.** They are broadly true of any codebase, so a
+  change to them is a change to how everything here is reviewed — worth an issue and, if it
+  reverses a stated principle, an ADR. Do not edit them casually, but they are this repository's
+  to change: there is no hub holding a canonical copy (ADR-0002).
+- **§6 moves freely**, through this repository's own pull requests.
+- **`MAP.md` is required, and its contents are repo-specific** — updated continuously alongside
+  the code they describe.

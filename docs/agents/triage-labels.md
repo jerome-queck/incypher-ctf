@@ -25,25 +25,34 @@ clause. When you cannot choose a state, the state is `needs-triage` — not an o
 | `bug`                      | `bug`                | Something is behaving wrongly                  |
 
 `decision` is a category the skills do not have. `enhancement` is not part of this vocabulary and
-no longer exists here — GitHub creates it on every new repository and the closed set deletes it. A
-skill that names it means `task`.
+does not exist here — a skill that names it means `task`.
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from these tables.
 
-## The set is closed, and it is not editable here
+## The set is closed, and how it stays closed
 
 These thirteen — the two tables above plus the five `wayfinder:*` types the wayfinding operations
-in `issue-tracker.md` name — are the whole of what this repository carries. They are created by
-the hub's Terraform (`Jerome-Group/org`, `modules/repository`), and the set is authoritative: a
-label added here by hand is **deleted** by the next apply, and one edited or removed by hand is
-put back as the hub wrote it.
+in `issue-tracker.md` name — are the whole of what this repository carries.
 
-That includes `bug` and `wontfix`, which GitHub creates by default and the hub then takes over.
-Renaming a label means renaming it in the hub, which renames it everywhere — and a rename is a
-delete and a create, so the old label's assignments do not follow.
+They were created by hand when the repository was set up ([ADR-0002](../adr/0002-org-machinery-is-vendored-to-stand-alone.md)),
+from the same set the Jerome-Group template used. **There is no automation keeping the set closed
+here.** In the organisation this repository was seeded from, Terraform reapplied the set and
+deleted anything outside it; standalone, that backstop is gone. So closing the set is a discipline,
+not a mechanism:
 
-A repository that genuinely needs a fourteenth word has to argue for it in the hub, where every
-repository would get it.
+- GitHub creates seven default labels on a new repository (`documentation`, `duplicate`,
+  `enhancement`, `good first issue`, `help wanted`, `invalid`, `question`). They were deleted at
+  setup. Don't recreate them.
+- A label added by hand **stays** until a human removes it — nothing reaps it. So don't add one
+  casually: a fourteenth word is a change to how every issue is classified, worth an issue and an
+  ADR, not a one-off `gh label create`.
+- Renaming a label is a delete and a create, so the old label's assignments do not follow. Rename
+  deliberately.
+
+`bin/audit` — the organisation's cross-repository label audit — does not exist here. The only
+backstop that a mis-stamped issue gets noticed is a person reading the tracker, and the
+conformance check, which fails a pull request whose linked issue is not on exactly one label per
+axis.
 
 An issue form's `labels:` key is applied by the web interface and never fires on the command-line
 path — `gh issue create --template` supplies starting body text and nothing else — so a form
@@ -59,5 +68,4 @@ carrying an axis keeps exactly what it arrived with, and nothing is replaced or 
 
 So the two defaults are the answer for an issue nobody classified. They are not an excuse to stop
 classifying: an issue you know is a `bug` and label `task` by omission reads as a task until
-somebody notices. `bin/audit` in `Jerome-Group/org` reports every open issue that ends up on the
-wrong number of labels on either axis, which is the backstop rather than the mechanism.
+somebody notices — and here, "somebody notices" is the whole backstop, so classify at creation.

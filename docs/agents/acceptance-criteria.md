@@ -9,8 +9,8 @@ is a decision record rather than a checklist — owes the first two nothing and 
 
 All three are checked rather than remembered: the conformance workflow reads every pull request
 against the issue it closes and goes red on an unexplained box, a missing drift block or an issue
-that never got its labels (ADR-0035). Write them as you go and the check never has anything to
-say.
+that never got its labels (`conformance/check-issue-linkage.sh`). Write them as you go and the
+check never has anything to say.
 
 ## 1. Tick what you delivered, on the issue
 
@@ -26,9 +26,9 @@ describes is true in the branch, and not when you tried.
 An unachievable criterion is a **first-class outcome**, not a failure to hide. It is declared by
 an explicit not-doing line in the pull-request body, in this shape:
 
-> **Not doing — #40, "`bin/audit` asserts the ruleset's bypass list":** the provider does not read
-> bypasses back, so there is nothing to assert against without a raw API call, which is its own
-> ticket.
+> **Not doing — #40, "the Solver retries a challenge on a proof-of-work timeout":** the ADK's
+> `connect` helper does not surface the timeout as a distinct error yet, so there is nothing to
+> branch on without parsing its log output, which is its own ticket.
 
 Issue, criterion, reason — all three, because the line has to be readable by someone who has not
 opened the issue. A pull request that leaves a box unticked and says nothing about it is
@@ -49,15 +49,15 @@ variance is the thing being removed.
 It leads with a verdict, so the Owner can act on it without reading a list of things that went
 right:
 
-> **#40 — Audit the branch-protection baseline: 6 of 7 criteria delivered, plus one thing you
+> **#40 — Wire the Solver to the challenge platform: 6 of 7 criteria delivered, plus one thing you
 > didn't ask for.**
 >
-> ⬜ **Not delivered** — `bin/audit` asserts the ruleset's bypass list. The provider does not read
-> bypasses back; it would take a raw API call, which is its own ticket. **Say the word and I'll
-> file it.**
-> ➕ **Beyond the brief** — `bin/audit` now names the repository in every failure line. Half the
-> new assertions are per-repository and the old output did not say which one failed. **Say the
-> word and I'll take it out.**
+> ⬜ **Not delivered** — the Solver retries a challenge on a proof-of-work timeout. The ADK does
+> not surface that timeout as a distinct error; it would take parsing its log output, which is its
+> own ticket. **Say the word and I'll file it.**
+> ➕ **Beyond the brief** — the Solver now logs the challenge category with every flag submission.
+> The brief asked only for the flag, but a run's log was unreadable without knowing which category
+> failed. **Say the word and I'll take it out.**
 >
 > Everything else is ticked on the issue and in the PR.
 
@@ -74,7 +74,7 @@ When there is nothing to report, it collapses to a single line and is still pres
 
 `/code-review` runs on the finished branch, **before** the pull request is opened — which is where
 the implement skill already places it — so the drift block is written after the review rather than
-before it. ADR-0029 argues the order; what it means in practice is that a review finding is fixed
-in the branch, and the block reports the branch as reviewed.
+before it. What that ordering buys in practice is that a review finding is fixed in the branch,
+and the block reports the branch as reviewed.
 
 The pull request itself is not optional — **How work flows** in `AGENTS.md` is that rule.

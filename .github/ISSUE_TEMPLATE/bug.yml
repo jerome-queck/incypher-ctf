@@ -1,0 +1,51 @@
+name: Bug
+description: Something is behaving wrongly.
+labels: ["needs-triage", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a **security** problem? Close this and email security@jeromegroup.org instead — a
+        vulnerability in a public issue is a disclosure.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what you got. Paste the error or the output rather than describing it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: >
+        One checkbox per thing that must be true before this is fixed, each one checkable by
+        someone who did not write it — the behaviour that replaces the fault, and any regression
+        test you expect with it. The agent that fixes this ticks every criterion it delivered and
+        leaves unticked — and explains — every one it did not.
+      value: |
+        - [ ] <what must be true>
+        - [ ] <what must be true>
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release, tag, or commit you saw this on, if the project has them.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, runtime version, and anything else that might matter.
