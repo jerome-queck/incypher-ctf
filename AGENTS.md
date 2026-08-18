@@ -76,6 +76,19 @@ recorded as one.
 
 ## Agent skills
 
+The Matt Pocock engineering skills are **installed in this repository** — `.claude/skills/` for
+Claude Code, `.agents/skills/` for Codex and other agents — so every teammate has the same set on
+clone, with no global install. **Use them; do not reinvent their routines.** When a task matches a
+skill — grilling a plan, modelling the domain, triaging an issue, implementing a ticket, reviewing
+a diff, resolving a merge — invoke the skill rather than improvising, and follow the route below.
+If you are unsure which one fits, start with `/ask-matt`. This instruction is the enforcement:
+skills are model-invoked, so a session that ignores them fails no check — it just does worse work.
+
+They are already configured for this repository — GitHub Issues as the tracker, the closed
+13-label set for triage, `docs/` for any artefacts — so **do not run `/setup-matt-pocock-skills`
+again**; those questions are already answered, in `docs/agents/`. If you change the installed set,
+`skills-lock.json` and both skill directories are updated together, in one pull request.
+
 ### The route through the skills
 
 Where a piece of work starts, what hands on to what, and where research and prototypes live. See
