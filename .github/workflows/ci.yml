@@ -1,0 +1,54 @@
+name: CI
+
+# All three triggers, because a template has to be right for the typical repository, whose check
+# is not a pure function of its own tree — it installs from a network and can rot in place while
+# nothing is pushed (ADR-0010, in the management hub). Drop one only with the reason recorded in
+# this repository's own `docs/adr/`.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # GitHub disables a schedule after 60 days without repository activity, and emails the Owner
+  # when it does.
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions are pinned to a commit, not a tag, so a moved tag cannot change what runs here.
+      # Dependabot is what moves these pins forward (.github/dependabot.yml).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The two things true of every repository in the Organisation, so that a green tick means
+      # something from the first commit rather than only once real checks exist.
+      - name: CLAUDE.md is still a symlink to AGENTS.md
+        run: |
+          mode=$(git ls-files -s CLAUDE.md | cut -d' ' -f1)
+          [ "$mode" = 120000 ] || {
+            echo "CLAUDE.md has mode '${mode:-missing}', expected 120000." >&2
+            echo "A regular file here drifts from AGENTS.md silently." >&2
+            exit 1
+          }
+
+      - name: MAP.md exists
+        run: test -f MAP.md
+
+      # This repository's real checks go below, as further jobs in this file. What they owe —
+      # what CI must prove, how the checks grow, and why none of them gets a path filter — is
+      # `CODING_STANDARDS.md` §5, which is the text rather than a summary of it.
+      #
+      # This job *is* a required status check from the repository's first day: the two steps
+      # above can genuinely go red, and "red ⇒ no merge" never lets through something that would
+      # otherwise have been caught (ADR-0017).
+      #
+      # Auto-merge is the opposite claim — "green ⇒ merge" — and stays off until the checks here
+      # would fail for the kind of change being merged, which is the whole basis of ADR-0010's
+      # opt-in. A skeleton tick is not evidence.
+      #
+      # Renaming this job renames the check context, which the `Required checks` ruleset names by
+      # hand. Rename both, or every merge blocks on a check that will never report.

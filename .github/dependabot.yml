@@ -1,0 +1,52 @@
+# Weekly, one pull request per dependency, and a cooldown on the ecosystem a repository may one
+# day let merge itself: ADR-0010 (in the management hub) argues all three, org-wide. How a bump
+# is landed once it is open is `docs/agents/dependencies.md`.
+#
+# Only `github-actions` is here because it is the only ecosystem a newly generated repository
+# certainly has — the workflows in `.github/workflows/`. Add an ecosystem when this repository
+# gains one, and mind two things about the entry you write.
+#
+# **`labels: []` is not optional.** Dependabot applies `dependencies` and a per-ecosystem label
+# unless told not to, and the Organisation's label set is closed (ADR-0028) — the next apply
+# deletes both, stripping them off the pull requests carrying them, and the next bump puts them
+# back. An ecosystem added without it puts this repository into that loop, which is why
+# `bin/audit` in the hub asks every repository for its label set rather than trusting this file.
+#
+# And mind what a missing `cooldown` means: **omitting it is not zero**. The option's
+# `default-days` has a minimum of 1, and an unconfigured ecosystem still takes Dependabot's own
+# 3-day default for version updates. ADR-0010 wants no wait on `terraform`; three days is what
+# the platform actually offers, and it costs nothing on bumps a human reads anyway.
+#
+# No `groups:` key, deliberately: a grouped pull request has to be judged by its worst member,
+# and one-per-dependency names the culprit in the title when a bump breaks CI.
+version: 2
+updates:
+  # The workflows pin every action to a commit (.github/workflows/ci.yml), which is safe but
+  # frozen — Dependabot is what moves those pins forward.
+  #
+  # It is also what carries the Organisation's conformance rules here. The reference in
+  # `.github/workflows/conformance.yml` is a reusable workflow rather than an action, and this
+  # ecosystem bumps the two alike — so each improvement to the rules arrives as one pull request
+  # against this repository, which is the adoption event ADR-0030 asks for rather than a silent
+  # change under it. `directory: /` is load-bearing for that: the ecosystem scans the
+  # repository-root `.github/workflows` and nothing else.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    # Labelling off, on every ecosystem, for the reason the header gives: the Organisation's
+    # label set is closed (ADR-0028), so a label Dependabot applies is one the next apply deletes
+    # and the next bump recreates. Empty is how the option is switched off — omitting it is not
+    # the same thing, it is Dependabot's two defaults.
+    labels: []
+    # Already the default, stated because the auto-merge path depends on it: GitHub will not
+    # update a pull request that has fallen behind `main`, even with auto-merge queued and
+    # `allow_update_branch` on — measured, see ADR-0010. Dependabot rebasing its own pull
+    # requests is the only thing that gets a queued bump over a moved `main`, so the default is
+    # load-bearing from the day this repository opts in.
+    rebase-strategy: auto
+    # Seven days, because this is the ecosystem a repository may let merge itself once its check
+    # can genuinely fail for an action bump. `cooldown` delays version updates only; a security
+    # update is never held back by it.
+    cooldown:
+      default-days: 7

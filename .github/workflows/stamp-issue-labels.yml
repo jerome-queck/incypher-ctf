@@ -1,0 +1,107 @@
+name: Stamp a new issue's labels
+
+# Every issue in this Organisation carries exactly one state label and exactly one category label,
+# from the moment it exists (ADR-0028). Three things used to cover that and each stopped somewhere:
+# the web forms apply their `labels:` key and cover only the web; `docs/agents/issue-tracker.md`
+# tells the command line to pass `--label`, and documentation is not a mechanism; the conformance
+# check holds an issue to both axes, but only one a pull request closes, and only when that pull
+# request runs — weeks later, in another repository's check, and never at all for an issue nobody
+# links.
+#
+# This hooks the *event* rather than the tool, which is why it is the only one of the four that
+# covers every creation path — a form, `gh issue create`, the API, a skill, or a skill nobody here
+# has read. It survives a skill update for the same reason: it does not depend on the skills.
+#
+# Its own file rather than a job in `ci.yml`, because `CODING_STANDARDS.md` §5 settles it: an
+# automation that acts on an event is not a check, and it does not share the checks' workflow.
+# `ci.yml` is also the repository's own to rewrite, and this is the Organisation's.
+
+on:
+  issues:
+    types: [opened]
+
+# Nothing at the top, so the grant is stated once, at the job that needs it, and no step ever
+# inherits more than it asked for.
+permissions: {}
+
+jobs:
+  # The job id is the check context, and this one can never report on a pull request — it is fired
+  # by an issue. So it is waived in `bin/audit` rather than required, the way `homepage:deploy` is;
+  # renaming this job renames the context and the waiver stops matching.
+  stamp-issue-labels:
+    runs-on: ubuntu-latest
+
+    # The one widening in the whole seed: every other seeded workflow runs on `contents: read`.
+    # `issues: write` is what labelling an issue costs, and it is not narrowable further — GitHub
+    # has no label-only scope. What it buys is the only mechanism that covers every creation path;
+    # what it risks is a token that could also close or edit an issue, held by a workflow whose
+    # entire body is the fifteen lines below, in a file the conformance check holds to the
+    # Organisation's text. `contents` stays unwritable, so this cannot reach the tree.
+    permissions:
+      issues: write
+
+    steps:
+      - name: Fill whichever axis the issue arrived without
+        env:
+          GH_TOKEN: ${{ github.token }}
+          repo: ${{ github.repository }}
+          issue: ${{ github.event.issue.number }}
+        run: |
+          set -eu
+
+          # The two axes of the closed set, as `terraform/labels.json` records them in
+          # `Jerome-Group/org`. Copied rather than read, because this file runs in a repository
+          # that does not have that one — and the copy is not trusted to stay right by memory:
+          # `bin/audit` asserts every open issue carries exactly one of each, so a list that fell
+          # behind the set shows up there as issues stamped wrongly rather than as nothing at all.
+          #
+          # A `wayfinder:*` type **is** its ticket's category (`docs/agents/triage-labels.md`), so
+          # a wayfinding ticket that arrives with one is complete and is left alone.
+          states='needs-triage needs-info ready-for-agent ready-for-human wontfix'
+          categories='task decision bug
+            wayfinder:map wayfinder:research wayfinder:prototype wayfinder:grilling
+            wayfinder:task'
+
+          # Read back from the API rather than taken from `github.event.issue.labels`, and the
+          # difference is measured rather than assumed: in this Organisation's own tracker,
+          # `gh issue create --label` lands its labels as `labeled` events one and two seconds
+          # *after* the issue exists, so the `opened` payload is not a statement of what the issue
+          # arrived with. A run that trusted it would stamp `task` over a `bug` that was already
+          # on its way.
+          #
+          # The settle is for the same measurement rather than for this one: a runner takes long
+          # enough to boot that the labels are always down by the time this step starts, and the
+          # wait is what makes that true by construction instead of by luck. A stamp that loses
+          # the race anyway leaves two labels on one axis, which `bin/audit` reports.
+          sleep 15
+
+          held=$(gh issue view "$issue" --repo "$repo" --json labels --jq '.labels[].name')
+
+          carries() {
+            for label in $1; do
+              if printf '%s\n' "$held" | grep -qxF -- "$label"; then
+                return 0
+              fi
+            done
+
+            return 1
+          }
+
+          # Only an empty slot is filled. An issue that arrived with an axis keeps what it arrived
+          # with, whichever path put it there — this never replaces a label and never removes one.
+          #
+          # The two defaults are chosen to be total and self-correcting rather than clever.
+          # `needs-triage` is the documented entry state, and a skill that means anything else
+          # applies it in the same breath. `task` because `bug` and `decision` are the cases a
+          # human or `/triage` corrects, and defaulting to either would be wrong more often.
+          missing=
+          carries "$states" || missing='needs-triage'
+          carries "$categories" || missing="${missing:+$missing,}task"
+
+          if [ -z "$missing" ]; then
+            printf 'ok    #%s arrived carrying both axes\n' "$issue"
+            exit 0
+          fi
+
+          gh issue edit "$issue" --repo "$repo" --add-label "$missing"
+          printf 'ok    #%s stamped %s\n' "$issue" "$missing"

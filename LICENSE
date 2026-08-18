@@ -1,0 +1,22 @@
+Copyright (c) Jerome Group
+
+All rights reserved.
+
+This software and its accompanying documentation are proprietary and confidential. No licence,
+express or implied, is granted to any person to use, copy, modify, merge, publish, distribute,
+sublicense, or sell this software or any part of it, except under a separate written agreement
+signed by Jerome Group.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+----
+
+This is the Organisation's default and it grants nothing, which is the point: it states the
+position a repository is already in when it carries no licence at all, rather than leaving that
+position unsaid. A repository that should be open replaces this file wholesale with the licence
+it means — and records why in its own `docs/adr/`. Withholding rights is reversible; granting
+them is not.

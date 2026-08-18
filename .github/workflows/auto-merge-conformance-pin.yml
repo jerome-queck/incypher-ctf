@@ -1,0 +1,123 @@
+name: Auto-merge the conformance pin
+
+# Land the one class of pull request that costs nothing to land unattended: a bump of the pin this
+# repository calls the Organisation's conformance rules at (#132, ADR-0045).
+#
+# The gap it closes is adoption. A rule the Organisation agrees reaches a repository only when that
+# repository's pin moves, and until this file existed nothing moved it — three repositories ran a
+# rule set nobody had chosen for a day, and the only reason anybody noticed is that somebody asked.
+# Every other propagation problem here is solved by a check going red; this one is solved by a
+# pull request nobody merged.
+#
+# **Why this class and no other.** The gate on a pin bump is the Organisation's own conformance
+# check, running at the very commit being adopted, in a repository that already requires it. So
+# the review a human would perform has already been performed by the thing being adopted. That is
+# not true of any other pull request here, which is why the conditions below are as narrow as they
+# are — and why this does not widen ADR-0010, which withholds "green ⇒ merge" from a repository
+# whose own CI is a skeleton. The check here is the Organisation's, not this repository's.
+#
+# **Diff-keyed, not author-keyed.** The qualifying test is what the pull request *changes*, never
+# who opened it: an author allowlist is a second list to keep in step, and both authors that
+# matter — Dependabot, and the management hub's own publish, which opens the bump and queues it
+# (ADR-0047) — are already the only accounts that can open a pull request here that runs with
+# write permissions.
+#
+# This file is seeded into every repository and its words are the repository's to rewrite
+# (ADR-0031). A repository that wants none of this deletes the job rather than the file: what it
+# owes the Organisation is that the question was asked, and the answer is visible.
+on: pull_request
+
+permissions: {}
+
+jobs:
+  # The context this reports is waived Organisation-wide, in the conformance manifest, for the
+  # reason the label stamper's is: this job has no opinion about whether a pull request is good,
+  # and requiring it would gate every merge on a check that reports `skipped` for all but one
+  # narrow class (ADR-0017). Renaming this job renames the context, and the waiver stops matching.
+  auto-merge-conformance-pin:
+    runs-on: ubuntu-latest
+
+    # Granted on the job rather than at the top of the file, the way every seeded workflow here
+    # grants what it needs: `permissions: {}` above means a job that forgets to ask gets nothing.
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HUB: Jerome-Group/.github
+
+    steps:
+      # Three conditions, and the pull request qualifies only if all of them hold.
+      #
+      # **One file, and it is a workflow.** Asked first and separately, because the line test below
+      # cannot see which file a line came from: a pull request that *added* a new file whose only
+      # line was the pin would otherwise pass it, and so would one that moved the pin into a second
+      # file while changing something else there.
+      #
+      # **Every changed line is the pin.** Not "the pin is among the changes" — a bump that also
+      # rewrote a step's inputs or moved another pin is a change somebody should read.
+      #
+      # A plain `gh pr diff`, never `--patch`: the latter is `format-patch` output, which opens
+      # with the commit message and a bare `---` separator, and that line is indistinguishable
+      # from a removed one. Filtering it out by matching `---` without its trailing space would
+      # also hide a removed line beginning `--`, so the fix is to read a diff that has no mail
+      # header rather than to loosen the filter. The unified diff's own headers are `+++ ` and
+      # `--- ` *with* a space, and that is what is dropped here.
+      #
+      # **The commit it points at is one of the hub's.** Without this the line test would accept a
+      # one-line change to any forty characters at all, and the check that gates the merge would
+      # then be whatever those characters happened to contain. Compared against the hub's default
+      # branch: `identical` is the tip, `behind` is an ancestor of it, and anything else — `ahead`,
+      # `diverged`, or a commit the API cannot find at all — is not something the Organisation has
+      # published.
+      #
+      # `.github` is public, so this read needs no credential beyond this repository's own token
+      # and nothing crosses a repository boundary.
+      #
+      # Every command that may legitimately find nothing ends `|| true`. This step runs under
+      # `bash -e`, where a `grep` that matches no lines or a `gh api` on an unknown commit would
+      # end the job — reporting a workflow error for the ordinary case of "this pull request is
+      # not a pin bump".
+      - id: qualifies
+        run: |
+          files=$(gh pr view "$PR_URL" --json files --jq '.files | length')
+          path=$(gh pr view "$PR_URL" --json files --jq '.files[0].path // ""')
+
+          changed=$(gh pr diff "$PR_URL" |
+            grep -E '^[+-]' | grep -vE '^(\+\+\+ |--- )' || true)
+
+          reference='uses: Jerome-Group/\.github/\.github/workflows/conformance\.yml@'
+          off_pin=$(printf '%s\n' "$changed" |
+            grep -cvE "^[+-][[:space:]]*$reference" || true)
+
+          pinned=$(printf '%s\n' "$changed" |
+            sed -n "s|^+[[:space:]]*$reference\([0-9a-f]\{40\}\).*|\1|p" | head -n 1)
+
+          qualifies=false
+
+          case $path in
+            .github/workflows/*.yml | .github/workflows/*.yaml) ;;
+            *) files=0 ;;
+          esac
+
+          if [ "$files" -eq 1 ] && [ "$off_pin" -eq 0 ] && [ -n "$pinned" ]; then
+            branch=$(gh api "/repos/$HUB" --jq .default_branch)
+            reachable=$(gh api "/repos/$HUB/compare/$branch...$pinned" --jq .status 2>/dev/null ||
+              printf 'not a commit of')
+
+            case $reachable in
+              identical | behind) qualifies=true ;;
+              *) printf 'The pin %s is %s the hub. Not queueing.\n' "$pinned" "$reachable" ;;
+            esac
+          fi
+
+          printf 'qualifies=%s\n' "$qualifies" >>"$GITHUB_OUTPUT"
+
+      # `--auto` queues the merge behind the required checks rather than merging now, so the
+      # Baseline still decides and a bump that turns this repository red never lands (ADR-0004).
+      # The repository setting `allow_auto_merge` is what makes that queue exist; every repository
+      # the Organisation creates is born with it on (ADR-0045).
+      - if: steps.qualifies.outputs.qualifies == 'true'
+        run: gh pr merge --auto --squash "$PR_URL"

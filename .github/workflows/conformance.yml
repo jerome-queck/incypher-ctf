@@ -1,0 +1,54 @@
+name: Conformance
+
+# The Organisation's conformance rules, served from `Jerome-Group/.github` and authored in the
+# management hub (ADR-0030). Central so that agreeing a convention once makes it true everywhere:
+# a rule added to the checker reaches this repository as a pin bump rather than as an edit
+# somebody has to remember to make here, and in every other repository as well.
+#
+# Its own file rather than a job inside `ci.yml`, because the two have different owners. This one
+# arrives written and is the Organisation's; `ci.yml` is this repository's to own and grow
+# (ADR-0026). Keeping them apart is what lets a repository rewrite its whole CI without touching
+# what the Organisation asks of it — and what lets the seed drop this file into a repository whose
+# CI it knows nothing about.
+
+on:
+  pull_request:
+
+  # A push as well as a pull request, and the reason is the ruleset rather than the rules: the
+  # `Required checks` ruleset names this job's context, and a context a repository has never
+  # produced is one every merge waits on forever. The push after this file arrives is what
+  # produces it once, before the first pull request needs it.
+  #
+  # No schedule, unlike `ci.yml` beside it. That one installs from a network and can rot in place
+  # while nothing is pushed; these rules are a pure function of the tree in front of them, so a
+  # run on an unchanged tree can only repeat its last answer.
+  push:
+    branches: [main]
+
+jobs:
+  # The check context is this job id, then the job id inside the called workflow, joined by ` / ` —
+  # `conformance / check`. That is how GitHub reports a job that came from a reusable workflow, and
+  # it is the exact string the `Required checks` ruleset requires. Renaming this job renames the
+  # context, and the merge then blocks on a check that will never report.
+  conformance:
+    # A called workflow may only *narrow* what its caller granted, so the grant has to be made
+    # here: the linkage step reads the pull request against the issue it closes (ADR-0035), and a
+    # repository granting less than this cannot call the workflow at all — the job fails before
+    # any step runs.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+
+    # Pinned to a commit, never a branch or a tag. The hub this points at belongs to the
+    # Organisation and reaches every repository at once, so a floating reference would let one bad
+    # commit there turn every merge in the Organisation red simultaneously (ADR-0030). Pinned, a
+    # rule change arrives as one reviewable pull request per repository, opened by the publish that
+    # changed the rules and merged once this repository's own checks pass (ADR-0045, ADR-0047).
+    #
+    # Dependabot may open that bump too, and where it does `auto-merge-conformance-pin.yml` beside
+    # this file is what merges it. It can only offer one because the hub is *released*: the
+    # `github-actions` ecosystem resolves a version from tags and releases, and against an untagged
+    # repository it reports `No update needed` however stale the pin is (ADR-0046). It has never yet
+    # been seen doing so, which is why the publish no longer waits to find out.
+    uses: Jerome-Group/.github/.github/workflows/conformance.yml@85e9fd4033965968f364dfa80df7339bc16a5d2d

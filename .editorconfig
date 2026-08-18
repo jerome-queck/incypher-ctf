@@ -1,0 +1,22 @@
+# The settings an editor can apply before any formatter exists in this repository, so a file's
+# whitespace is never a review topic (CODING_STANDARDS §2). A language's own formatter wins
+# where the two disagree — add it to CI and delete the rule here rather than keeping both.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Markdown gives trailing whitespace a meaning: two spaces are a hard line break.
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{go,mk}]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
