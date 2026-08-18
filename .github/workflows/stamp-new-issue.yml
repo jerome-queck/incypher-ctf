@@ -1,0 +1,123 @@
+name: Stamp a new issue
+
+# Every issue here arrives complete: one state label, one category label, and — for the ordinary
+# task/bug/decision issue — an assignee, from the moment it exists. The labels are the two axes in
+# `docs/agents/triage-labels.md`; the assignee is who owns the issue, defaulted to whoever opened
+# it (`docs/agents/issue-tracker.md`), so no issue sits unowned and two people never pick up the
+# same one.
+#
+# This hooks the *event* rather than the tool, which is why it covers every creation path — a
+# form, `gh issue create`, the API, a skill, or a skill nobody here has read. It survives a skill
+# update for the same reason: it does not depend on the skills.
+#
+# Its own file rather than a job in `ci.yml`, because `CODING_STANDARDS.md` §5 settles it: an
+# automation that acts on an event is not a check, and it does not share the checks' workflow.
+
+on:
+  issues:
+    types: [opened]
+
+# Nothing at the top, so the grant is stated once, at the job that needs it, and no step ever
+# inherits more than it asked for.
+permissions: {}
+
+jobs:
+  # This job is fired by an issue and can never report on a pull request, so it must never be
+  # named as a required check. Renaming the job renames the context it reports.
+  stamp-new-issue:
+    runs-on: ubuntu-latest
+
+    # The one widening among this repository's workflows: the others run on `contents: read`.
+    # `issues: write` is what labelling *and* assigning an issue cost — GitHub has no scope
+    # narrower than either. What it buys is the only mechanism that covers every creation path;
+    # what it risks is a token that could also close or edit an issue, held by a workflow whose
+    # whole body is the script below. `contents` stays unwritable, so this cannot reach the tree.
+    permissions:
+      issues: write
+
+    steps:
+      - name: Stamp the issue's labels and assignee
+        env:
+          GH_TOKEN: ${{ github.token }}
+          repo: ${{ github.repository }}
+          issue: ${{ github.event.issue.number }}
+          author: ${{ github.event.issue.user.login }}
+        run: |
+          set -eu
+
+          # The two axes of the closed set, as `docs/agents/triage-labels.md` records them.
+          # Copied rather than read from the docs, because a workflow greps no Markdown; a list
+          # that falls behind the set shows up as issues stamped with a label the repository does
+          # not have, which the `gh issue edit` below fails loudly on.
+          #
+          # A `wayfinder:*` type **is** its ticket's category (`docs/agents/triage-labels.md`), so
+          # a wayfinding ticket that arrives with one is complete and is left alone.
+          states='needs-triage needs-info ready-for-agent ready-for-human wontfix'
+          categories='task decision bug
+            wayfinder:map wayfinder:research wayfinder:prototype wayfinder:grilling
+            wayfinder:task'
+
+          # Read back from the API rather than taken from `github.event.issue` payload, and the
+          # difference is measured rather than assumed: `gh issue create --label`/`--assignee` land
+          # their labels and assignees as events one and two seconds *after* the issue exists, so
+          # the `opened` payload is not a statement of what the issue arrived with. A run that
+          # trusted it would stamp `task` over a `bug` that was already on its way, or assign the
+          # author over an assignee the creator had already chosen.
+          #
+          # The settle is for that measurement: a runner takes long enough to boot that the labels
+          # and assignees are always down by the time this step starts, and the wait makes that
+          # true by construction instead of by luck. It is read once, and both stampings below use
+          # the one reading.
+          sleep 15
+
+          held=$(gh issue view "$issue" --repo "$repo" --json labels --jq '.labels[].name')
+
+          carries() {
+            for label in $1; do
+              if printf '%s\n' "$held" | grep -qxF -- "$label"; then
+                return 0
+              fi
+            done
+
+            return 1
+          }
+
+          # Labels: only an empty slot is filled. An issue that arrived with an axis keeps what it
+          # arrived with, whichever path put it there — this never replaces a label and never
+          # removes one. The two defaults are total and self-correcting: `needs-triage` is the
+          # documented entry state, and `task` because `bug` and `decision` are the cases a human
+          # or `/triage` corrects, and defaulting to either would be wrong more often.
+          missing=
+          carries "$states" || missing='needs-triage'
+          carries "$categories" || missing="${missing:+$missing,}task"
+
+          if [ -n "$missing" ]; then
+            gh issue edit "$issue" --repo "$repo" --add-label "$missing"
+            printf 'ok    #%s stamped %s\n' "$issue" "$missing"
+          else
+            printf 'ok    #%s arrived carrying both label axes\n' "$issue"
+          fi
+
+          # Assignee: a wayfinder ticket is the exception, and deliberately. Its category label is
+          # `wayfinder:*`, and wayfinding runs on the claim model (`docs/agents/issue-tracker.md`):
+          # an unassigned ticket is *takeable*, claiming it is `--add-assignee @me`, and the
+          # frontier query drops anything already assigned. Assigning its author at birth would
+          # mark every ticket claimed and empty the frontier — so wayfinder tickets are left
+          # unassigned here, and the claim model owns their assignment.
+          #
+          # Every other issue gets an owner from birth. If it opened with no assignee, the author
+          # is assigned — the default the whole change exists for; if the creator already assigned
+          # someone (themselves or the person who will do it), that choice stands untouched.
+          if printf '%s\n' "$held" | grep -q '^wayfinder:'; then
+            printf 'ok    #%s is a wayfinder ticket — assignment is the claim model, left alone\n' "$issue"
+            exit 0
+          fi
+
+          assignees=$(gh issue view "$issue" --repo "$repo" --json assignees --jq '.assignees[].login')
+
+          if [ -z "$assignees" ]; then
+            gh issue edit "$issue" --repo "$repo" --add-assignee "$author"
+            printf 'ok    #%s assigned to its author %s\n' "$issue" "$author"
+          else
+            printf 'ok    #%s arrived assigned, left alone\n' "$issue"
+          fi

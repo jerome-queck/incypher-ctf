@@ -121,12 +121,18 @@ prototypes land.
 GitHub Issues on this repository, via the `gh` CLI. `docs/agents/issue-tracker.md` carries the
 operations, including wayfinding (`/wayfinder` falls back to local markdown without it).
 
-### Labels
+### Labels and assignment
 
-Thirteen, and the set is closed — `docs/agents/triage-labels.md`. Every issue carries exactly one
-state and one category. There is no Terraform behind them here: the set was created by hand at
-repository setup, so a label added by hand *stays* until a human removes it — the discipline is
-yours to keep, not an apply's to enforce.
+Thirteen labels, and the set is closed — `docs/agents/triage-labels.md`. Every issue carries
+exactly one state and one category. There is no Terraform behind them here: the set was created by
+hand at repository setup, so a label added by hand *stays* until a human removes it — the
+discipline is yours to keep, not an apply's to enforce.
+
+Every `task`/`bug`/`decision` issue also carries **one assignee**, defaulted to its author by
+`.github/workflows/stamp-new-issue.yml` so none is ever unowned and two people never take the same
+one. Assign at creation with `--assignee @me`, reassign to whoever picks it up, and never leave one
+unassigned. Wayfinder tickets are the exception — they stay unassigned until claimed
+(`docs/agents/issue-tracker.md`).
 
 ### Acceptance criteria
 
