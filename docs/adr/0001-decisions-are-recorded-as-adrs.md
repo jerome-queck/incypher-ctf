@@ -1,5 +1,10 @@
 # Decisions are recorded here, as ADRs
 
+> **Superseded in part by [ADR-0002](0002-org-machinery-is-vendored-to-stand-alone.md).** The core
+> decision below still stands. Only the second Consequence bullet — that org-wide decisions live in
+> a management hub and reach here through the Baseline — is overtaken: this repository has no hub,
+> so every decision it is governed by is recorded here.
+
 Any decision this repository makes that the code cannot state for itself is written down in
 `docs/adr/` as a numbered, immutable record. `CODING_STANDARDS.md` §3 draws the line: the code
 carries *what* it does, and this directory carries the *why* — the constraint that ruled an

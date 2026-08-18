@@ -46,13 +46,11 @@ If the concept you need isn't in the glossary yet, that's a signal — either yo
 
 ## House style for an ADR
 
-Three rules about ADRs are **checked**, and CI names them when they fire: a filename is
-`NNNN-hyphenated-title.md`, no two records share a number, and a record that supersedes another
-requires the one superseded to point forward at it — a one-way link leaves the reader who arrives
-at the older record acting on guidance that was overtaken. The reasoning is
-[ADR-0033](https://github.com/Jerome-Group/org/blob/main/docs/adr/0033-decision-records-are-held-to-their-number-and-their-links.md);
-the link is absolute because this file is seeded verbatim into every repository, whose own
-`docs/adr/` has no such record.
+Three rules about ADRs are **checked**, and the conformance check names them when they fire: a
+filename is `NNNN-hyphenated-title.md`, no two records share a number, and a record that supersedes
+another requires the one superseded to point forward at it — a one-way link leaves the reader who
+arrives at the older record acting on guidance that was overtaken. The scripts that enforce them
+are in `conformance/` ([ADR-0002](../adr/0002-org-machinery-is-vendored-to-stand-alone.md)).
 
 Everything below is **guidance, enforced by nothing.** An ADR may be a single paragraph; the value
 is in recording the decision, not in filling out sections. A required section produces records

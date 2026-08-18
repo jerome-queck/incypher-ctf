@@ -1,0 +1,64 @@
+# The contract each file in this repository is held to, read by `check-conformance.sh` beside it.
+#
+# Vendored from Jerome-Group/.github and adapted for a standalone repository (ADR-0002): where
+# the Organisation generated this file and served it from outside the checked tree, here it is
+# maintained by hand and lives inside the tree it binds. That is a deliberate trade — this
+# repository can edit its own contract, and the pull request that edits a bound file edits its
+# manifest record in the same diff.
+#
+# Record classes, tab-separated:
+#   originals  <name>            the seed the `required` origins refer to; never this repository
+#   required   <path>  <origin>  the file must exist; the origin says where its text came from
+#   skeleton   <path>  <ceiling> the file's headings are checked, and its length when not `-`
+#   heading    <path>  <text>    one required heading, in the order the records appear
+#   seed-only  <path>            carried by the seed, checked by nothing — a gift, not a contract
+#
+# There are no `mirrored` records: the org pinned mirrored files to a hash because its seed
+# silently overwrites edits, and no seed reaches this repository. Edited documents are simply
+# `required` (ADR-0002).
+originals	the Jerome-Group seed
+seed-only	.editorconfig
+seed-only	.env.example
+seed-only	.github/dependabot.yml
+seed-only	.github/workflows/ci.yml
+seed-only	.github/workflows/conformance.yml
+required	.github/workflows/stamp-issue-labels.yml	templates/base/.github/workflows/stamp-issue-labels.yml
+seed-only	.gitignore
+required	AGENTS.md	templates/base/AGENTS.md
+skeleton	AGENTS.md	200
+heading	AGENTS.md	## What this repo is
+heading	AGENTS.md	## Getting it running
+heading	AGENTS.md	## Conventions
+heading	AGENTS.md	## Code standards
+heading	AGENTS.md	## How work flows
+heading	AGENTS.md	## Commit & PR attribution
+heading	AGENTS.md	## Agent skills
+heading	AGENTS.md	## Repository notes
+seed-only	CLAUDE.md
+required	CODE_OF_CONDUCT.md	dot-github/CODE_OF_CONDUCT.md
+required	CODING_STANDARDS.md	templates/base/CODING_STANDARDS.md
+skeleton	CODING_STANDARDS.md	-
+heading	CODING_STANDARDS.md	## 1. The principle: the code explains itself
+heading	CODING_STANDARDS.md	## 2. What the code must do
+heading	CODING_STANDARDS.md	## 3. Documentation boundary
+heading	CODING_STANDARDS.md	## 4. `MAP.md` is required
+heading	CODING_STANDARDS.md	## 5. What CI must prove
+heading	CODING_STANDARDS.md	## 6. Repo-specific standards
+heading	CODING_STANDARDS.md	## 7. Evolution — what is rigid, what moves
+required	CONTEXT.md	templates/base/CONTEXT.md
+skeleton	CONTEXT.md	-
+heading	CONTEXT.md	## Language
+required	CONTRIBUTING.md	dot-github/CONTRIBUTING.md
+seed-only	LICENSE
+seed-only	MAP.md
+required	README.md	templates/base/README.md
+skeleton	README.md	-
+heading	README.md	## Status
+required	SECURITY.md	dot-github/SECURITY.md
+seed-only	docs/adr/0001-decisions-are-recorded-as-adrs.md
+required	docs/agents/acceptance-criteria.md	docs/agents/acceptance-criteria.md
+required	docs/agents/dependencies.md	docs/agents/dependencies.md
+required	docs/agents/domain.md	docs/agents/domain.md
+required	docs/agents/issue-tracker.md	docs/agents/issue-tracker.md
+required	docs/agents/triage-labels.md	templates/base/docs/agents/triage-labels.md
+required	docs/agents/workflow.md	docs/agents/workflow.md

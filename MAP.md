@@ -1,6 +1,7 @@
 # Map
 
-*(One line: what this repository is.)*
+An autonomous CTF-solving agent for the IN-CYPHER hackathon, and the conventions it is built
+under.
 
 Start here: `README.md`, then `AGENTS.md`.
 
@@ -12,6 +13,7 @@ Start here: `README.md`, then `AGENTS.md`.
 | Domain language | The glossary — this repository's ubiquitous language | `CONTEXT.md` |
 | Decisions | Architecture decision records | `docs/adr/` |
 | Agent skills | The routines an agent follows here, one file per skill | `docs/agents/` |
+| Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
 
 Update this file in the same pull request whenever a top-level area is added, moved, or removed.
