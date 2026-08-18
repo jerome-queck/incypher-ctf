@@ -89,10 +89,32 @@ They are already configured for this repository — GitHub Issues as the tracker
 again**; those questions are already answered, in `docs/agents/`. If you change the installed set,
 `skills-lock.json` and both skill directories are updated together, in one pull request.
 
-### The route through the skills
+### The route through the skills — name it before you start
 
-Where a piece of work starts, what hands on to what, and where research and prototypes live. See
-`docs/agents/workflow.md` before inventing a route.
+At the start of a request, match its shape to the flow below and **say which one fits before you
+touch the change**: propose it to the contributor, or take it when working unattended. The skills
+already encode these processes — reach for them rather than improvising one.
+
+| The request is… | Route |
+| --- | --- |
+| a feature or change already wanted | `/grill-with-docs` to sharpen it, then the build route |
+| a big, foggy, multi-session effort — greenfield, a large feature | `/wayfinder` to map it first |
+| an idea to sharpen, or a decision to settle | `/grill-with-docs` — it writes the ADR and glossary |
+| someone else's issue, a bug report, an incoming request | `/triage` |
+| something broken — a flake, a regression | `/diagnosing-bugs` |
+| an agent-ready ticket | `/implement` |
+| a branch or PR to review | `/code-review` |
+| unclear which | `/ask-matt` |
+
+**The build route:** once grilled, a multi-session change goes `/to-spec` → `/to-tickets` →
+`/implement` per ticket; a one-screen, one-sentence change skips straight to `/implement`.
+
+**Fresh sessions matter.** Hold one unbroken session from `/grill-with-docs` through `/to-tickets`,
+then `/clear` before each `/implement` — a ticket is self-contained, and carrying the last one's
+context is how a session builds against a decision superseded two tickets ago.
+
+`docs/agents/workflow.md` is the full route: the conditions, the exceptions, and where research and
+prototypes land.
 
 ### Issue tracker
 
