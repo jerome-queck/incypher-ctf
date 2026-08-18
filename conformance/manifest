@@ -22,7 +22,7 @@ seed-only	.env.example
 seed-only	.github/dependabot.yml
 seed-only	.github/workflows/ci.yml
 seed-only	.github/workflows/conformance.yml
-required	.github/workflows/stamp-issue-labels.yml	templates/base/.github/workflows/stamp-issue-labels.yml
+required	.github/workflows/stamp-new-issue.yml	templates/base/.github/workflows/stamp-issue-labels.yml
 seed-only	.gitignore
 required	AGENTS.md	templates/base/AGENTS.md
 skeleton	AGENTS.md	200

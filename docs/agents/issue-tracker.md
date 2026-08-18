@@ -9,9 +9,10 @@ in [`triage-labels.md`](triage-labels.md). Both slots are filled at creation. An
 `labels:` key does that on the web path, but `--template` supplies body text only, so on this
 path the command is what carries them.
 
-- **Create an issue**: `gh issue create --title "..." --body "..." --label needs-triage --label task`.
+- **Create an issue**: `gh issue create --title "..." --body "..." --label needs-triage --label task --assignee @me`.
   Use a heredoc for multi-line bodies. Substitute the category the issue actually is — `task`,
-  `decision` or `bug` — and a state other than `needs-triage` when you already know it.
+  `decision` or `bug` — and a state other than `needs-triage` when you already know it. Assign it
+  to whoever will own it (`@me` by default); see Assignment below.
 - **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
@@ -19,6 +20,25 @@ path the command is what carries them.
 - **Close**: `gh issue close <number> --comment "..."`
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+
+## Assignment
+
+Every `task`, `bug` or `decision` issue carries **exactly one assignee** — its owner — from the
+moment it exists, so no issue is unowned and two people never pick up the same one. The default is
+the person who opened it: `.github/workflows/stamp-new-issue.yml` assigns the author when an issue
+opens unassigned. Passing `--assignee` at creation is better still, because it is immediate rather
+than waiting on the workflow's settle.
+
+- **Assign / reassign**: `gh issue edit <number> --add-assignee <login>` / `--remove-assignee <login>`.
+  Reassign freely — the assignee is whoever will actually do the work, not who filed it.
+- **Never leave one unassigned.** Removing the last assignee reopens the collision the default
+  exists to close; handing an issue off means adding the new owner in the same breath.
+
+**Wayfinder tickets are the exception.** A `wayfinder:*` ticket runs on the *claim* model:
+unassigned means takeable, claiming it is `--add-assignee @me`, and the frontier query below drops
+anything already assigned. So the workflow leaves wayfinder tickets unassigned — assigning their
+author at birth would mark every ticket claimed and empty the frontier. Owned-by-default is for
+the ordinary issue; claim-when-you-take-it is for wayfinding.
 
 ## Pull requests as a triage surface
 

@@ -61,10 +61,12 @@ see `issue-tracker.md`.
 
 ## An empty slot is filled for you, and that is not the same as filling it
 
-`.github/workflows/stamp-issue-labels.yml` runs on every issue as it is opened — from a form, from
+`.github/workflows/stamp-new-issue.yml` runs on every issue as it is opened — from a form, from
 `gh issue create`, from the API, from a skill — and adds `needs-triage` if the issue has no state
 and `task` if it has no category. It only ever fills an **empty** slot: an issue that arrives
-carrying an axis keeps exactly what it arrived with, and nothing is replaced or removed.
+carrying an axis keeps exactly what it arrived with, and nothing is replaced or removed. The same
+workflow assigns the issue's author when it opens unassigned — that convention, and its one
+exception, is in [`issue-tracker.md`](issue-tracker.md).
 
 So the two defaults are the answer for an issue nobody classified. They are not an excuse to stop
 classifying: an issue you know is a `bug` and label `task` by omission reads as a task until
