@@ -12,7 +12,8 @@ Start here: `README.md`, then `AGENTS.md`.
 | Code standards | How code is written and reviewed | `CODING_STANDARDS.md` |
 | Domain language | The glossary — this repository's ubiquitous language | `CONTEXT.md` |
 | Decisions | Architecture decision records | `docs/adr/` |
-| Agent skills | The routines an agent follows here, one file per skill | `docs/agents/` |
+| Agent conventions | The routines an agent follows here, one file per topic | `docs/agents/` |
+| Installed skills | The mattpocock engineering skills, copied in for Claude and Codex | `.claude/skills/`, `.agents/skills/` |
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
 
