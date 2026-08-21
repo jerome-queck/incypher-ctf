@@ -1,0 +1,23 @@
+Source:    https://www.imperial.ac.uk/about/global/singapore/research/in-cypher/in-cypher-hackathon/
+From:      What you build & submit
+To:        - Do not share flags or solutions during the event.
+Fetched:   2026-08-21 21:52 SGT (2026-08-21T13:52Z)
+Publisher: IN-CYPHER (Imperial College London & Nanyang Technological University) — held here as this team's compliance record.
+
+Do not hand-edit. `sh scripts/check-rules-drift.sh <this file> --update` rewrites it, and the
+diff it prints is the red-line review.
+
+The span starts at "What you build & submit" rather than at "Rules": the sentence naming the
+deliverable a Docker container, and the unannounced scoring, bind the Solver as hard as the four
+rules do, and a change to either is a change we must not miss.
+--------------------------------------------------------------------------------------------
+What you build & submit
+You build an autonomous agent that works the challenges on its own. There are   no restrictions on how . You can use any Large Language Model (LLM) such as GPT, Claude, Gemini, or a local model, and any tools or frameworks you like.
+You submit your agent as a   Docker container . On competition day it runs inside that container, fully autonomously, against the challenges.
+Scoring
+Full scoring details will be announced closer to the event day.
+Rules
+- During the competition run, agents operate fully autonomously. Any human intervention is penalised.
+- Responsible, defensive research. Only the provided systems are in scope.
+- No attacking the platform, other teams, or shared infrastructure.
+- Do not share flags or solutions during the event.
