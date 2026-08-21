@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import datetime as dt
 import re
@@ -24,6 +25,10 @@ from pathlib import Path
 from typing import Any
 
 PASS, SKIP, FAIL = "pass", "skip", "fail"
+
+# Enough for CTFd -> object storage and a storage-side hop. More than that is a loop,
+# and a probe that chases one indefinitely hangs instead of reporting.
+MAX_FILE_REDIRECTS = 4
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
@@ -39,9 +44,10 @@ BROWSER_USER_AGENT = (
 class Board:
     """A CTFd board addressed the way the Solver addresses it.
 
-    Redirects are never followed. CTFd answers an unauthenticated API request with a 302 to
+    API redirects are never followed. CTFd answers an unauthenticated API request with a 302 to
     /login, and a follower turns that into a 200 holding an HTML login page — the exact shape
-    that reads downstream as "the board has no challenges".
+    that reads downstream as "the board has no challenges". `download` is the one exception, and
+    says why.
     """
 
     def __init__(self, url: str, token: str) -> None:
@@ -59,9 +65,13 @@ class Board:
         self, method: str, path: str, body: dict[str, Any] | None = None, *, json_content_type: bool = True
     ) -> tuple[int, bytes, str]:
         payload = json.dumps(body).encode() if body is not None else None
-        request = urllib.request.Request(f"{self.url}{path}", data=payload, method=method)
+        url = path if path.startswith("http") else f"{self.url}{path}"
+        request = urllib.request.Request(url, data=payload, method=method)
         request.add_header("User-Agent", BROWSER_USER_AGENT)
-        if self._token:
+        # The token authenticates us to the board and to nobody else. A file redirect lands on
+        # third-party object storage carrying its own presigned credentials, and forwarding ours
+        # there would hand a working CTFd token to a host that never asked for it.
+        if self._token and urllib.parse.urlparse(url).netloc == urllib.parse.urlparse(self.url).netloc:
             request.add_header("Authorization", f"Token {self._token}")
         request.add_header("Accept", "application/json")
         if json_content_type:
@@ -84,18 +94,34 @@ class Board:
             raise ProbeFailure(f"{method} {path} answered success=false — {document}")
         return document["data"]
 
-    def download(self, file_path: str) -> bytes:
-        """Fetch a challenge file through the same request path as everything else.
+    def download(self, file_path: str) -> tuple[bytes, list[str]]:
+        """Fetch a challenge file, following redirects off the platform if that is where it lives.
 
-        A second hand-rolled path is how a header discipline proved in one check gets quietly
-        violated in the next, so this goes through `request` rather than building its own.
+        Not following redirects is what stops an expired session masquerading as an empty board,
+        so the API path keeps that rule. Files are the exception: CTFd commonly answers `/files/`
+        with a 302 to object storage holding a presigned URL, and refusing to follow it means
+        never opening a forensics, reversing or pwn challenge at all.
+
+        Returns the bytes and the hosts the fetch passed through, so an off-platform host is
+        something the report states rather than something nobody notices.
         """
-        status, payload, location = self.request("GET", f"/{file_path.lstrip('/')}")
-        if status != 200:
-            raise ProbeFailure(f"file fetch answered {status}" + (f" → {location}" if location else ""))
-        if b"<html" in payload[:512].lower():
-            raise ProbeFailure("file fetch returned an HTML page, not a file — auth degraded to a login screen")
-        return payload
+        target, hops = f"/{file_path.lstrip('/')}", []
+        for _ in range(MAX_FILE_REDIRECTS):
+            status, payload, location = self.request("GET", target)
+            if status == 200:
+                if b"<html" in payload[:512].lower():
+                    raise ProbeFailure("the file fetch returned an HTML page — auth degraded to a login screen")
+                return payload, hops
+            if status not in (301, 302, 303, 307, 308) or not location:
+                raise ProbeFailure(f"the file fetch answered {status}" + (f" → {location}" if location else ""))
+            target = urllib.parse.urljoin(f"{self.url}{target}", location)
+            # Following redirects must not become a way for a login screen to arrive as a pass.
+            # A file request sent to /login means the session degraded; chasing it only burns
+            # hops before the HTML check catches the same thing less clearly.
+            if "/login" in urllib.parse.urlparse(target).path:
+                raise ProbeFailure(f"the file fetch was redirected to {target} — auth degraded to a login screen")
+            hops.append(urllib.parse.urlparse(target).netloc)
+        raise ProbeFailure(f"the file fetch still redirecting after {MAX_FILE_REDIRECTS} hops via {hops}")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -236,10 +262,11 @@ def check_files_download_headlessly(board: Board, challenges: list[dict[str, Any
     for challenge in challenges:
         files = board.json("GET", f"/api/v1/challenges/{challenge['id']}").get("files") or []
         if files:
-            payload = board.download(files[0])
+            payload, hops = board.download(files[0])
             if not payload:
                 raise ProbeFailure(f"{files[0]} downloaded as zero bytes")
-            return f"{len(payload)} bytes from {challenge['name']!r} — no browser needed"
+            served_from = f" via {', '.join(hops)}" if hops else " served inline by the board"
+            return f"{len(payload)} bytes from {challenge['name']!r}{served_from} — no browser needed"
     raise Unproven("no challenge exposes a file yet — re-run once the board is populated")
 
 

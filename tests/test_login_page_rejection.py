@@ -26,7 +26,10 @@ def board_answering(status, payload, location=""):
 def test_a_challenge_file_is_returned_as_bytes():
     board = board_answering(200, b"PK\x03\x04 challenge.zip")
 
-    assert board.download("files/abcdef/challenge.zip") == b"PK\x03\x04 challenge.zip"
+    payload, hops = board.download("files/abcdef/challenge.zip")
+
+    assert payload == b"PK\x03\x04 challenge.zip"
+    assert hops == [], "a file served by the board itself passed through no other host"
 
 
 def test_a_login_page_served_in_place_of_a_file_is_rejected():
