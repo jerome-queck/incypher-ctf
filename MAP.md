@@ -21,4 +21,6 @@ Start here: `README.md`, then `AGENTS.md`.
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
 
+| Tool caches | Disposable ruff and pytest scratch — gitignored, safe to delete | `.cache/` |
+
 Update this file in the same pull request whenever a top-level area is added, moved, or removed.

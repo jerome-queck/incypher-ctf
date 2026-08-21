@@ -2,6 +2,11 @@
 # rather than a distribution — so this file carries tool settings and nothing else.
 
 [tool.ruff]
+# Every tool cache lives under `.cache/`, so the repository root grows one disposable
+# directory rather than one per tool. `conformance/check-conformance.sh` reads the filesystem
+# rather than git, so an untracked directory at the root fails its layout rule no matter what
+# `.gitignore` says — and the fewer of them there are, the less MAP.md has to account for.
+cache-dir = ".cache/ruff"
 # The Python already in the tree was hand-wrapped near this width, so adopting a formatter is a
 # reformat rather than a rewrite. The 100-column wrap in `docs/` is a prose convention and does
 # not reach code.
@@ -14,6 +19,7 @@ line-length = 120
 select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
+cache_dir = ".cache/pytest"
 testpaths = ["tests"]
 # `scripts/` holds runnable scripts rather than an installed package, so the import path is
 # declared once here instead of being rebuilt inside every test module.

@@ -11,6 +11,13 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 2
 
+# Python is ruff's, not this file's. The header rule above is that a language's own formatter
+# wins, and ruff is in CI now — so these mirror what it produces rather than compete with it.
+# The source of truth is `pyproject.toml`; if that changes, this follows.
+[*.py]
+indent_size = 4
+max_line_length = 120
+
 # Markdown gives trailing whitespace a meaning: two spaces are a hard line break.
 [*.md]
 trim_trailing_whitespace = false
