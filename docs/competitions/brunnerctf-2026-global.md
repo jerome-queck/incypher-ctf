@@ -58,9 +58,28 @@ Checked 21 Aug 2026, before the window opened:
   a board with no challenges. The probe never follows redirects.
 - No `/api/v1/` schema root (404). The endpoints are the documented CTFd ones.
 
-Open until we hold an account — the probe answers all of them on its first run: the CTFd version,
-`incorrect_submissions_per_min`, `max_attempts`, whether any per-player instance plugin is
-installed (we expect not on Global), and whether challenge files download headlessly.
+## Verified once the board opened
+
+Checked 21 Aug 2026 at 20:10 SGT, ten minutes after the window opened, with a registered team:
+
+- **74 challenges** across Boot2Root, Crypto, Forensics, Misc, Mobile, OSINT, Onboarding, Pwn,
+  Reversing and Web.
+- **Challenge files are not served by the board.** `/files/…` answers **302 to Hetzner object
+  storage** with a presigned, expiring S3-style URL. Most forensics, reversing, pwn and misc
+  challenges *are* a file, so a Solver that treats a redirect there as a failure cannot open a
+  large share of the board. Two consequences: the file path must follow redirects even though the
+  API path must not, and **the CTFd token must not travel with it** — the presigned URL carries
+  its own credentials, and forwarding ours hands a working token to a host that never asked for
+  one.
+- **`type` is not a closed set.** Brunner returns `flightops` alongside `dynamic` — a custom CTFd
+  plugin type. Anything switching on challenge type must tolerate one it has never seen rather
+  than failing closed.
+- Both earlier predictions held on the live board: dropping `Content-Type: application/json`
+  answers `302 → /login`, and a deliberately wrong flag returns **HTTP 200 with
+  `data.status='incorrect'`**.
+
+Still open: the CTFd version, `incorrect_submissions_per_min`, and `max_attempts` — `/api/v1/configs`
+is admin-only, so assume CTFd's default of 10 wrong submissions per minute.
 
 ## Before playing
 
