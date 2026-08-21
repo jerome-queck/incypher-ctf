@@ -2,7 +2,8 @@
 
 An autonomous CTF-solving agent for the [IN-CYPHER Agents-vs-CTF hackathon](https://www.imperial.ac.uk/about/global/singapore/research/in-cypher/in-cypher-hackathon/)
 (Imperial Global Singapore, September 2026). The deliverable is a Docker container that solves
-CTF challenges — web, pwn, crypto, reversing, forensics, healthcare — with no human in the loop.
+CTF challenges — web, pwn, crypto, reversing, forensics and whatever else the board ships, a
+number of them set in healthcare scenarios — with no human in the loop.
 
 Born from the Jerome-Group private template and adapted to stand alone — see
 [`MAP.md`](MAP.md) to find your way around, [`AGENTS.md`](AGENTS.md) for how work is done here,
