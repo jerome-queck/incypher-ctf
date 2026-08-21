@@ -1,0 +1,20 @@
+# What `ci.yml`'s Python job enforces. There is no package here — the Solver ships as a container
+# rather than a distribution — so this file carries tool settings and nothing else.
+
+[tool.ruff]
+# The Python already in the tree was hand-wrapped near this width, so adopting a formatter is a
+# reformat rather than a rewrite. The 100-column wrap in `docs/` is a prose convention and does
+# not reach code.
+line-length = 120
+
+[tool.ruff.lint]
+# Ruff's own default set, written down rather than inherited. CI installs ruff unversioned, and an
+# inherited default is one a release can widen under a tree nobody has touched — which turns a
+# scheduled run red for a reason no commit explains. Widening this is a deliberate edit here.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `scripts/` holds runnable scripts rather than an installed package, so the import path is
+# declared once here instead of being rebuilt inside every test module.
+pythonpath = ["scripts"]

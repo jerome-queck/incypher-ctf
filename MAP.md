@@ -16,6 +16,7 @@ Start here: `README.md`, then `AGENTS.md`.
 | Competitions | The boards we play — a rules snapshot and the platform facts, one file per event | `docs/competitions/` |
 | Credentials | Every secret, where it comes from, and how it reaches the container | `docs/credentials.md` |
 | Scripts | Setup and pre-flight checks, run by hand against a live board | `scripts/` |
+| Tests | What CI runs over the code in `scripts/` — the seams that decide offline | `tests/` |
 | Installed skills | The mattpocock engineering skills, copied in for Claude and Codex | `.claude/skills/`, `.agents/skills/` |
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |

@@ -1,8 +1,8 @@
 name: CI
 
 # All three triggers, because this repository's check is not a pure function of its own tree —
-# once real checks exist it installs from a network and can rot in place while nothing is pushed.
-# Drop one only with the reason recorded in `docs/adr/`.
+# the Python job installs its linter and its test runner from a network, so this can rot in place
+# while nothing is pushed. Drop one only with the reason recorded in `docs/adr/`.
 on:
   pull_request:
   push:
@@ -15,9 +15,21 @@ on:
 permissions:
   contents: read
 
+# What these jobs owe — what CI must prove, how the checks grow, and why none of them gets a path
+# filter — is `CODING_STANDARDS.md` §5, which is the text rather than a summary of it. Its
+# ten-minute bound is `timeout-minutes` on each job rather than a promise: the jobs run in
+# parallel, so a run cannot outlast its longest one.
+#
+# Every job is written to pass on a tree that does not yet contain the thing it checks. A check
+# that goes red on an empty glob is a check people learn to route around, and the point of these
+# is to bite the moment code arrives rather than to be argued with before it does.
+#
+# No ruleset can *require* these checks on a free private repository (ADR-0003), so red does not
+# block a merge mechanically — it blocks one by convention, and CONTRIBUTING.md says so.
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # Actions are pinned to a commit, not a tag, so a moved tag cannot change what runs here.
       # Dependabot is what moves these pins forward (.github/dependabot.yml).
@@ -37,9 +49,63 @@ jobs:
       - name: MAP.md exists
         run: test -f MAP.md
 
-      # This repository's real checks go below, as further jobs in this file. What they owe —
-      # what CI must prove, how the checks grow, and why none of them gets a path filter — is
-      # `CODING_STANDARDS.md` §5, which is the text rather than a summary of it.
-      #
-      # No ruleset can *require* this check on a free private repository (ADR-0003), so red does
-      # not block a merge mechanically — it blocks one by convention, and CONTRIBUTING.md says so.
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # shellcheck ships on the runner image, so there is no version here to pin or install.
+      - name: shellcheck
+        run: |
+          # This repository's own scripts, which is not every `.sh` in the tree. `conformance/`
+          # and the two skill trees are vendored copies of somebody else's text (ADR-0002,
+          # `skills-lock.json`) — a finding in one of those is not a change this repository is
+          # free to make, so holding them to a linter would only ever demand a divergence.
+          scripts=$(git ls-files '*.sh' ':!:conformance/' ':!:.claude/skills/' ':!:.agents/skills/')
+
+          if [ -z "$scripts" ]; then
+            echo "No shell scripts of this repository's own — nothing to check."
+            exit 0
+          fi
+
+          # No `--shell`: it overrides a shebang rather than standing in for a missing one, so it
+          # would read `setup-board.sh` as `sh` and bury it in false findings. Each script says
+          # what it is — a shebang, or the `# shellcheck shell=sh` directive the ones invoked
+          # through `sh` carry.
+          echo "$scripts"
+          echo "$scripts" | xargs shellcheck
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # Unversioned on purpose, and the schedule at the top of this file is the other half of
+      # that decision. Dependabot watches `uses:` pins and no other ecosystem here, so a version
+      # written down here is one nothing would ever move; a floating tool instead announces a
+      # changed rule on the Monday run rather than inside somebody's pull request. What the
+      # linter enforces is pinned where it belongs — `pyproject.toml` names the rule set rather
+      # than inheriting whichever one ships.
+      - run: python -m pip install --disable-pip-version-check ruff pytest
+
+      - run: ruff check --output-format=github .
+
+      - run: ruff format --check .
+
+      - name: pytest
+        run: |
+          # Tracked files rather than a glob, because an untracked stray under `tests/` is not a
+          # test this repository ships. With none, pytest exits 5 for "no tests collected" — so
+          # this is green while the tree has no tests, and that same exit 5 is a real failure the
+          # moment it has one.
+          if [ -z "$(git ls-files 'tests/test_*.py')" ]; then
+            echo "No tests yet — nothing to run."
+            exit 0
+          fi
+          pytest
