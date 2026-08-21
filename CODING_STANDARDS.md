@@ -104,14 +104,67 @@ Two shapes are settled, so no repository re-argues them:
 
 ## 6. Repo-specific standards
 
-*(Each repository fills this in and owns it.)* Language and framework conventions, the seams
-where tests are written, naming or layout rules particular to this codebase, and anything the
-core leaves open. Add them here; they evolve through this repository's normal pull-request flow.
+The rules §1–§5 leave open, as this repository keeps them. Most are here because the tree already
+follows them. Where one is a commitment the tree has not met yet, it says so and names the issue
+that will enforce it — a rule with neither a practice nor an issue behind it belongs in neither
+place.
 
-This section is empty because this repository is newly generated. Fill it in with the first
-change that has an opinion worth holding the next one to — the formatter and linter that run in
-CI, where the tests live, and the one or two layout rules a newcomer would otherwise guess
-wrong.
+### The languages, and what checks them
+
+Two languages so far, one tool each, plus the test runner:
+
+- **Python** — `ruff`, as both: `ruff format --check` and `ruff check`.
+- **Shell** — `shellcheck`.
+- **Tests** — `pytest`, in **`tests/` at the repository root**. One place rather than beside the
+  code, so a reader looking for the seams looks once.
+
+**None of these three runs yet.** `ci.yml` proves only that `CLAUDE.md` is still a symlink and
+that `MAP.md` exists, and `tests/` arrives with the first test — wiring all of it into CI is
+[issue #22](https://github.com/jerome-queck/incypher-ctf/issues/22). Until that lands they bind
+the author rather than the build, which is the whole reason to name them before the tooling
+exists: §6 is the contract and CI is the enforcement, so the next pull request cannot reach for a
+different formatter while #22 is still open.
+
+They reach the files this repository writes, and stop there. `conformance/*.sh` are the hub's
+checker scripts held byte-for-byte (ADR-0002 — the `manifest` beside them is this repository's
+own and is edited freely), and `.claude/skills/` and `.agents/skills/` are vendored skill copies
+pinned by `skills-lock.json`. Reformatting any of them would break the re-vendor that keeps them
+current, so nothing in this section reaches them.
+
+### Scripts are run through the interpreter, never `./`
+
+`sh conformance/check-conformance.sh .`, `python3 scripts/ctfd_probe.py` — the interpreter is
+named at the call site, so the file itself needs neither a shebang nor an exec bit. Every
+`conformance/*.sh` and `scripts/check-rules-drift.sh` is mode `100644` and opens with a comment
+rather than `#!`, and `.github/workflows/conformance.yml` invokes each checker through `sh`.
+
+What a newcomer gets wrong, in both directions:
+
+- **Do not add a shebang or `chmod +x` to make a script "runnable".** An exec bit is a second
+  claim about how a file is invoked, made silently and in the one place a diff review does not
+  read.
+- **Declare the dialect instead.** A shebang-less `sh` script tells `shellcheck` nothing about
+  which shell it is, so its first line is `# shellcheck shell=sh`, as `check-rules-drift.sh`'s
+  is. Without it the file is unlintable rather than clean.
+
+**The exception is a file a generator owns.** `scripts/setup-board.sh` comes from the `/wizard`
+template with its library byte-for-byte untouched, and the template supplies the shebang and asks
+for the exec bit; the file's own header says not to hand-edit it. Reshaping a generated file to
+fit this rule trades away regenerating it, and buys a tidier `ls`.
+
+### Standard library only, inside the Solver image
+
+Anything that has to run in the Solver container imports from the standard library and nothing
+else. The image ships with nothing installed and the competition run is unattended, so a missing
+dependency is not a thing anyone is there to fix. `scripts/ctfd_probe.py` states the constraint in
+its module docstring and holds to it.
+
+### Where a new file goes
+
+- **`docs/competitions/` — one file per event.** Our reading of the event, beside a verbatim
+  `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed.
+- **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
+  credential, or a network the runner does not have, which is what keeps them out of `ci.yml`.
 
 ## 7. Evolution — what is rigid, what moves
 
