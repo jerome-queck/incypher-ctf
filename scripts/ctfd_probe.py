@@ -17,8 +17,11 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+PASS, SKIP, FAIL = "pass", "skip", "fail"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
@@ -74,13 +77,17 @@ class Board:
         return document["data"]
 
     def download(self, file_path: str) -> bytes:
-        request = urllib.request.Request(f"{self.url}/{file_path.lstrip('/')}")
-        request.add_header("User-Agent", BROWSER_USER_AGENT)
-        request.add_header("Authorization", f"Token {self._token}")
-        with self._opener.open(request, timeout=60) as response:
-            if response.status != 200:
-                raise ProbeFailure(f"file fetch answered {response.status}")
-            return response.read()
+        """Fetch a challenge file through the same request path as everything else.
+
+        A second hand-rolled path is how a header discipline proved in one check gets quietly
+        violated in the next, so this goes through `request` rather than building its own.
+        """
+        status, payload, location = self.request("GET", f"/{file_path.lstrip('/')}")
+        if status != 200:
+            raise ProbeFailure(f"file fetch answered {status}" + (f" → {location}" if location else ""))
+        if b"<html" in payload[:512].lower():
+            raise ProbeFailure("file fetch returned an HTML page, not a file — auth degraded to a login screen")
+        return payload
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -90,6 +97,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class ProbeFailure(Exception):
     """A check the Solver would have silently mis-read."""
+
+
+class Unproven(Exception):
+    """A check that could not run — reported as its own outcome, never as a pass.
+
+    The board being unpopulated is not evidence that downloads work. Calling that PASS is the
+    same silent green this probe exists to catch, one level up.
+    """
 
 
 def check_edge_is_not_blocking(board: Board) -> str:
@@ -169,13 +184,13 @@ def check_files_download_headlessly(board: Board, challenges: list[dict[str, Any
             if not payload:
                 raise ProbeFailure(f"{files[0]} downloaded as zero bytes")
             return f"{len(payload)} bytes from {challenge['name']!r} — no browser needed"
-    return "no challenge exposes a file yet — re-run once the board is populated"
+    raise Unproven("no challenge exposes a file yet — re-run once the board is populated")
 
 
 def check_rate_limits_are_visible(board: Board) -> str:
     status, raw, _ = board.request("GET", "/api/v1/configs")
     if status == 401:
-        return "nothing to read — the token was rejected above, so this says nothing either way"
+        raise Unproven("the token was rejected above, so this says nothing either way")
     if status != 200:
         return f"/api/v1/configs is admin-only here ({status}) — assume CTFd's default of 10 wrong submissions/min"
     configs = {entry["key"]: entry["value"] for entry in json.loads(raw)["data"]}
@@ -211,10 +226,11 @@ def main() -> int:
     board = Board(url, token)
     print(f"probing {board.url}\n")
 
-    failures = 0
-    failures += _report("edge is not blocking", lambda: check_edge_is_not_blocking(board))
-    failures += _report("token is recognised", lambda: check_token_is_recognised(board))
-    failures += _report("Content-Type discipline", lambda: check_content_type_discipline(board))
+    outcomes = [
+        _report("edge is not blocking", lambda: check_edge_is_not_blocking(board)),
+        _report("token is recognised", lambda: check_token_is_recognised(board)),
+        _report("Content-Type discipline", lambda: check_content_type_discipline(board)),
+    ]
 
     challenges: list[dict[str, Any]] = []
 
@@ -223,33 +239,50 @@ def main() -> int:
         summary, challenges = check_challenges_enumerate(board)
         return summary
 
-    failures += _report("challenges enumerate", enumerate_and_keep)
+    outcomes.append(_report("challenges enumerate", enumerate_and_keep))
 
     if challenges:
-        if arguments.no_attempt:
-            _report("attempt verdict", lambda: "skipped (--no-attempt)")
-        else:
-            failures += _report("attempt verdict", lambda: check_attempt_verdict_is_in_the_body(board, challenges[0]))
-        failures += _report("files download headlessly", lambda: check_files_download_headlessly(board, challenges))
+        outcomes.append(_report(
+            "attempt verdict",
+            _unproven("--no-attempt was passed, so submission semantics are unverified")
+            if arguments.no_attempt
+            else lambda: check_attempt_verdict_is_in_the_body(board, challenges[0]),
+        ))
+        outcomes.append(_report("files download headlessly", lambda: check_files_download_headlessly(board, challenges)))
 
-    _report("board settings", lambda: check_rate_limits_are_visible(board))
+    outcomes.append(_report("board settings", lambda: check_rate_limits_are_visible(board)))
 
+    failed, unproven = outcomes.count(FAIL), outcomes.count(SKIP)
     print()
-    if failures:
-        print(f"{failures} check(s) failed — do not start a run until they pass.", file=sys.stderr)
+    if failed:
+        print(f"{failed} check(s) failed — do not start a run until they pass.", flush=True)
         return 1
+    if unproven:
+        print(f"transport works, but {unproven} check(s) could not run — re-run once the board is populated.", flush=True)
+        return 0
     print("board is reachable the way the Solver reaches it.")
     return 0
 
 
-def _report(name: str, run: Any) -> int:
+def _report(name: str, run: Callable[[], str]) -> str:
     """One line per check. The whole report goes to stdout so it reads in order when piped."""
     try:
         print(f"  PASS  {name}: {run()}", flush=True)
-        return 0
+        return PASS
+    except Unproven as gap:
+        print(f"  SKIP  {name}: {gap}", flush=True)
+        return SKIP
     except (ProbeFailure, urllib.error.URLError, KeyError, json.JSONDecodeError) as failure:
         print(f"  FAIL  {name}: {failure}", flush=True)
-        return 1
+        return FAIL
+
+
+def _unproven(reason: str) -> Callable[[], str]:
+    """A check deliberately not run — so the caller reports SKIP rather than inventing a PASS."""
+    def refuse_to_claim_a_pass() -> str:
+        raise Unproven(reason)
+
+    return refuse_to_claim_a_pass
 
 
 if __name__ == "__main__":

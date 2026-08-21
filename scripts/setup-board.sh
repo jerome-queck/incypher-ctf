@@ -185,6 +185,19 @@ finish() {
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# clear_env KEY — drop KEY from ENV_FILE entirely. The library's write_env can set a value
+# but not remove one, and for the auth variables an empty leftover is as harmful as a wrong
+# value: whichever exists first wins the SDK's credential search, so a blank line shadows
+# the credential the human just pasted.
+clear_env() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  grep -qE "^${1}=" "$ENV_FILE" || return 0
+  local tmp; tmp=$(mktemp)
+  grep -vE "^${1}=" "$ENV_FILE" > "$tmp" || true
+  mv "$tmp" "$ENV_FILE"
+  printf '  %s✓ removed%s %s from %s\n' "$GREEN" "$RESET" "$1" "$ENV_FILE"
+}
+
 TOTAL_STAGES=6
 
 banner "Point the Solver at a CTF board"
@@ -237,15 +250,36 @@ write_env CTFD_API_TOKEN "$CTFD_API_TOKEN"
 pause
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
-stage "LLM provider key"
-say "The Solver reasons with this. Skip with Enter if yours is already in .env."
-open_url "https://console.anthropic.com/settings/keys"
-step "API keys -> Create key -> copy it."
-ask_secret ANTHROPIC_API_KEY "Paste the Anthropic API key:"
-if [ -n "$ANTHROPIC_API_KEY" ]; then
-  write_env ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+stage "How the Solver pays for inference"
+say "Practice runs go on the subscription: no per-token cost, but a quota that hard-stops"
+say "until it resets. Competition day goes on a metered key: it costs money and never"
+say "hits a cliff mid-run."
+say ""
+warn "Exactly one of these may be set. An empty leftover still shadows the other, and"
+warn "setting both makes the SDK send two auth headers, which the API rejects outright."
+say ""
+if confirm "Practice run on the subscription? (No = metered key for competition day.)"; then
+  step "In another terminal, run:  claude setup-token"
+  step "Complete the browser login it opens, then copy the token it prints."
+  ask_secret CLAUDE_CODE_OAUTH_TOKEN "Paste the token (sk-ant-oat01-...):"
+  if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    write_env CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_CODE_OAUTH_TOKEN"
+    clear_env ANTHROPIC_API_KEY
+    clear_env ANTHROPIC_AUTH_TOKEN
+  else
+    note "left as-is"
+  fi
 else
-  note "left as-is"
+  open_url "https://console.anthropic.com/settings/keys"
+  step "API keys -> Create key -> copy it."
+  ask_secret ANTHROPIC_API_KEY "Paste the metered API key (sk-ant-api03-...):"
+  if [ -n "$ANTHROPIC_API_KEY" ]; then
+    write_env ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+    clear_env CLAUDE_CODE_OAUTH_TOKEN
+    clear_env ANTHROPIC_AUTH_TOKEN
+  else
+    note "left as-is"
+  fi
 fi
 pause
 

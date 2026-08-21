@@ -1,3 +1,5 @@
+# shellcheck shell=sh
+#
 # Re-fetch a competition's rules page and diff it against the committed baseline.
 #
 #   sh scripts/check-rules-drift.sh docs/competitions/<event>.rules.txt [--update]

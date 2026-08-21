@@ -23,8 +23,35 @@ token into a shell — it lands in your history.
 |---|---|---|---|
 | `CTFD_API_TOKEN` | Full control of our account on one CTFd board — reading challenges, submitting flags, and anything else we could do in the browser | On the board: **Settings → Access Tokens → Generate**. Shown once; copy it then. | Delete it on that same page and generate another. Scoped to one board, so nothing else is affected. |
 | `TEAM_KEY` | Our identity on the IN-CYPHER platform, including the proof-of-work gate on raw-TCP challenges | Issued by the IN-CYPHER organisers. Not needed for practice boards. | Tell the organisers — we cannot rotate this one ourselves, which is what makes it the most valuable secret here. |
-| `ANTHROPIC_API_KEY` | Billable inference on our account | `console.anthropic.com` → **API keys** → *Create key* | Revoke it in the console. Assume the spend between leak and revocation is ours. |
-| `OPENAI_API_KEY` | The same, on OpenAI | `platform.openai.com/api-keys` | Revoke it in the dashboard. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Inference against our Claude **subscription** — no per-token cost, a quota that hard-stops until it resets | Run `claude setup-token` and complete the browser login; it prints the token | Run `claude setup-token` again to mint a replacement, and sign out of the leaked session. |
+| `ANTHROPIC_API_KEY` | **Metered** inference billed per token, with no quota cliff | `console.anthropic.com` → **API keys** → *Create key* | Revoke it in the console. Assume the spend between leak and revocation is ours. |
+
+## Which inference credential, and when
+
+**Practice on the subscription; compete on the metered key.** Training runs are frequent and
+throwaway, so paying per token for them is money spent proving something we already believe. The
+5.5-hour scored run is the opposite: a quota that hard-stops mid-run cannot be topped up, and the
+Solver has no human to notice. That split is what [issue #20](https://github.com/jerome-queck/incypher-ctf/issues/20)
+means by a metered key held as the *armed* fallback rather than the daily driver — the danger it
+names is a subscription being the **sole** credential path, not a subscription being used.
+
+**Exactly one may be set.** These are not a fallback chain: the SDK picks the first credential it
+finds and, given both an API key and a token, sends two auth headers, which the API rejects. Two
+consequences that are easy to get wrong:
+
+- **An empty value is not an unset one.** `ANTHROPIC_API_KEY=` still occupies its slot in the
+  search order and authenticates with an empty key rather than falling through. `docker run
+  --env-file` exports empty values too, so a blank line in `.env` breaks auth inside the container
+  while the file still looks right. Delete the line; don't blank it.
+- **The token is not an API key.** `ANTHROPIC_API_KEY` is sent as `x-api-key`; an OAuth token
+  (`sk-ant-oat01-…`) must go on `Authorization: Bearer`. Put a token in the key's variable and
+  every request fails auth. For a Solver calling the Messages API directly the variable is
+  `ANTHROPIC_AUTH_TOKEN`; on raw HTTP that also needs `anthropic-beta: oauth-2025-04-20`.
+
+`bash scripts/setup-board.sh` asks which mode you want and removes the other variable for you.
+Which of the two the Solver actually reads is still open —
+[issue #17](https://github.com/jerome-queck/incypher-ctf/issues/17) picks the brain and the
+provider seam.
 
 `CTFD_URL` is not a secret, but it lives beside them because it is the value that decides which
 competition the Solver enters. BrunnerCTF runs a Danish platform under a strict no-AI policy
