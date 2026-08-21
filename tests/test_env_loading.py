@@ -10,7 +10,11 @@ import pytest
 
 @pytest.fixture
 def environment(monkeypatch):
-    """A throwaway environment, so what one test sets cannot reach the next one or the runner."""
+    """A throwaway `os.environ` for the duration of one test.
+
+    `load_env` writes through the real one, and `monkeypatch` is what puts it back afterwards —
+    without that, a variable a test wrote would outlive it and be read by the next.
+    """
     replacement: dict[str, str] = {}
     monkeypatch.setattr(ctfd_probe.os, "environ", replacement)
     return replacement

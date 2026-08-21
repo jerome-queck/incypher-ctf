@@ -100,12 +100,16 @@ jobs:
 
       - name: pytest
         run: |
-          # Tracked files rather than a glob, because an untracked stray under `tests/` is not a
-          # test this repository ships. With none, pytest exits 5 for "no tests collected" — so
-          # this is green while the tree has no tests, and that same exit 5 is a real failure the
-          # moment it has one.
-          if [ -z "$(git ls-files 'tests/test_*.py')" ]; then
-            echo "No tests yet — nothing to run."
-            exit 0
+          # Any tracked Python under `tests/`, rather than the `tests/test_*.py` pytest happens to
+          # collect today: a guard written to pytest's naming would match nothing the day a suite
+          # moves into a subdirectory or a file is named `*_test.py`, and would then report "no
+          # tests" forever on a repository full of them. Tracked, because an untracked stray is
+          # not a test this repository ships.
+          #
+          # So the skip below means the tree has no Python tests at all. Once it has any, pytest
+          # runs and its exit 5 — "no tests collected" — is a real failure rather than a shrug.
+          if git ls-files 'tests/' | grep -q '\.py$'; then
+            pytest
+          else
+            echo "No Python under tests/ yet — nothing to run."
           fi
-          pytest
