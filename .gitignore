@@ -19,3 +19,7 @@ __pycache__/
 
 # Agent worktrees — scratch checkouts, never part of the tree
 .claude/worktrees/
+
+# Tool caches. `pyproject.toml` points ruff and pytest here so the root grows one disposable
+# directory rather than one per tool; MAP.md carries its row.
+.cache/
