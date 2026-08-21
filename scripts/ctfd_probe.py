@@ -17,6 +17,8 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import datetime as dt
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -47,13 +49,20 @@ class Board:
         self._token = token
         self._opener = urllib.request.build_opener(_NoRedirect)
 
+    @property
+    def authenticated(self) -> bool:
+        """Whether a token was supplied. Some boards serve challenges to anyone, so its absence
+        narrows what can be proven rather than stopping the probe."""
+        return bool(self._token)
+
     def request(
         self, method: str, path: str, body: dict[str, Any] | None = None, *, json_content_type: bool = True
     ) -> tuple[int, bytes, str]:
         payload = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(f"{self.url}{path}", data=payload, method=method)
         request.add_header("User-Agent", BROWSER_USER_AGENT)
-        request.add_header("Authorization", f"Token {self._token}")
+        if self._token:
+            request.add_header("Authorization", f"Token {self._token}")
         request.add_header("Accept", "application/json")
         if json_content_type:
             request.add_header("Content-Type", "application/json")
@@ -106,6 +115,41 @@ class Unproven(Exception):
     """
 
 
+def board_window(board: Board) -> tuple[dt.datetime | None, dt.datetime | None]:
+    """The event window, as the board itself publishes it.
+
+    CTFd embeds `start` and `end` in `window.init` on every HTML page. `/api/v1/configs` is
+    admin-only, so this is the one place a competitor can read the schedule the board enforces.
+    """
+    status, html, _ = board.request("GET", "/")
+    if status != 200:
+        return None, None
+    page = html.decode("utf-8", "replace")
+
+    def moment(name: str) -> dt.datetime | None:
+        found = re.search(rf"'{name}':\s*(\d+)", page)
+        return dt.datetime.fromtimestamp(int(found.group(1)), dt.timezone.utc) if found else None
+
+    return moment("start"), moment("end")
+
+
+def refuse_to_blame_the_token(board: Board, status: int) -> None:
+    """Reinterpret a 403 that is the event window rather than a broken credential.
+
+    CTFd gates the challenge endpoints until the event opens, and answers 403 whether your token
+    is perfect or absent. Calling that a failure tells someone to fix credentials that are fine —
+    the worst possible instruction on the evening of an event.
+    """
+    if status != 403:
+        return
+    opens, _ = board_window(board)
+    if opens and opens > dt.datetime.now(dt.timezone.utc):
+        raise Unproven(
+            f"the board opens {opens.astimezone():%Y-%m-%d %H:%M %Z} — this 403 is that gate, "
+            "not your token; re-run once it is open"
+        )
+
+
 def check_edge_is_not_blocking(board: Board) -> str:
     """Cloudflare rejects a machine-looking client with a 403 indistinguishable from a bad token.
 
@@ -119,6 +163,8 @@ def check_edge_is_not_blocking(board: Board) -> str:
 
 
 def check_token_is_recognised(board: Board) -> str:
+    if not board.authenticated:
+        raise Unproven("no CTFD_API_TOKEN set — running the anonymous read path only")
     identity = board.json("GET", "/api/v1/users/me")
     team = identity.get("team_id")
     return f"authenticated as {identity['name']!r} (user {identity['id']}, team {team})"
@@ -127,6 +173,7 @@ def check_token_is_recognised(board: Board) -> str:
 def check_content_type_discipline(board: Board) -> str:
     """CTFd is widely reported to ignore token auth when Content-Type is absent. Measure it."""
     with_header, _, _ = board.request("GET", "/api/v1/challenges")
+    refuse_to_blame_the_token(board, with_header)
     without_header, _, location = board.request("GET", "/api/v1/challenges", json_content_type=False)
     if with_header != 200:
         raise ProbeFailure(f"the correctly-typed request itself failed with {with_header}")
@@ -143,6 +190,13 @@ def check_content_type_discipline(board: Board) -> str:
 
 
 def check_challenges_enumerate(board: Board) -> tuple[str, list[dict[str, Any]]]:
+    status, _, _ = board.request("GET", "/api/v1/challenges")
+    refuse_to_blame_the_token(board, status)
+    if status == 403:
+        raise ProbeFailure(
+            "403 on enumeration with no scheduled open — check the account is on a team, and that "
+            "the token has not been revoked"
+        )
     challenges = board.json("GET", "/api/v1/challenges")
     if not challenges:
         raise ProbeFailure("the board listed zero challenges — either it has not opened, or auth degraded silently")
@@ -160,6 +214,8 @@ def check_attempt_verdict_is_in_the_body(board: Board, challenge: dict[str, Any]
     One wrong submission is not the "indiscriminate brute-forcing" the rules ban, but it is the
     only way to learn that the verdict lives in data.status while the HTTP code stays 200.
     """
+    if not board.authenticated:
+        raise Unproven("submitting needs a token; the anonymous read path cannot prove this")
     status, raw, _ = board.request(
         "POST",
         "/api/v1/challenges/attempt",
@@ -220,12 +276,12 @@ def main() -> int:
 
     load_env(REPO_ROOT / ".env")
     url, token = os.environ.get("CTFD_URL", ""), os.environ.get("CTFD_API_TOKEN", "")
-    if not url or not token:
-        print("CTFD_URL and CTFD_API_TOKEN must be set — run `bash scripts/setup-board.sh`", file=sys.stderr)
+    if not url:
+        print("CTFD_URL must be set — run `bash scripts/setup-board.sh`", file=sys.stderr)
         return 2
 
     board = Board(url, token)
-    print(f"probing {board.url}\n")
+    print(f"probing {board.url}" + ("" if board.authenticated else " (anonymously — no token set)") + "\n")
 
     outcomes = [
         _report("edge is not blocking", lambda: check_edge_is_not_blocking(board)),
@@ -263,9 +319,7 @@ def main() -> int:
         print(f"{failed} check(s) failed — do not start a run until they pass.", flush=True)
         return 1
     if unproven:
-        print(
-            f"transport works, but {unproven} check(s) could not run — re-run once the board is populated.", flush=True
-        )
+        print(f"nothing is wrong, but {unproven} check(s) could not run — each SKIP above says why.", flush=True)
         return 0
     print("board is reachable the way the Solver reaches it.")
     return 0
