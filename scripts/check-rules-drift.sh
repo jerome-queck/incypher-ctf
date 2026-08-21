@@ -27,6 +27,9 @@ header_value() { sed -n "s/^$1:[[:space:]]*//p" "$baseline" | head -n1; }
 url=$(header_value Source)
 from=$(header_value From)
 to=$(header_value To)
+# SC2015's hazard is a `C` that runs after a true `A` and a false `B` in something meant as
+# if-then-else. There is no then-branch here at all: `C` runs exactly when a header is missing.
+# shellcheck disable=SC2015
 [ -n "$url" ] && [ -n "$from" ] && [ -n "$to" ] || {
   printf '%s is missing a Source/From/To header line.\n' "$baseline" >&2; exit 2; }
 
