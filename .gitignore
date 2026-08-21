@@ -16,3 +16,6 @@
 # Python
 __pycache__/
 *.pyc
+
+# Agent worktrees — scratch checkouts, never part of the tree
+.claude/worktrees/
