@@ -88,4 +88,5 @@ sh scripts/check-rules-drift.sh docs/competitions/brunnerctf-2026-global.rules.t
 ```
 
 Rules "may be updated at any time by the BrunnerCTF crew", so this runs before the event and again
-each morning of it. Silence means nothing changed.
+each morning of it. `rules unchanged: <url>` and exit 0 means nothing changed; drift prints a diff
+and exits 1. The script is never silent on success, so silence means it did not run.
