@@ -22,7 +22,10 @@ path that waits for a human has no use at competition time.
 on where they may be run. Empty until the first Solver code, which is built against the
 competition's Agent Development Kit released 14 September 2026.)*
 
-Copy `.env.example` to `.env` and fill in the team key and LLM provider keys. **Never commit the
+To point the Solver at a board, run `bash scripts/setup-board.sh` — it walks the human-only steps
+(register, join the team, mint the CTFd token), writes `.env`, and proves the API path with
+`scripts/ctfd_probe.py`. Every secret and where it comes from is `docs/credentials.md`; secrets
+are injected with `--env-file` at runtime and never built into an image layer. **Never commit the
 real values** — see Conventions.
 
 ## Conventions
