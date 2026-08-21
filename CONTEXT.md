@@ -79,7 +79,10 @@ One running deployment of an Isolated Challenge, belonging to one team and expir
 The Challenge is the thing on the Board; the Instance is the copy currently held. Keeping the two
 apart matters because "the Instance expired" and "the Challenge is unsolved" are different facts
 that want different responses.
-_Avoid_: container, deployment, lease, box
+_Avoid_: container, deployment, box. **Lease** is reserved rather than avoided: it is the
+candidate name for our *hold* on an Instance — a concept that only separates from the Instance
+itself once there is a lifecycle to renew and release against. If that lifecycle needs the word,
+coin it there rather than inventing a third one.
 
 **Mana**:
 What chall-manager charges a team for holding Instances: every Isolated Challenge carries a mana
