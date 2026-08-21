@@ -97,6 +97,43 @@ so the work cannot be shared or farmed out. Web Challenges have no gate — they
 unguessable subdomain instead.
 _Avoid_: captcha, rate limit, challenge (a PoW gate stands in front of a Challenge; it is not one)
 
+### How the Solver works a Challenge
+
+**Attempt**:
+One bounded run of the Solver at a single Challenge — from the recon that opens it to the moment it
+is cut or a Flag is submitted. A Challenge may be attempted many times: **an Attempt ends, a
+Challenge does not.** Keeping the two apart is what makes giving up cheap, because what is
+abandoned is an Attempt and never the Challenge (ADR-0005).
+_Avoid_: run (a run is the whole competition window, several hours over a whole Board), session, try
+
+**Step**:
+One cycle of an Attempt: a command is proposed, it runs, and its output is recorded as an
+Observation. A Step is a *count*, never a duration — Steps differ by orders of magnitude in how
+long they take, so a number of Steps says nothing about elapsed time.
+_Avoid_: turn, iteration, action
+
+**Observation**:
+Real output from a real command, inseparable from the command that produced it. The model does not
+write Observations; it only causes them. A tool that fails produces one too — the failure *is* the
+output, and recording silence instead would leave the model to narrate what it thinks happened.
+_Avoid_: finding, output, result, tool response
+
+**Claim**:
+Anything the model says — a hypothesis, a conclusion, a summary, "this looks like a spectrogram".
+Claims are how an Attempt reasons, and they are never evidence of anything. Claim / Observation is
+the most load-bearing pair here: it is what stops the model's account of what happened from being
+mistaken for what happened (ADR-0005).
+_Avoid_: note, assertion, conclusion-as-fact — and not *observation*, which is the other half of
+the pair and deliberately a different word
+
+**Checkpoint**:
+An environment state change that can be re-verified by replaying a command: a shell that answers, a
+route that was 403 and is now 200, an archive that extracted, a crash that reproduces. A Checkpoint
+is a state *transition*, never an interpretation — a confident wrong turn produces Claims in
+quantity and no Checkpoints at all.
+_Avoid_: milestone, breakthrough, progress. Not a saved state to return to either — nothing is ever
+rolled back to a Checkpoint; it records that the environment moved.
+
 ### Secrets and tooling
 
 **Team key**:
