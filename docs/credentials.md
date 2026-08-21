@@ -28,30 +28,45 @@ token into a shell — it lands in your history.
 
 ## Which inference credential, and when
 
-**Practice on the subscription; compete on the metered key.** Training runs are frequent and
+**Practice on a subscription; compete on metered billing.** Training runs are frequent and
 throwaway, so paying per token for them is money spent proving something we already believe. The
 5.5-hour scored run is the opposite: a quota that hard-stops mid-run cannot be topped up, and the
-Solver has no human to notice. That split is what [issue #20](https://github.com/jerome-queck/incypher-ctf/issues/20)
-means by a metered key held as the *armed* fallback rather than the daily driver — the danger it
-names is a subscription being the **sole** credential path, not a subscription being used.
+Solver has no human there to notice. That split is what
+[issue #20](https://github.com/jerome-queck/incypher-ctf/issues/20) means by metered credit held
+as the *armed* fallback rather than the daily driver — the danger it names is a subscription being
+the **sole** credential path, not a subscription being used.
 
-**Exactly one may be set.** These are not a fallback chain: the SDK picks the first credential it
-finds and, given both an API key and a token, sends two auth headers, which the API rejects. Two
-consequences that are easy to get wrong:
+**The competition allows any LLM**, and we hold more than one subscription, so this is a table per
+provider rather than a single key. Which provider the Solver actually reads, and whether it fails
+over between them, is [issue #17](https://github.com/jerome-queck/incypher-ctf/issues/17)'s call.
+
+| Provider | Practice (subscription) | Scored run (metered) |
+|---|---|---|
+| Anthropic | `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code / Agent SDK) or `ANTHROPIC_AUTH_TOKEN` (Messages API), minted by `claude setup-token` | `ANTHROPIC_API_KEY` from `console.anthropic.com` |
+| OpenAI / Codex | `codex login` — see the caveat below | `OPENAI_API_KEY` from `platform.openai.com` |
+
+**Codex authenticates by file, not by environment.** This is the one that will surprise you: an
+`OPENAI_API_KEY` in `.env` is enough for the OpenAI SDK, but the Codex CLI keeps its subscription
+credentials in `~/.codex/auth.json`. Exporting a variable does not log it in, so a container gets
+authenticated by piping a token to `codex login --with-access-token` (the value we keep as
+`CODEX_ACCESS_TOKEN`), or by `codex login --device-auth` where a human can complete the flow — and
+`--device-auth` needs a human, which the Solver will not have. Whichever we choose, the Dockerfile
+must not bake `auth.json` into a layer any more than it may bake a key.
+
+**One credential per provider.** Within a provider these are not a fallback chain: the client
+takes the first credential it finds, and given both an API key and a token the Anthropic SDK sends
+two auth headers, which the API rejects outright. Two things that are easy to get wrong:
 
 - **An empty value is not an unset one.** `ANTHROPIC_API_KEY=` still occupies its slot in the
   search order and authenticates with an empty key rather than falling through. `docker run
   --env-file` exports empty values too, so a blank line in `.env` breaks auth inside the container
   while the file still looks right. Delete the line; don't blank it.
-- **The token is not an API key.** `ANTHROPIC_API_KEY` is sent as `x-api-key`; an OAuth token
-  (`sk-ant-oat01-…`) must go on `Authorization: Bearer`. Put a token in the key's variable and
-  every request fails auth. For a Solver calling the Messages API directly the variable is
-  `ANTHROPIC_AUTH_TOKEN`; on raw HTTP that also needs `anthropic-beta: oauth-2025-04-20`.
+- **A token is not an API key.** `ANTHROPIC_API_KEY` is sent as `x-api-key`; an OAuth token
+  (`sk-ant-oat01-…`) must ride `Authorization: Bearer`. Put a token in the key's variable and
+  every request fails auth. On raw HTTP a Bearer token also needs the header
+  `anthropic-beta: oauth-2025-04-20`.
 
 `bash scripts/setup-board.sh` asks which mode you want and removes the other variable for you.
-Which of the two the Solver actually reads is still open —
-[issue #17](https://github.com/jerome-queck/incypher-ctf/issues/17) picks the brain and the
-provider seam.
 
 `CTFD_URL` is not a secret, but it lives beside them because it is the value that decides which
 competition the Solver enters. BrunnerCTF runs a Danish platform under a strict no-AI policy

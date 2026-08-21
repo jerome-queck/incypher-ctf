@@ -26,8 +26,10 @@ _Avoid_: problem, task (a `task` is a repository issue label — a different thi
 
 **Flag**:
 The string that proves a Challenge is solved, submitted to the Board by the Solver. **The wrapper
-is per-Board, not universal** — BrunnerCTF uses `brunner{.*}`, where the body is any text rather
-than hex or alphanumerics. A Solver that hardcodes one event's wrapper finds nothing at the next.
+is a property of the Board, not of the domain** — IN-CYPHER's is `flag{…}`, BrunnerCTF's is
+`brunner{.*}` with any text as the body, and a practice Board we have not met yet will have its
+own. So will its rules, its scoring, and its categories: each Board is read at the start of the
+event, not assumed. A Solver that hardcodes one event's wrapper finds nothing at the next.
 _Avoid_: answer, solution, key (a "key" here is a credential — see Team key)
 
 **Board**:
