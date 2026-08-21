@@ -32,8 +32,7 @@ PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
 # the application. Unset, every check below fails as though the token were rejected. The Solver
 # inherits this: any HTTP client it uses announces itself as a browser or it never sees the board.
 BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/127.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
 )
 
 
@@ -218,7 +217,8 @@ def check_attempt_verdict_is_in_the_body(board: Board, challenge: dict[str, Any]
     if not board.authenticated:
         raise Unproven("submitting needs a token; the anonymous read path cannot prove this")
     status, raw, _ = board.request(
-        "POST", "/api/v1/challenges/attempt",
+        "POST",
+        "/api/v1/challenges/attempt",
         {"challenge_id": challenge["id"], "submission": PROBE_FLAG},
     )
     if status != 200:
@@ -268,7 +268,8 @@ def load_env(path: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--no-attempt", action="store_true",
+        "--no-attempt",
+        action="store_true",
         help="skip the one deliberately-wrong flag submission (leaves the verdict semantics unverified)",
     )
     arguments = parser.parse_args()
@@ -298,13 +299,17 @@ def main() -> int:
     outcomes.append(_report("challenges enumerate", enumerate_and_keep))
 
     if challenges:
-        outcomes.append(_report(
-            "attempt verdict",
-            _unproven("--no-attempt was passed, so submission semantics are unverified")
-            if arguments.no_attempt
-            else lambda: check_attempt_verdict_is_in_the_body(board, challenges[0]),
-        ))
-        outcomes.append(_report("files download headlessly", lambda: check_files_download_headlessly(board, challenges)))
+        outcomes.append(
+            _report(
+                "attempt verdict",
+                _unproven("--no-attempt was passed, so submission semantics are unverified")
+                if arguments.no_attempt
+                else lambda: check_attempt_verdict_is_in_the_body(board, challenges[0]),
+            )
+        )
+        outcomes.append(
+            _report("files download headlessly", lambda: check_files_download_headlessly(board, challenges))
+        )
 
     outcomes.append(_report("board settings", lambda: check_rate_limits_are_visible(board)))
 
@@ -335,6 +340,7 @@ def _report(name: str, run: Callable[[], str]) -> str:
 
 def _unproven(reason: str) -> Callable[[], str]:
     """A check deliberately not run — so the caller reports SKIP rather than inventing a PASS."""
+
     def refuse_to_claim_a_pass() -> str:
         raise Unproven(reason)
 
