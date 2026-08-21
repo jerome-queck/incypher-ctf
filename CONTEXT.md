@@ -25,13 +25,27 @@ healthcare problem exposed by the competition platform, holding one flag.
 _Avoid_: problem, task (a `task` is a repository issue label — a different thing)
 
 **Flag**:
-The `flag{…}` string that proves a Challenge is solved, submitted to the platform by the Solver.
+The string that proves a Challenge is solved, submitted to the Board by the Solver. **The wrapper
+is a property of the Board, not of the domain** — IN-CYPHER's is `flag{…}`, BrunnerCTF's is
+`brunner{.*}` with any text as the body, and a practice Board we have not met yet will have its
+own. So will its rules, its scoring, and its categories: each Board is read at the start of the
+event, not assumed. A Solver that hardcodes one event's wrapper finds nothing at the next.
 _Avoid_: answer, solution, key (a "key" here is a credential — see Team key)
 
+**Board**:
+One competition's CTFd instance — the thing the Solver enumerates, submits to, and is scored by.
+A Board, not "the platform", because the Solver plays several: practice Boards like BrunnerCTF
+Global and the IN-CYPHER Board itself. Which one it is pointed at is `CTFD_URL`, and getting that
+wrong is a disqualification rather than a misconfiguration (`docs/competitions/`).
+_Avoid_: platform, site, server, instance (an "instance" is one isolated Challenge — see below)
+
 **Team key**:
-The secret that identifies and gates this team on the competition platform. It never enters the
-repository — it lives in `.env` and reaches the Solver at runtime. See `.env.example`.
-_Avoid_: token, API key (those are the LLM provider credentials — different secrets, same rule)
+The secret that identifies and gates this team on the IN-CYPHER Board, including its
+proof-of-work gate. It never enters the repository — it lives in `.env` and reaches the Solver at
+runtime. See `.env.example`.
+_Avoid_: token, API key. A **CTFd access token** is a different secret — per-Board, minted by us,
+revocable — and the **LLM credential** is a third. All three follow the same rule and none of
+them is the Team key (`docs/credentials.md`).
 
 **ADK**:
 The competition's Agent Development Kit, released 14 September 2026, including the

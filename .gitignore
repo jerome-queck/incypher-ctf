@@ -12,3 +12,7 @@
 # but the committed template is not a secret — it is what a real .env is copied from
 !.env.example
 *.local
+
+# Python
+__pycache__/
+*.pyc

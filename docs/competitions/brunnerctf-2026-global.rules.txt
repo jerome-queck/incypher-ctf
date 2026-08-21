@@ -1,0 +1,68 @@
+Source:    https://global.brunnerctf.dk/rules
+From:      CTF Rules
+To:        Rules may be updated at any time
+Fetched:   2026-08-21 08:40 SGT (2026-08-21T00:40Z)
+Publisher: BrunnerCTF / Brunnerne Inc. — held here as this team's compliance record.
+
+Do not hand-edit. `sh scripts/check-rules-drift.sh <this file> --update` rewrites it, and the
+diff it prints is the red-line review.
+--------------------------------------------------------------------------------------------
+CTF Rules
+-
+DO NOT share flags or collaborate with other teams during the competition.
+-
+DO NOT ask for or give help outside your team until the event
+has ended. This includes asking other teams that have already solved the challenge.
+-
+DO NOT attack, harass, or interfere with other players in any way.
+-
+DO NOT hoard flags or deliberately delay submissions ("sandbagging").
+-
+DO NOT indiscriminately brute-force flags or event infrastructure.
+Some challenges require limited brute forcing, but broad automated enumeration against our
+infrastructure, such as with DirBuster, is not allowed unless explicitly stated.
+If in doubt, open a support ticket on Discord.
+-
+DO NOT create multiple accounts or teams.
+-
+DO NOT discriminate. We have a zero-tolerance policy for discrimination,
+including but not limited to discrimination based on politics, gender, race, or sexual
+orientation. Teams or users with discriminatory or political content in their names may
+be removed or hidden if deemed inappropriate.
+-
+Keep a respectful tone on Discord at all times, both towards organizers and other players.
+-
+Rule violations may result in disqualification. Infrastructure abuse or attempted attacks
+against event infrastructure will result in an immediate ban and may be reported to the
+relevant authorities.
+-
+There is no team size limit.
+-
+Admins have the final word.
+AI Use
+Open Competition
+AI use is not prohibited in the Open competition, but the challenges are best enjoyed
+without it and we recommend challenging yourself instead.
+Struggling with a difficult problem, figuring out what to try next, and eventually finding
+the breakthrough yourself is a big part of what makes CTFs fun and rewarding.
+You will get considerably more out of the CTF by doing the thinking, experimenting, and
+struggling yourself rather than offloading the solving process to an LLM.
+The Danish competition has a separate and strict no-AI policy.
+If you intend to compete there, make sure to read the
+Danish AI policy
+before working on the challenges.
+Information
+-
+All flags are in the format brunner{.*} .
+-
+Challenges use dynamic scoring, meaning their point value decreases with the number
+of solves. Onboarding challenges are scored statically.
+-
+The Global and Danish competitions have separate scoreboards and separate dynamic scoring.
+Solves on one platform do not affect challenge values or rankings on the other.
+-
+You are allowed to ask the organizers for hints for Onboarding challenges in a support
+ticket on Discord. No hints or information will be provided for any other challenges.
+-
+After the event, you are encouraged to publish writeups and share solutions on our Discord.
+Rules may be updated at any time by the BrunnerCTF crew.
