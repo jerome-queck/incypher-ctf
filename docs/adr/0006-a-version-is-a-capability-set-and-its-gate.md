@@ -1,5 +1,9 @@
 # A version is a capability set and its gate, never a date
 
+> **Superseded in part by [ADR-0008](0008-one-image-for-every-board-and-two-seams-instead-of-one.md).**
+> The roadmap, the gates and the venue bindings below all stand. Only the Consequence that the ADK
+> "integrates behind the same seam the Board sits behind" is overtaken: there are two seams, and the
+> ADK sits behind the one that reaches a Challenge's service, never the one that talks to the Board.
 Five versions stand between an empty repository and a container that must solve capture-the-flag
 challenges for five and a half hours with nobody watching. The obvious way to write that down is a
 calendar — v1 this weekend, v2 the next — and the calendar is the part that broke first. The plan
