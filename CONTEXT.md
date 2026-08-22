@@ -174,8 +174,9 @@ rolled back to a Checkpoint; it records that the environment moved.
 
 **Team key**:
 The secret that identifies and gates this team on the IN-CYPHER Board, including its
-proof-of-work gate. It never enters the repository — it lives in `.env` and reaches the Solver at
-runtime. See `.env.example`.
+proof-of-work gate. It never enters the repository — it lives in an untracked env file and reaches
+the Solver at runtime. The Board **shows** it rather than minting it, and offers no way to replace
+it, so it is the one secret here whose leak cannot be undone.
 _Avoid_: token, API key. A **CTFd access token** is a different secret — per-Board, minted by us,
 revocable — and the **LLM credential** is a third. All three follow the same rule and none of
 them is the Team key (`docs/credentials.md`).

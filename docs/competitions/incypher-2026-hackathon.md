@@ -166,12 +166,16 @@ Still unknown, and still ADK- or event-gated: the exact CTFd version,
 `incorrect_submissions_per_min` (`/api/v1/configs` is admin-only — assume CTFd's default of 10
 wrong submissions per minute), the mana total, and the instance TTL.
 
-**One finding here belongs to the credential posture, not to this ticket.** How-to-play says
-"Every member can see the team key under **Settings → Access Tokens**" — self-served from the
-board, not issued by the organisers as [`.env.example`](../../.env.example) currently says, and
-sitting in the same place CTFd mints an access token. Whether the team key and the CTFd API token
-are one value or two that merely share a page is unresolved, and it matters to
-[#20](https://github.com/jerome-queck/incypher-ctf/issues/20); it is question 6 below.
+**One finding here belongs to the credential posture, not to this ticket — and it is now
+settled.** How-to-play says "Every member can see the team key under **Settings → Access
+Tokens**", and the page was read on 22 Aug 2026. The team key and the CTFd API token are **two
+different values that merely share a page**, and they are opposites on the properties that matter:
+the CTFd token is minted by us, per-board and revocable; the team key is **displayed rather than
+minted, with no generate control and no rotate control**. So it is not "issued by the organisers"
+as [`.env.example`](../../.env.example) said — you read it off the board — but nor can we replace
+it, which makes it the one secret in `docs/credentials.md` whose leak cannot be undone. Corrected
+in [#41](https://github.com/jerome-queck/incypher-ctf/issues/41); the posture itself is
+[#20](https://github.com/jerome-queck/incypher-ctf/issues/20).
 
 ## Ask the organisers
 
@@ -222,14 +226,12 @@ Ask these, in this order, on whichever channel opens first. The first two decide
    restarts a crashed worker with nobody touching it, is that penalised?
 5. **What are the instance time limit and — if chall-manager's mana is in play at all — the mana
    total?** Mana is our inference from the plugin, not a term the organisers have used.
-6. **Is the team key the same value as a CTFd access token minted under Settings → Access Tokens,
-   or a separate secret that happens to live on that page?**
-7. **What are the submission rate limits** — wrong-flag submissions per minute, and any
+6. **What are the submission rate limits** — wrong-flag submissions per minute, and any
    per-challenge attempt cap on the competition batch?
-8. **When will scoring be published?** Whether it is static, dynamic, or first-blood weighted
+7. **When will scoring be published?** Whether it is static, dynamic, or first-blood weighted
    changes how the Solver orders challenges.
-9. **The Discord invite on the platform is expired — what is the current one?** Ask this first if
-   the route you found was email, because it is what unblocks the other eight.
+8. **The Discord invite on the platform is expired — what is the current one?** Ask this first if
+   the route you found was email, because it is what unblocks the other seven.
 
 Answers land in this file, and any that changes a decision goes back to the map as a new ticket.
 

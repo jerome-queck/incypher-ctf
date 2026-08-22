@@ -22,7 +22,7 @@ token into a shell — it lands in your history.
 | Variable | Opens | Where you get it | If it leaks |
 |---|---|---|---|
 | `CTFD_API_TOKEN` | Full control of our account on one CTFd board — reading challenges, submitting flags, and anything else we could do in the browser | On the board: **Settings → Access Tokens → Generate**. Shown once; copy it then. | Delete it on that same page and generate another. Scoped to one board, so nothing else is affected. |
-| `TEAM_KEY` | Our identity on the IN-CYPHER platform, including the proof-of-work gate on raw-TCP challenges | Issued by the IN-CYPHER organisers. Not needed for practice boards. | Tell the organisers — we cannot rotate this one ourselves, which is what makes it the most valuable secret here. |
+| `TEAM_KEY` | Our identity on the IN-CYPHER platform, including the proof-of-work gate on raw-TCP challenges | On the IN-CYPHER board: **Settings → Access Tokens**, where it is *displayed*. Read it; there is nothing to generate. Not needed for practice boards. | **Nothing we can do, and nobody we can currently tell.** The page offers no rotate control and no regenerate — the value is shown, not minted — so unlike a CTFd token this one cannot be replaced from our side, and the organisers publish no working channel to ask ([#36](https://github.com/jerome-queck/incypher-ctf/issues/36)). That is what makes it the most valuable secret here: it is the only one whose leak we could not undo. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Inference against our Claude **subscription** — no per-token cost, a quota that hard-stops until it resets | Run `claude setup-token` and complete the browser login; it prints the token | Run `claude setup-token` again to mint a replacement, and sign out of the leaked session. |
 | `ANTHROPIC_API_KEY` | **Metered** inference billed per token, with no quota cliff | `console.anthropic.com` → **API keys** → *Create key* | Revoke it in the console. Assume the spend between leak and revocation is ours. |
 
@@ -73,6 +73,36 @@ competition the Solver enters. BrunnerCTF runs a Danish platform under a strict 
 alongside the Global one that permits AI; pointing the Solver at the wrong host is a
 disqualification, not a misconfiguration. See
 [`competitions/brunnerctf-2026-global.md`](competitions/brunnerctf-2026-global.md).
+
+## One board at a time, and the overlay for the others
+
+`.env` holds exactly one board, because `CTFD_URL` is the guard described above and a file that
+held two would need something else to choose between them. A second board gets an **overlay file**
+named for it — `.env.incypher`, `.env.<event>` — carrying only that board's values:
+
+```
+.env             CTFD_URL, CTFD_API_TOKEN  → the default board   + the inference credential
+.env.incypher    CTFD_URL, CTFD_API_TOKEN, TEAM_KEY              → IN-CYPHER
+```
+
+Source it in a subshell, so the default board is never silently switched:
+
+```bash
+( set -a; . ./.env.incypher; set +a; python3 scripts/ctfd_probe.py --no-attempt )
+```
+
+This works because the loader is `os.environ.setdefault` — **the environment wins and `.env` only
+fills the gaps** — so the overlay's two values shadow `.env`'s while everything it does not mention
+still comes from `.env`. `.gitignore` already covers the pattern: `.env.*` is ignored, with
+`.env.example` the single exception.
+
+**`TEAM_KEY` belongs in the overlay, not in `.env`.** It is specific to the IN-CYPHER platform and
+a practice board has no equivalent, so its *absence* on a run pointed elsewhere is the point: a
+container working a Brunner challenge never holds an IN-CYPHER credential it has no use for, and
+cannot leak one if a challenge gets code execution inside it. That is the same rule
+[`ctfd_probe.py`](../scripts/ctfd_probe.py) already applies one level down, withholding the CTFd
+token when a challenge file redirects to object storage that never asked for it. It matters more
+here than there, because the team key is the one secret in the table that cannot be rotated.
 
 ## How they reach the container
 
