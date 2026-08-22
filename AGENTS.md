@@ -35,8 +35,12 @@ real values** — see Conventions.
 - Keep secrets out of the repo. **Never commit a token.** The conformance check scans every pull
   request for one, and it fires *after* the push — so a caught credential is burned: rotate it
   first, then clean up. The full response is in `CONTRIBUTING.md`. The two secrets this repository
-  most handles are the **team key** and the **LLM API keys**; both belong in `.env`, never a
-  commit.
+  most handles are the **team key** and the **LLM API keys**; both belong in an untracked env file,
+  never a commit — `.env` for the board in play, a `.env.<event>` overlay for any other, and the
+  team key in the overlay rather than `.env` so a run pointed elsewhere never holds it
+  (`docs/credentials.md`). "Rotate it first" has one exception, and it is the team key: the Board
+  shows that value rather than minting it and offers no way to replace it, so there is nothing to
+  rotate and the leak is not recoverable.
 
 ## Code standards
 
