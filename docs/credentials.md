@@ -28,22 +28,50 @@ token into a shell — it lands in your history.
 
 ## Which inference credential, and when
 
-**Practice on a subscription; compete on metered billing.** Training runs are frequent and
-throwaway, so paying per token for them is money spent proving something we already believe. The
-5.5-hour scored run is the opposite: a quota that hard-stops mid-run cannot be topped up, and the
-Solver has no human there to notice. That split is what
-[issue #20](https://github.com/jerome-queck/incypher-ctf/issues/20) means by metered credit held
-as the *armed* fallback rather than the daily driver — the danger it names is a subscription being
-the **sole** credential path, not a subscription being used.
+**We compete on a subscription. Metered credit is break-glass, and it breaks its own glass.** An
+earlier revision of this page said "practice on a subscription; compete on metered billing" — that
+described credit we do not hold, and [ADR-0010](adr/0010-the-subscription-is-the-credential-and-nothing-waits-for-a-human.md)
+replaces it. The scored run goes on a **Codex Pro 20×** subscription. A metered key exists, and the
+aim is that it never fires.
 
-**The competition allows any LLM**, and we hold more than one subscription, so this is a table per
-provider rather than a single key. Which provider the Solver actually reads, and whether it fails
-over between them, is [issue #17](https://github.com/jerome-queck/incypher-ctf/issues/17)'s call.
+The aim is not a plan, though, because **a fallback that waits for a human is human intervention**
+and that is the penalised act. So the credentials form a **chain**, pre-armed and switched
+automatically by the Solver: subscription first, metered last, nobody present. "Never used" is then
+something we check *after* a run rather than something we hope for during one.
 
-| Provider | Practice (subscription) | Scored run (metered) |
-|---|---|---|
-| Anthropic | `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code / Agent SDK) or `ANTHROPIC_AUTH_TOKEN` (Messages API), minted by `claude setup-token` | `ANTHROPIC_API_KEY` from `console.anthropic.com` |
-| OpenAI / Codex | `codex login` — see the caveat below | `OPENAI_API_KEY` from `platform.openai.com` |
+| Order | Provider | Credential | Present when |
+|---|---|---|---|
+| 1 | OpenAI / Codex — subscription | `codex login`, see the caveat below | always |
+| 2 | *any further subscription* | e.g. Anthropic's `CLAUDE_CODE_OAUTH_TOKEN`, minted by `claude setup-token` | if it is in the environment at boot |
+| 3 | metered — break-glass | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | **scored board only** — see below |
+
+Slot 2 is a socket rather than a promise. We hold Claude 20× today but do not assume it on 22
+September; a teammate arriving with one drops straight into the chain, and its absence is not a
+hole. The Claude path is built either way, because training runs use it.
+
+**The quota is the cap, and it hard-blocks inside our own run.** Codex meters on a **5-hour rolling
+window** *and* a separate **weekly cap**, by tokens rather than messages, across one pool shared by
+the CLI, the IDE extension and cloud tasks. The scored run is **5.5 hours**. Two things follow that
+are easy to get wrong:
+
+- **Subscription usage is what spends the allowance.** There is no separate pot that only metered
+  calls touch — practice draws from the budget the scored run needs.
+- **You share the pool with the Solver.** Anything you run personally on Codex on 21–22 September
+  comes out of the run's headroom, and the day-1 rehearsal spends from the run's allowance rather
+  than from nothing. Keep the primary account quiet before the run.
+
+**The metered key lives in the scored board's overlay, never in `.env`.** The chain is automatic, so
+a practice run left going overnight would switch to paid the moment the subscription capped and
+spend real money unwatched. Putting the key in the overlay means a Brunner run *structurally cannot*
+— the credential is not in its environment at all. Same mechanism as `TEAM_KEY`, same reason.
+
+That is also why the scored key carries a **budget alert and not an enforcing spend limit**: a
+console limit that blocks requests is the same unwatched hard stop we are designing around. Practice
+keys are the opposite — cap those hard, because a stop there costs a rerun and nothing else.
+
+**A lent credential is rotated by its owner.** A teammate's subscription token is their personal
+credential: it rides in the event overlay like everything else, and if a run misbehaves the rotation
+is their call, on request, not ours to do for them.
 
 **Codex authenticates by file, not by environment.** This is the one that will surprise you: an
 `OPENAI_API_KEY` in `.env` is enough for the OpenAI SDK, but the Codex CLI keeps its subscription
@@ -81,8 +109,8 @@ held two would need something else to choose between them. A second board gets a
 named for it — `.env.incypher`, `.env.<event>` — carrying only that board's values:
 
 ```
-.env             CTFD_URL, CTFD_API_TOKEN  → the default board   + the inference credential
-.env.incypher    CTFD_URL, CTFD_API_TOKEN, TEAM_KEY              → IN-CYPHER
+.env             CTFD_URL, CTFD_API_TOKEN  → the default board   + the subscription credential
+.env.incypher    CTFD_URL, CTFD_API_TOKEN, TEAM_KEY, <metered key> → IN-CYPHER
 ```
 
 Source it in a subshell, so the default board is never silently switched:
@@ -104,6 +132,12 @@ cannot leak one if a challenge gets code execution inside it. That is the same r
 token when a challenge file redirects to object storage that never asked for it. It matters more
 here than there, because the team key is the one secret in the table that cannot be rotated.
 
+**The metered key belongs there for a different reason, and it is worth keeping the two apart.** The
+team key is in the overlay because a Brunner run has no *use* for it. The metered key is there
+because a Brunner run would *use* it — the chain is automatic, so an overnight practice run would
+switch to paid the moment the subscription capped. Absence is the control in both cases; what it is
+protecting against is a leak in one and a bill in the other.
+
 ## How they reach the container
 
 **Injected at runtime, never built into the image.**
@@ -119,8 +153,24 @@ that added it, so the rule is absolute rather than a preference: nothing in the 
 on the command line.
 
 The competition deliverable is an image the organisers may run themselves, which makes this sharper
-than good practice. Where that image runs and whether we get to pass `--env-file` at all is still
-open — [issue #13](https://github.com/jerome-queck/incypher-ctf/issues/13).
+than good practice. [Issue #13](https://github.com/jerome-queck/incypher-ctf/issues/13) settled that
+**we** almost certainly run it, so `--env-file` survives — but only as a high-confidence inference,
+which is why the image stays *handover-shaped* anyway. If we are wrong on the day we ask for `-e`,
+and if that is refused **we do not compete rather than bake a key into a layer** (ADR-0010).
+
+**The environment stops at the orchestrator.** The Solver runs challenge-supplied code — archives,
+binaries, whatever a pwn challenge hands it — as root, in this same container. So the orchestrator
+reads every credential once at boot and spawns each Step with an explicit **allowlist** environment
+(`PATH`, `HOME`, `TERM`, `LANG`), never an inherited one. Nothing that executes a challenge's code
+can read a secret out of its own environment, and the team key in particular is passed as an
+argument inside the `Target` seam rather than exported at all — it is the one value here we could
+never replace.
+
+**Two more places the values exist.** `docker run --env-file` is expected to keep the *resolved*
+values in the container's config, which is what lets an unattended `docker start` re-authenticate
+with no file present — and also means `docker inspect` will print them. Unverified so far: there is
+no container runtime on the build machine yet. And the shell you type in is a third: never `echo` a
+real token, as above.
 
 ## If one is committed
 

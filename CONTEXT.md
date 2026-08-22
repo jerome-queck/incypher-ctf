@@ -174,6 +174,11 @@ compared *across*: a threshold is calibrated over Runs, a version gate is a verd
 supervisor restarts a crashed process the Run continues and a boot counter increments, because the
 thing being measured is hours against a Board rather than the life of a process — treating a
 restart as a second Run would silently compare halves against wholes.
+**A Run ends when the competition window closes, or when it crashes — never because the Board looks
+finished.** Challenges drop mid-event, so "nothing left to work" is not something the Solver can
+ever conclude; that is the Run-level counterpart of ADR-0005's rule that a Challenge is never marked
+impossible. Running out of credential is not an ending either: quota windows roll, so capacity comes
+back and the Solver backs off through it (ADR-0010).
 _Avoid_: session, attempt (an Attempt is one Challenge inside a Run — see below), execution. Not
 **Run state** either: that is what a Run *produces*, and it is a separate entry below.
 
@@ -248,6 +253,16 @@ it, so it is the one secret here whose leak cannot be undone.
 _Avoid_: token, API key. A **CTFd access token** is a different secret — per-Board, minted by us,
 revocable — and the **LLM credential** is a third. All three follow the same rule and none of
 them is the Team key (`docs/credentials.md`).
+
+**Credential chain**:
+The ordered credentials the Solver pays for inference with, tried in order and switched **without a
+human** when one is exhausted — a subscription first, metered credit last. The order is the whole
+meaning of the term: a fallback that waits for someone to reach for it is human intervention, which
+is the penalised act, so "we hold a spare key" is not a chain and does not count as one. What the
+chain *cannot* do is add headroom — a quota burned through a different door is burned the same
+(ADR-0010).
+_Avoid_: failover, fallback key, provider list. Not **provider abstraction** either: that is the
+seam the chain is expressed through, and a different decision (#17).
 
 **ADK**:
 The competition's Agent Development Kit, released 14 September 2026, including the
