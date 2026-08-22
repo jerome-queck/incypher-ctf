@@ -97,6 +97,42 @@ so the work cannot be shared or farmed out. Web Challenges have no gate — they
 unguessable subdomain instead.
 _Avoid_: captcha, rate limit, challenge (a PoW gate stands in front of a Challenge; it is not one)
 
+### How the Solver chooses what to work
+
+**Intake**:
+The Solver's copy of a Board — every Challenge's details and every file it ships, pulled to local
+disk and refreshed on a fixed cycle for as long as the run lasts. Intake is a *sync*, not a fetch:
+it exists because a Board moves underneath you, releasing Challenges mid-event, adding hints, and
+replacing files. Re-running it is how the Solver notices. It touches no model and costs no tokens —
+a Board's own file URLs carry a content hash, so what has changed is decided by comparing strings.
+_Avoid_: enumeration (that is the one list call Intake begins with), scrape, download, crawl
+
+**Triage**:
+Reading Intake's output to decide what each Challenge is worth. Triage runs over any set of
+Challenges at any time — at the start of a run, again at its midpoint over what is still unsolved,
+and on whatever appears in between — so it is one callable thing rather than a stage of a pipeline.
+It **extracts and does not predict**: where a Board states a difficulty, Triage parses it, and a
+model is asked to judge only what is left. Triage never deploys an Instance and never opens a file
+it has downloaded; it reads the manifest, not the contents.
+_Avoid_: ranking, scoring, classification, assessment
+
+**Tier**:
+The effort budget Triage assigns a Challenge — how much of the run it is worth spending before an
+Attempt is cut. **A Tier is not a difficulty grade and not a rank.** It is deliberately biased
+toward the Categories the Solver is *weakest* at, because that is where more budget changes an
+outcome; where it is strong, it needs no help. Only real evidence lowers a Tier — a Claim that a
+Challenge is easy buys nothing, exactly as it buys no time within an Attempt (ADR-0005).
+_Avoid_: difficulty, priority, rank, score, weight
+
+**Order**:
+The sequence the Solver takes Challenges in — recomputed from the Board's own signals every time it
+picks, never fixed at the start. Order and Tier read the same inputs and weight them **oppositely**,
+which is the whole reason they are two words: Order goes where the Solver is strongest, to bank
+Flags early, while Tier spends longest where it is weakest. A design that merges them silently picks
+one of those goals and loses the other.
+_Avoid_: priority, queue position, tier (the other half of the pair, and deliberately a different
+word)
+
 ### How the Solver works a Challenge
 
 **Attempt**:
@@ -148,7 +184,9 @@ them is the Team key (`docs/credentials.md`).
 The competition's Agent Development Kit, released 14 September 2026, including the
 `solver.connect(host, port, team_key)` helper that clears a PoW gate. The organisers also call it
 the **Hackathon Starter Pack**; the two names mean one thing, and `ADK` is the one used here.
-The Solver is built against it.
+**The Solver is built to accept it, never on top of it** — it arrives eight days before the scored
+run, so it sits behind the same adapter seam a Board does, and a Solver that cannot ship without it
+has bet the competition on an unseen release (ADR-0006).
 _Avoid_: SDK, framework
 
 One term is about how this repository is governed rather than about the domain:
