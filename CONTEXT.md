@@ -60,6 +60,18 @@ Global and the IN-CYPHER Board itself. Which one it is pointed at is `CTFD_URL`,
 wrong is a disqualification rather than a misconfiguration (`docs/competitions/`).
 _Avoid_: platform, site, server, instance (an "instance" is one deployed Challenge — see below)
 
+**Board profile**:
+Everything the Solver knows about the Board it is pointed at: the Flag wrapper, whether
+`ctfd-chall-manager` is installed, whether an unauthenticated read is answered, the submission
+rate limit, and the prohibitions that Board's rules impose. **A profile is discovered at startup
+wherever it can be, and configured only where it cannot** — a tracked
+`docs/competitions/<event>.board.json` carries the URL and the rules-derived prohibitions, which
+exist in prose and nowhere in the API, and the rest is read off the live Board
+([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)). This is why
+a Board we have never met costs no code. A configured value we could have measured is a value that
+goes stale without saying so.
+_Avoid_: config, settings, board.json (that file is one input to a profile, not the profile)
+
 ### How a Board serves a Challenge
 
 **Static Challenge**:
@@ -103,6 +115,18 @@ The proof-of-work a raw-TCP Challenge demands before its service will talk, boun
 so the work cannot be shared or farmed out. Web Challenges have no gate — they are reached at an
 unguessable subdomain instead.
 _Avoid_: captcha, rate limit, challenge (a PoW gate stands in front of a Challenge; it is not one)
+
+**Target**:
+A Challenge's own running service — the thing being attacked — and the name of the seam that
+reaches it: a raw-TCP socket behind a PoW gate, or a web endpoint at an unguessable subdomain. A
+Target is deliberately not a Board and not a Challenge: the Board is who scores us, the Challenge
+is the problem on it, and the Target is the process at the other end of a connection. Its address
+does not exist until an Instance is deployed
+([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)), and the ADK sits behind
+this seam rather than the Board's, because clearing a PoW gate has nothing to do with submitting a
+Flag ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
+_Avoid_: host, endpoint, service, box, the challenge (the Challenge is the task; the Target is what
+it exposes)
 
 ### How the Solver chooses what to work
 
@@ -176,6 +200,18 @@ is a state *transition*, never an interpretation — a confident wrong turn prod
 quantity and no Checkpoints at all.
 _Avoid_: milestone, breakthrough, progress. Not a saved state to return to either — nothing is ever
 rolled back to a Checkpoint; it records that the environment moved.
+
+**Run state**:
+Everything one run produces and the image could not contain, because none of it exists until the
+run happens: Intake's copy of the Board, every attachment downloaded, the Steps, Observations and
+Checkpoints of every Attempt, and the telemetry. It lives at `/state`, host-mounted, so it outlives
+the container that wrote it — a container's own filesystem dies with the container, taking the
+run's whole history with it. **Run state is output, never input**: the Solver reads no code and no
+tool from it, so deleting it mid-run costs the record and not the ability
+([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
+_Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not what it is). Not
+"state" bare either — that reads as the Solver's in-memory state, which is a different thing and
+does not survive anything.
 
 ### Secrets and tooling
 
