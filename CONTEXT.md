@@ -166,12 +166,24 @@ word)
 
 ### How the Solver works a Challenge
 
+**Run**:
+One unattended outing of the Solver at one Board — the whole competition window, several hours and
+many Attempts, from the process starting to it terminating. A Run is the unit everything is
+compared *across*: a threshold is calibrated over Runs, a version gate is a verdict on one, and its
+`run_id` is what joins every record ADR-0009 writes. **A Run survives a restart.** If v2's
+supervisor restarts a crashed process the Run continues and a boot counter increments, because the
+thing being measured is hours against a Board rather than the life of a process — treating a
+restart as a second Run would silently compare halves against wholes.
+_Avoid_: session, attempt (an Attempt is one Challenge inside a Run — see below), execution. Not
+**Run state** either: that is what a Run *produces*, and it is a separate entry below.
+
 **Attempt**:
 One bounded run of the Solver at a single Challenge — from the recon that opens it to the moment it
 is cut or a Flag is submitted. A Challenge may be attempted many times: **an Attempt ends, a
 Challenge does not.** Keeping the two apart is what makes giving up cheap, because what is
 abandoned is an Attempt and never the Challenge (ADR-0005).
-_Avoid_: run (a run is the whole competition window, several hours over a whole Board), session, try
+_Avoid_: run (see the Run entry above — the whole competition window, holding many Attempts),
+session, try
 
 **Step**:
 One cycle of an Attempt: a command is proposed, it runs, and its output is recorded as an
@@ -201,12 +213,25 @@ quantity and no Checkpoints at all.
 _Avoid_: milestone, breakthrough, progress. Not a saved state to return to either — nothing is ever
 rolled back to a Checkpoint; it records that the environment moved.
 
+**Cut**:
+The end of an Attempt that is not a Flag, and the **cause** that ended it — the orchestrator's
+decision, never the model's (ADR-0005). The vocabulary is closed and each name is one of the three
+stall counters, the budget, an Instance's expiry, a crash, or the model's own volunteered
+"impossible": `cut:repetition`, `cut:novelty`, `cut:step-cliff`, `cut:budget`,
+`cut:instance-expired`, `cut:self-reported-impossible`, `crashed`. A cut Challenge is requeued, so
+a Cut says what stopped this Attempt and never that the Challenge is out of reach. The last of those
+causes is recorded **because the aim is for it never to fire** — a cause nobody records is a defect
+nobody can watch (ADR-0009).
+_Avoid_: abandoned, gave up, failed, timeout, no-flag. "No flag" in particular is the *absence* of a
+cause rather than one, and naming it hides which counter actually fired — which is the only thing
+calibration needs to know.
+
 **Run state**:
-Everything one run produces and the image could not contain, because none of it exists until the
-run happens: Intake's copy of the Board, every attachment downloaded, the Steps, Observations and
+Everything one Run produces and the image could not contain, because none of it exists until the
+Run happens: Intake's copy of the Board, every attachment downloaded, the Steps, Observations and
 Checkpoints of every Attempt, and the telemetry. It lives at `/state`, host-mounted, so it outlives
 the container that wrote it — a container's own filesystem dies with the container, taking the
-run's whole history with it. **Run state is output, never input**: the Solver reads no code and no
+Run's whole history with it. **Run state is output, never input**: the Solver reads no code and no
 tool from it, so deleting it mid-run costs the record and not the ability
 ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
 _Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not what it is). Not
