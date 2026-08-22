@@ -80,15 +80,22 @@ The Challenge is the thing on the Board; the Instance is the copy currently held
 apart matters because "the Instance expired" and "the Challenge is unsolved" are different facts
 that want different responses.
 _Avoid_: container, deployment, box. **Lease** is reserved rather than avoided: it is the
-candidate name for our *hold* on an Instance — a concept that only separates from the Instance
-itself once there is a lifecycle to renew and release against. If that lifecycle needs the word,
-coin it there rather than inventing a third one.
+candidate name for our *hold* on an Instance. That hold now has a lifecycle to be coined against —
+deploy, renew, reserve, release ([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)) —
+and the word is still **deliberately parked**, because in v1 the hold is one-to-one with an
+Attempt and so names nothing Attempt does not already name. It earns the entry when concurrency
+lets several holds outlive several Attempts; coin it there rather than inventing a third word.
 
 **Mana**:
 What chall-manager charges a team for holding Instances: every Isolated Challenge carries a mana
 cost, every team a mana total, and destroying an Instance reclaims what it cost. Mana is why
 holding an Instance is never free — an Instance nobody is working still costs what it cost to
-deploy.
+deploy. **Mana is the concurrency cap**, not a currency beside one: a Board that permits two
+Instances at a time expresses that as a total of two, and a Board that sets the total to zero has
+switched the whole feature off. A deploy that cannot afford itself is **refused**, and the
+Instances already held are left alone — chall-manager has no eviction path, which is what makes a
+leaked Instance cost capacity for the rest of the run
+([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)).
 _Avoid_: quota, credits, points (points are score — see Board)
 
 **PoW gate**:
