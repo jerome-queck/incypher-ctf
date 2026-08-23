@@ -1,5 +1,15 @@
 # The subscription is the credential, and nothing waits for a human
 
+> **Superseded in part by [ADR-0011](0011-the-sanctioned-path-is-the-only-path.md).** The chain, the
+> quota arithmetic, the overlay rule, the environment allowlist and the refusal to bake a key all
+> stand. Three statements about the **Codex credential specifically** are overtaken: that a piped
+> `CODEX_ACCESS_TOKEN` is our container auth path (`--with-access-token` is Enterprise-only, so it
+> never was), that its survival across 5.5 hours is an open question (a session goes stale after
+> ~8 days, and the CLI refreshes itself), and that `--device-auth` is unavailable because it needs a
+> human — true of a mid-run restart, false of the boot before the run, which is setup rather than
+> **Intervention**. Codex now authenticates by a login run *inside* the container, with `CODEX_HOME`
+> on the host mount. The Codex shim this record held in reserve is ruled out entirely.
+
 [#20](https://github.com/jerome-queck/incypher-ctf/issues/20) was written to decide secret handling
 and credential posture. It opened with a rule — *"no subscription as the sole credential path"* —
 and deferred its production half until [#13](https://github.com/jerome-queck/incypher-ctf/issues/13)
