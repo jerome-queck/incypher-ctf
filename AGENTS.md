@@ -12,7 +12,10 @@ Solver and the conventions it is built under. It is not a place for interactive 
 path that waits for a human has no use at competition time.
 
 - **Visibility:** private
-- **Owner:** [jerome-queck](https://github.com/jerome-queck), sole admin; teammates have write access
+- **Owner:** [jerome-queck](https://github.com/jerome-queck) — Jerome, sole admin
+- **Team:** [nonsense00](https://github.com/nonsense00) — Elson · [aacceeOP](https://github.com/aacceeOP) — Aidan ·
+  [chareechard](https://github.com/chareechard) — Richard. All write access. `gh` takes the handle, so
+  the names are here to resolve "assign it to Richard" into one.
 - **Origin:** generated from the Jerome-Group private template, then adapted to stand alone
   ([ADR-0002](docs/adr/0002-org-machinery-is-vendored-to-stand-alone.md))
 
