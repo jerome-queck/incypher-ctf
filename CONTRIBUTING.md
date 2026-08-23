@@ -5,6 +5,24 @@ before, this page is the whole of it — a two-minute read, and nothing here ass
 it anywhere else. The short version: **open an issue, send one pull request per change, squash to
 merge, and say who (or what AI) helped.**
 
+## What lives outside this page
+
+How work flows is all here. Three things sit outside it, and each is the kind of thing you find
+out too late:
+
+- **[`docs/credentials.md`](docs/credentials.md) — read it before you point anything at a board.**
+  Two of the secrets there behave unlike any credential you have handled: the **team key** cannot
+  be rotated, and the IN-CYPHER overlay carries a **live metered key** that spends real money. The
+  section below on committing a credential explains what each means when it goes wrong.
+- **The [Matt Pocock skills](.claude/skills/) are installed on clone** — `/triage`, `/implement`,
+  `/code-review`, `/grill-with-docs` and the rest, for Claude Code and for Codex. They are how work
+  is done here rather than an optional extra: start with `/ask-matt` if you are unsure which fits.
+  [`AGENTS.md`](AGENTS.md) has the route through them.
+- **The plan is [issue #11](https://github.com/jerome-queck/incypher-ctf/issues/11)**, a wayfinder
+  map — not a document in `docs/`. It carries what is decided, what is next, and what is still fog.
+  Its closed tickets link the ADRs, which is the fastest way into why the repository looks the way
+  it does.
+
 ## Before you write code
 
 **Open an issue first.** Not as a formality — as the cheaper half of the work. An issue is where
@@ -107,3 +125,14 @@ it out of the code, then rewrite the branch. The first step is the fix and the o
 tidying up. If the value is not a credential at all — a fixture, a documented example — say so on
 the line itself with a `# gitleaks:allow` comment, which is an assertion that the value opens
 nothing, so make sure it does.
+
+**One credential has no first step, and it is the one that matters most.** The **team key** is
+*displayed* by the IN-CYPHER board rather than minted by it — no generate control, no rotate
+control — and the organisers publish no working channel to ask
+([#36](https://github.com/jerome-queck/incypher-ctf/issues/36)). There is nothing to revoke, so a
+leak is simply not recoverable, which makes it the one secret here to handle as if the scan did
+not exist. It lives in the `.env.incypher` overlay rather than `.env` for exactly that reason: a
+run pointed at a practice board never holds it.
+
+The **metered LLM key** in that same overlay fails the other way — rotation works fine, and the
+spend between leak and revocation is ours. Revoke first, count the cost after.
