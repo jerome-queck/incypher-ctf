@@ -254,13 +254,22 @@ _Avoid_: token, API key. A **CTFd access token** is a different secret — per-B
 revocable — and the **LLM credential** is a third. All three follow the same rule and none of
 them is the Team key (`docs/credentials.md`).
 
+**Intervention**:
+A human acting on a Run **while it is running** — the act the competition penalises. The timing is
+the whole definition: preparing the Run is not intervention, so starting the container, injecting
+an env file, and logging a credential in beforehand are all setup, however manual they are. The
+same act inside the window is intervention, which is why every fallback has to be pre-armed rather
+than reachable (ADR-0011).
+_Avoid_: manual step, human-in-the-loop, babysitting. A **supervisor** restarting a crashed process
+is not intervention either — nobody is present for it, which is the point of building one.
+
 **Credential chain**:
 The ordered credentials the Solver pays for inference with, tried in order and switched **without a
 human** when one is exhausted — a subscription first, metered credit last. The order is the whole
-meaning of the term: a fallback that waits for someone to reach for it is human intervention, which
-is the penalised act, so "we hold a spare key" is not a chain and does not count as one. What the
-chain *cannot* do is add headroom — a quota burned through a different door is burned the same
-(ADR-0010).
+meaning of the term: a fallback that waits for someone to reach for it is **Intervention**, which is
+the penalised act, so "we hold a spare key" is not a chain and does not count as one. What the chain
+*cannot* do is add headroom — a quota burned through a different door is burned the same, which is
+why no proxy or shim sits in it (ADR-0010, ADR-0011).
 _Avoid_: failover, fallback key, provider list. Not **provider abstraction** either: that is the
 seam the chain is expressed through, and a different decision (#17).
 
