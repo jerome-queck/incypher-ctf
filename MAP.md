@@ -15,12 +15,12 @@ Start here: `README.md`, then `AGENTS.md`.
 | Agent conventions | The routines an agent follows here, one file per topic | `docs/agents/` |
 | Competitions | The boards we play — a rules snapshot and the platform facts, one file per event | `docs/competitions/` |
 | Credentials | Every secret, where it comes from, and how it reaches the container | `docs/credentials.md` |
-| Scripts | Setup and pre-flight checks, run by hand against a live board | `scripts/` |
+| Scripts | Setup and pre-flight checks run by hand — the runtime this repo pins, and the live board | `scripts/` |
 | Tests | What CI runs over the code in `scripts/` — the seams that decide offline | `tests/`, configured in `pyproject.toml` |
 | Installed skills | The mattpocock engineering skills, copied in for Claude and Codex | `.claude/skills/`, `.agents/skills/` |
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
-
 | Tool caches | Disposable ruff and pytest scratch — gitignored, safe to delete | `.cache/` |
+| Container state | The host mount a running container writes through, including the Codex credential it mints for itself — gitignored, never committed | `state/` |
 
 Update this file in the same pull request whenever a top-level area is added, moved, or removed.
