@@ -9,6 +9,13 @@
 > human — true of a mid-run restart, false of the boot before the run, which is setup rather than
 > **Intervention**. Codex now authenticates by a login run *inside* the container, with `CODEX_HOME`
 > on the host mount. The Codex shim this record held in reserve is ruled out entirely.
+>
+> **A fourth claim goes with them, named late (2026-08-23, [#55](https://github.com/jerome-queck/incypher-ctf/issues/55)).**
+> *The image stays handover-shaped* below describes that contingency as "a documented set of
+> environment variables as the only thing it needs from outside". Since ADR-0011 it needs three
+> things: those variables, a **writable mount** for `CODEX_HOME`, and **one interactive login in
+> the container** before the run. The refusal to bake a key is untouched and absolute; only the
+> shape of what we ask for instead has changed.
 
 [#20](https://github.com/jerome-queck/incypher-ctf/issues/20) was written to decide secret handling
 and credential posture. It opened with a rule — *"no subscription as the sole credential path"* —
