@@ -1,5 +1,17 @@
 # The stall call lives outside the solving model
 
+> **Amended in one bullet by [ADR-0014](0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md).**
+> The decision above, and six of the seven Consequences, stand exactly as written — the title most of
+> all: the stall call still lives outside the solving model. What moves is a mechanism this record
+> assumed rather than argued, that our orchestrator issues each command. `codex exec` has no
+> supported way to stop it acting, so the vendor's agent drives the loop and we read its event
+> stream; the three counters still read only Observations, because that stream is where the
+> Observations now come from. **Only *time is bought by state transitions* coarsens**: Codex takes
+> its next turn without asking, so what a Checkpoint extends is the kill deadline rather than a
+> grant of one more Step. Extensions are still capped at K, and a confident rabbit-hole still gets
+> less time. One residual cost is named there and not here: Codex compacts its own context inside a
+> long Attempt, which this record's Attempt-boundary rule does not reach.
+
 The Solver runs 5.5 hours unattended against a batch of Challenges nobody on the team has seen, and
 the failure that costs most is not a Challenge it cannot solve. It is a Challenge it *could* have
 solved, abandoned early — or a dead approach it grinds until the clock runs out. Something has to

@@ -1,5 +1,19 @@
 # The sanctioned path is the only path, and Codex logs in inside the container
 
+> **Superseded in part by [ADR-0014](0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md).**
+> The posture is untouched and absolute — no shim, no proxy, vendor-sanctioned paths only, the chain
+> as ADR-0010 set it, and the container logging itself in with `CODEX_HOME` on the mount. What is
+> overtaken is **the last section's account of the seam**. *"`codex exec` takes
+> `--output-last-message`, `--output-schema` and `-s read-only`, which reduce it to prompt in,
+> structured text out"* is wrong on the CLI as shipped: those flags constrain the final message and
+> the sandbox's write scope, and **nothing disables the shell**. So the fear that section dismisses
+> — that a CLI-shaped credential drags its own agent loop into ours — is real, and is accepted
+> rather than avoided: the vendor's agent drives, and we watch its `--json` event stream. The
+> internal interface is therefore **not** `complete(prompt) → text` but
+> `run_attempt(prompt, workdir, deadline) → stream of Steps`. The stated asymmetry also understates
+> itself: Claude and Codex differ not only in how they authenticate but in whether they can be a
+> completion endpoint at all — `claude -p --tools ""` can, and `codex exec` cannot.
+
 [#37](https://github.com/jerome-queck/incypher-ctf/issues/37) asked whether v1's inference should
 reach a **subscription** through a local OpenAI-compatible shim — the [sub2api][sub2api] pattern
 reduced to a single user — and, if so, by which mechanism per provider.

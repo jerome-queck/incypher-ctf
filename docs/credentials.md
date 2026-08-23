@@ -49,6 +49,13 @@ Slot 2 is a socket rather than a promise. We hold Claude 20× today but do not a
 September; a teammate arriving with one drops straight into the chain, and its absence is not a
 hole. The Claude path is built either way, because training runs use it.
 
+**The order above is a config value, not code.** Codex leads because it is the credential we are
+certain to hold, which is a claim about procurement rather than about capability — so a practice run
+can lead with Claude without a rebuild, and if Claude 20× ever becomes certain for a scored run the
+change is one field ([ADR-0014](adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)).
+The chain switches on **exhaustion only**: v1 runs one brain per Run and never picks a model by what
+the Challenge looks like.
+
 **The quota is the cap, and it hard-blocks inside our own run.** Codex meters on a **5-hour rolling
 window** *and* a separate **weekly cap**, by tokens rather than messages, across one pool shared by
 the CLI, the IDE extension and cloud tasks. The scored run is **5.5 hours**. Two things follow that
