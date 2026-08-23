@@ -1,5 +1,15 @@
 # Truth about an Instance lives on the Board, split by question
 
+> **Amended in one line by [ADR-0014](0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md).**
+> Everything about where truth lives stands: existence is the ledger page, the deadline is the deploy
+> response, renewal is late, the leak sweep runs at every Attempt boundary. Only **the hold being 1:1
+> with an Attempt** is overtaken. When the solving agent ends its turn with budget left the
+> orchestrator re-invokes, and that re-invocation is a *new* Attempt on the same Challenge — so one
+> Instance now spans several consecutive Attempts rather than one. Tearing down and redeploying
+> between them would keep the 1:1 and buy a fresh TTL, at the cost of any foothold on the Target and
+> of mana, which is the concurrency cap. `CONTEXT.md` gains **Lease** accordingly: this is the
+> condition the word was parked for.
+
 Forty-three per cent of a Brunner-shaped Board cannot be reconned at all without a running
 Instance — `connection_info` is empty on every `dynamic` Challenge and absent from every
 `flightops` one, and no description carries a host:port. The address does not exist until an

@@ -91,12 +91,23 @@ One running deployment of an Isolated Challenge, belonging to one team and expir
 The Challenge is the thing on the Board; the Instance is the copy currently held. Keeping the two
 apart matters because "the Instance expired" and "the Challenge is unsolved" are different facts
 that want different responses.
-_Avoid_: container, deployment, box. **Lease** is reserved rather than avoided: it is the
-candidate name for our *hold* on an Instance. That hold now has a lifecycle to be coined against —
-deploy, renew, reserve, release ([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)) —
-and the word is still **deliberately parked**, because in v1 the hold is one-to-one with an
-Attempt and so names nothing Attempt does not already name. It earns the entry when concurrency
-lets several holds outlive several Attempts; coin it there rather than inventing a third word.
+_Avoid_: container, deployment, box, and **Lease** — which is our *hold* on an Instance and now has
+its own entry below.
+
+**Lease**:
+Our hold on an Instance — held from the deploy that creates it to the terminate that releases it,
+and **not** the same span as an Attempt. The word was parked through v1's early design on the
+grounds that a hold one-to-one with an Attempt names nothing Attempt does not already name; it is
+coined here because that stopped being true. When the solving agent ends its turn with budget left
+the orchestrator re-invokes, and that re-invocation is a new Attempt on the same Challenge — so a
+single Lease outlives a run of consecutive Attempts, and "the Instance expired", "the Attempt was
+cut" and "we let the Lease go" became three separate facts
+([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). What
+a Lease costs is Mana, which is why one nobody is working is not free, and why the boundary leak
+sweep looks for a Lease nothing is using rather than an Instance nothing is using.
+_Avoid_: hold, reservation, session, and *Instance* — the Instance is the Board's running copy of a
+Challenge, the Lease is our claim on it. The two end at different moments, which is the whole reason
+for the second word.
 
 **Mana**:
 What chall-manager charges a team for holding Instances: every Isolated Challenge carries a mana
@@ -186,9 +197,16 @@ _Avoid_: session, attempt (an Attempt is one Challenge inside a Run — see belo
 One bounded run of the Solver at a single Challenge — from the recon that opens it to the moment it
 is cut or a Flag is submitted. A Challenge may be attempted many times: **an Attempt ends, a
 Challenge does not.** Keeping the two apart is what makes giving up cheap, because what is
-abandoned is an Attempt and never the Challenge (ADR-0005).
+abandoned is an Attempt and never the Challenge (ADR-0005). **Consecutive Attempts on one Challenge
+are ordinary**, not a special case: when the solving agent ends its turn with budget left the
+orchestrator re-invokes, and that is a new Attempt rather than a continuation of the last, because
+treating an early stop as the end of the Attempt would hand the model the give-up button ADR-0005
+removed. What carries across is the environment — the workdir is the memory — plus the approach
+labels, never a conclusion
+([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)).
 _Avoid_: run (see the Run entry above — the whole competition window, holding many Attempts),
-session, try
+session, try. Not **Lease** either — a Lease can outlive several Attempts, which is why it is a
+separate word.
 
 **Step**:
 One cycle of an Attempt: a command is proposed, it runs, and its output is recorded as an
@@ -270,8 +288,26 @@ meaning of the term: a fallback that waits for someone to reach for it is **Inte
 the penalised act, so "we hold a spare key" is not a chain and does not count as one. What the chain
 *cannot* do is add headroom — a quota burned through a different door is burned the same, which is
 why no proxy or shim sits in it (ADR-0010, ADR-0011).
+The chain switches on **exhaustion and nothing else** — no Category, Tier or cost input picks the
+model, because v1 runs one brain per Run and routing is v3's
+([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). Which
+credential leads is a config value rather than code, so a practice Run can lead with a different one
+without a rebuild.
 _Avoid_: failover, fallback key, provider list. Not **provider abstraction** either: that is the
-seam the chain is expressed through, and a different decision (#17).
+seam the chain is expressed through, and a separate decision — settled as the Adapter below.
+
+**Adapter**:
+One concrete implementation behind one of the Solver's seams — `Board`, `Target`, or a credential in
+the chain. Adapters share a *shape* and never a base class, which is a deliberate rule rather than
+an oversight: an abstract base written before the second implementation exists encodes a guess about
+what varies ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
+A credential's Adapter is asked to work an Attempt, not to answer a prompt — it is handed a Challenge,
+a working directory and a deadline, and it emits Steps until it finishes or is killed
+([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). What
+it hides is the vendor's own agent loop; what it must not hide is anything that loop observed, since
+the stall counters read those Observations.
+_Avoid_: provider, driver, backend, plugin. Not **seam** either: the seam is the boundary and the
+Adapter is what sits behind it, so a sentence naming both is usually confusing one of them.
 
 **ADK**:
 The competition's Agent Development Kit, released 14 September 2026, including the

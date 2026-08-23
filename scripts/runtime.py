@@ -41,9 +41,12 @@ class Pin:
 
 
 # Half the build machine's 14 cores and a third of its 48 GiB. The Solver is tool- and IO-heavy
-# rather than memory-heavy, and the headroom is deliberate: issue #13 keeps a local model alive as
-# the egress contingency, and it has to fit somewhere. Raising any of these is one line here and a
-# `colima stop` — which is the entire argument for Colima over a slider.
+# rather than memory-heavy, so this is generous rather than tight. ADR-0014 cut the local model that
+# used to justify the rest of the headroom, and the number stays anyway for two reasons: nothing in
+# v1 is known to need more, and a `colima stop` to resize would invalidate the 41-second unattended
+# restart proof issue #49 paid for. Measure a real Attempt's footprint before moving it. Raising any
+# of these is one line here and a `colima stop` — which is the entire argument for Colima over a
+# slider.
 PIN = Pin(colima="0.10.3", docker="29.7.2", cpu=8, memory_gib=16, disk_gib=60)
 
 
