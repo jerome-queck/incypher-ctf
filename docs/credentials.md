@@ -202,8 +202,13 @@ on the command line.
 The competition deliverable is an image the organisers may run themselves, which makes this sharper
 than good practice. [Issue #13](https://github.com/jerome-queck/incypher-ctf/issues/13) settled that
 **we** almost certainly run it, so `--env-file` survives — but only as a high-confidence inference,
-which is why the image stays *handover-shaped* anyway. If we are wrong on the day we ask for `-e`,
-and if that is refused **we do not compete rather than bake a key into a layer** (ADR-0010).
+which is why the image stays *handover-shaped* anyway. If we are wrong on the day, the ask is
+**three** things and not one — `-e` or `--env-file`, a **writable mount** for `CODEX_HOME`, and
+**one interactive login in the container** before the run — because since
+[ADR-0011](adr/0011-the-sanctioned-path-is-the-only-path.md) Codex authenticates by a file rather
+than by the environment. Getting only the first leaves no subscription login, and the run spends
+5.5 hours on the metered key. If injection itself is refused, **we do not compete rather than bake
+a key into a layer** (ADR-0010).
 
 **The environment stops at the orchestrator.** The Solver runs challenge-supplied code — archives,
 binaries, whatever a pwn challenge hands it — as root, in this same container. So the orchestrator

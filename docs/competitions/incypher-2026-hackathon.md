@@ -84,9 +84,24 @@ is the sentence that makes the container mandatory, not the sentence that says w
 **Consequence:** runtime `--env-file` injection is available, so the credential posture in
 [`../credentials.md`](../credentials.md) survives intact and no secret needs to be baked into a
 layer. Build for that. But the inference is not a guarantee, so keep the image *handover-shaped*
-anyway: everything except secrets inside the image, and a documented set of environment variables
-as the only thing it needs from outside. That costs nothing if we run it ourselves and saves the
-entry if we are wrong.
+anyway: everything except secrets inside the image, and a documented set of what it needs from
+outside. That costs nothing if we run it ourselves and saves the entry if we are wrong.
+
+**Handover-shaped stopped meaning "environment variables only" when
+[ADR-0011](../adr/0011-the-sanctioned-path-is-the-only-path.md) landed**, and the ask on the day has
+to match. Codex no longer authenticates by an environment variable but by a **file** under
+`CODEX_HOME`, written by an interactive login. So the image needs **three** things from outside, all
+three verified in [#49](https://github.com/jerome-queck/incypher-ctf/issues/49):
+
+1. the documented environment variables, by `--env-file` or `-e`;
+2. a **writable host mount** for `CODEX_HOME`, or the login does not survive a restart;
+3. **one interactive login inside the container before the run** — `codex login --device-auth`,
+   approved on a phone, which is setup rather than **Intervention**.
+
+Ask for all three, not just the first. Getting only the first means there is no subscription login,
+so the chain falls straight to the metered break-glass key and the whole 5.5 hours is billed
+per token against a ~$100 ceiling. [#54](https://github.com/jerome-queck/incypher-ctf/issues/54)
+holds the contingency for the case where a shell is refused.
 
 ### 2. Egress — outbound internet is available, because the challenges are on it
 
