@@ -111,6 +111,9 @@ one produces a container that looks fine and loses the credential or the login:
   *system* trust store, which `node:*-slim` does not have. Node carries its own roots, so
   `npm install` succeeds and hides the gap, and the login then dies on `error sending request for
   url` with egress working perfectly.
+- **The image should ship `bubblewrap`.** Without it `codex exec` warns and falls back to a bundled
+  copy. It runs either way — but the sandbox around challenge-supplied code is not the thing to
+  leave to a vendored fallback.
 
 `bash scripts/setup-runtime.sh` walks this login and checks all three first.
 

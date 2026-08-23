@@ -37,8 +37,10 @@ reports every way this machine has drifted off it. `bash scripts/setup-runtime.s
 that need a human — the reboot, the FileVault decision, the Codex login taken *inside* the
 container. Two constraints an agent will otherwise meet the hard way: **Colima mounts `$HOME` and
 nothing else**, so a `-v` from outside it silently hands the container an empty directory, and the
-repository must live under `$HOME` for the `/state` mount to reach. **An unattended reboot does
-not currently recover** — FileVault rules out automatic login, and ADR-0012 holds the trade.
+repository must live under `$HOME` for the `/state` mount to reach. **An unattended reboot
+recovers in about 40 seconds** — proven, not assumed: `python3 scripts/restart_probe.py arm`
+before a reboot and `check` after one reaches a verdict by clock. It cost turning FileVault off,
+so the disk is unencrypted and the machine auto-logs in; ADR-0013 records what that exposes.
 
 ## Conventions
 

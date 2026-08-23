@@ -1,5 +1,12 @@
 # The runtime is Colima, pinned here, and FileVault is what an unattended reboot runs into
 
+> **Superseded in part by [ADR-0013](0013-filevault-is-off-and-the-reboot-recovers-unattended.md).**
+> The runtime, the pin, the allocation and the three silent container facts all stand. The
+> **FileVault** section below does not: it describes a machine on which automatic login was
+> refused, and the Owner turned FileVault off on 23 August 2026. The unattended reboot this record
+> calls unreachable was proven the same day — 41 seconds, no human — and what it costs is recorded
+> in ADR-0013.
+
 [#49](https://github.com/jerome-queck/incypher-ctf/issues/49) opened on a fact rather than a
 question: **there was no container runtime on the build machine at all** — no `docker` binary, no
 `Docker.app`, an empty `~/.docker`. The deliverable is a container and
