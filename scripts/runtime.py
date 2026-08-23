@@ -92,8 +92,11 @@ def _output(*command: str) -> str:
 
 
 def installed_versions() -> dict[str, str]:
-    found = {"colima": version_in(_output("colima", "version")), "docker": version_in(_output("docker", "--version"))}
-    return {tool: version for tool, version in found.items() if version}
+    versions = {
+        "colima": version_in(_output("colima", "version")),
+        "docker": version_in(_output("docker", "--version")),
+    }
+    return {tool: version for tool, version in versions.items() if version}
 
 
 def observed_vm() -> dict[str, Any] | None:
@@ -131,6 +134,10 @@ def verify() -> int:
     return 0
 
 
+def _starts_at_login() -> bool:
+    return subprocess.run(["launchctl", "list", "homebrew.mxcl.colima"], capture_output=True).returncode == 0
+
+
 def _wait_until_running(seconds: int = 120) -> bool:
     for _ in range(seconds):
         vm = observed_vm()
@@ -150,6 +157,13 @@ def enable_at_login() -> int:
     (colima#490).
     """
     vm = observed_vm()
+    if _starts_at_login() and vm and vm["status"] == "Running":
+        # Doing this twice is not merely wasteful: the stop-and-start below would give every
+        # container a fresh start time, which is exactly the evidence `restart_probe.py` reads.
+        # A second run would forge the restart proof rather than repeat the setup.
+        print("colima already starts at login and the VM is up — nothing to change")
+        return verify()
+
     if vm and vm["status"] == "Running":
         subprocess.run(["colima", "stop"], check=True)
 

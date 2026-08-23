@@ -20,7 +20,6 @@ Start here: `README.md`, then `AGENTS.md`.
 | Installed skills | The mattpocock engineering skills, copied in for Claude and Codex | `.claude/skills/`, `.agents/skills/` |
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
-
 | Tool caches | Disposable ruff and pytest scratch — gitignored, safe to delete | `.cache/` |
 | Container state | The host mount a running container writes through, including the Codex credential it mints for itself — gitignored, never committed | `state/` |
 

@@ -72,9 +72,14 @@ making it.
 
 - **The unattended-reboot criterion is open, not met, and the instrument for closing it is
   committed.** `scripts/restart_probe.py` arms a container before a reboot and reaches a verdict
-  after one by clock — a container whose last start is later than the host's boot came back by
-  itself. It refuses to claim proof when the host has not rebooted, which is the failure mode a
-  human eyeballing `docker ps` actually has.
+  after one by clock: a container whose last start is later than the host's boot came back by
+  itself. Two distinctions in it are the whole reason it is a script rather than a glance at
+  `docker ps`. It separates *unattended* from *recovered* — on a machine that cannot log itself
+  in, a container that came back came back **after somebody typed a password**, which is not what
+  #49 asks for, and the verdict says so rather than passing. And it separates *not yet* from
+  *no*: a host that has not rebooted is pending, a container that did not return is a failure,
+  and only the first re-arms — because re-arming after a real failure destroys the only evidence
+  of it.
 - **Three container facts, each of which fails silently.** All three would look like working setups
   and then lose a credential or die mid-run:
   - **Colima mounts the home directory and nothing else.** A `-v` from any path outside it does not

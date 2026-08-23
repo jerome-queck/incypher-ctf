@@ -270,26 +270,36 @@ pause
 stage "Prove the reboot"
 say "A container with --restart unless-stopped, a real reboot, and a verdict reached"
 say "by clock rather than by eye: it counts only if the container started *after*"
-say "the host booted."
+say "the host booted, on a machine that reached a session without you."
 say ""
-if docker inspect restart-probe >/dev/null 2>&1 && python3 scripts/restart_probe.py check; then
-  say ""
-  note "That is the criterion this whole ticket exists for."
-else
-  say ""
-  step "Arming the probe now."
-  python3 scripts/restart_probe.py arm
-  say ""
+
+reboot_hint() {
   if fdesetup supportsauthrestart | grep -q true; then
     say "This Mac supports an authenticated restart, which skips the FileVault unlock"
     say "screen for this one reboot:"
     note "  sudo fdesetup authrestart"
     say ""
-    say "Use that, or reboot normally — either answers the question, and whether the"
-    say "session comes back on its own is exactly what the check reports."
   fi
   step "Reboot, log back in, and re-run this wizard. It resumes here."
   SKIPPED+=("reboot, then: bash scripts/setup-runtime.sh")
+}
+
+if docker inspect restart-probe >/dev/null 2>&1; then
+  outcome=0
+  python3 scripts/restart_probe.py check || outcome=$?
+  say ""
+  case "$outcome" in
+    0) note "That is the criterion this whole ticket exists for." ;;
+    1) warn "The probe is left exactly as it stands. That verdict is the finding, and"
+       warn "re-arming would erase the only evidence of it."
+       SKIPPED+=("the container did not come back unattended — read the verdict above, then ADR-0012") ;;
+    *) reboot_hint ;;
+  esac
+else
+  step "Arming the probe now."
+  python3 scripts/restart_probe.py arm || true
+  say ""
+  reboot_hint
 fi
 pause
 
