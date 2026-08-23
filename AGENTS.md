@@ -31,6 +31,15 @@ To point the Solver at a board, run `bash scripts/setup-board.sh` — it walks t
 are injected with `--env-file` at runtime and never built into an image layer. **Never commit the
 real values** — see Conventions.
 
+The container runtime is **Colima**, pinned with the Docker CLI and the VM's allocation in
+`scripts/runtime.py`: `python3 scripts/runtime.py start` brings it up on the pin and `verify`
+reports every way this machine has drifted off it. `bash scripts/setup-runtime.sh` walks the parts
+that need a human — the reboot, the FileVault decision, the Codex login taken *inside* the
+container. Two constraints an agent will otherwise meet the hard way: **Colima mounts `$HOME` and
+nothing else**, so a `-v` from outside it silently hands the container an empty directory, and the
+repository must live under `$HOME` for the `/state` mount to reach. **An unattended reboot does
+not currently recover** — FileVault rules out automatic login, and ADR-0012 holds the trade.
+
 ## Conventions
 
 - Default branch: `main`.

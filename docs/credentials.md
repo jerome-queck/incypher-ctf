@@ -99,6 +99,21 @@ Two things follow. Codex refreshes tokens itself during use and a session goes s
 about **eight days**, so a login taken minutes before a 5.5-hour run cannot expire inside it. And
 `CODEX_HOME` must be **writable**, because the refreshed token is written back there.
 
+**Three things around that command fail silently, and all three were found by running it.** Each
+one produces a container that looks fine and loses the credential or the login:
+
+- **The mount has to be under your home directory.** Colima mounts `$HOME` and nothing else, and a
+  `-v` from outside it does not error — the container gets an empty directory. The login is taken,
+  written nowhere that survives, and gone at the next `docker rm`.
+- **`CODEX_HOME` must already exist.** Writable is not enough: against a missing path the CLI
+  refuses to load configuration and never reaches the login prompt.
+- **The image must ship `ca-certificates`.** The Codex CLI is a native binary that reads the
+  *system* trust store, which `node:*-slim` does not have. Node carries its own roots, so
+  `npm install` succeeds and hides the gap, and the login then dies on `error sending request for
+  url` with egress working perfectly.
+
+`bash scripts/setup-runtime.sh` walks this login and checks all three first.
+
 Nothing is copied from your machine, and the `Dockerfile` must not bake `auth.json` into a layer any
 more than it may bake a key. **Prerequisite:** device-code login has to be enabled in the ChatGPT
 account's security settings — it is enabled on ours, and without it `--device-auth` fails with no
@@ -195,11 +210,14 @@ can read a secret out of its own environment, and the team key in particular is 
 argument inside the `Target` seam rather than exported at all — it is the one value here we could
 never replace.
 
-**Two more places the values exist.** `docker run --env-file` is expected to keep the *resolved*
-values in the container's config, which is what lets an unattended `docker start` re-authenticate
-with no file present — and also means `docker inspect` will print them. Unverified so far: there is
-no container runtime on the build machine yet. And the shell you type in is a third: never `echo` a
-real token, as above.
+**Two more places the values exist, and this is now measured rather than expected.**
+`docker run --env-file` resolves the file at `run` and keeps the values in the container's config.
+That is what lets an unattended `docker start` re-authenticate with no file present — verified on
+the build machine by deleting the file between `stop` and `start` and reading the variable back out
+of the container ([ADR-0012](adr/0012-the-runtime-is-colima-and-filevault-is-the-wall.md)). The
+same fact wears a second face: **`docker inspect` prints every one of them**, so an inspect output
+pasted into an issue is a leak. And the shell you type in is a third: never `echo` a real token, as
+above.
 
 ## If one is committed
 

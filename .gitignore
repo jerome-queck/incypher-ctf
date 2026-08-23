@@ -23,3 +23,8 @@ __pycache__/
 # Tool caches. `pyproject.toml` points ruff and pytest here so the root grows one disposable
 # directory rather than one per tool; MAP.md carries its row.
 .cache/
+
+# The container's host mount. `state/codex/auth.json` is a live subscription credential that the
+# container mints for itself (ADR-0011), so this is the `.env` rule applied to a directory: the
+# secret is on disk here by design and must never become a commit.
+state/
