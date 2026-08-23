@@ -41,7 +41,7 @@ something we check *after* a run rather than something we hope for during one.
 
 | Order | Provider | Credential | Present when |
 |---|---|---|---|
-| 1 | OpenAI / Codex — subscription | `codex login`, see the caveat below | always |
+| 1 | OpenAI / Codex — subscription | `codex login --device-auth`, **run inside the container**; see the caveat below | always |
 | 2 | *any further subscription* | e.g. Anthropic's `CLAUDE_CODE_OAUTH_TOKEN`, minted by `claude setup-token` | if it is in the environment at boot |
 | 3 | metered — break-glass | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | **scored board only** — see below |
 
@@ -73,13 +73,42 @@ keys are the opposite — cap those hard, because a stop there costs a rerun and
 credential: it rides in the event overlay like everything else, and if a run misbehaves the rotation
 is their call, on request, not ours to do for them.
 
-**Codex authenticates by file, not by environment.** This is the one that will surprise you: an
-`OPENAI_API_KEY` in `.env` is enough for the OpenAI SDK, but the Codex CLI keeps its subscription
-credentials in `~/.codex/auth.json`. Exporting a variable does not log it in, so a container gets
-authenticated by piping a token to `codex login --with-access-token` (the value we keep as
-`CODEX_ACCESS_TOKEN`), or by `codex login --device-auth` where a human can complete the flow — and
-`--device-auth` needs a human, which the Solver will not have. Whichever we choose, the Dockerfile
-must not bake `auth.json` into a layer any more than it may bake a key.
+**Codex authenticates by file, not by environment — so it is the one credential that does not
+arrive by `--env-file`.** An `OPENAI_API_KEY` in `.env` is enough for the OpenAI SDK, but the Codex
+CLI keeps its subscription credentials in `auth.json` under `CODEX_HOME` (default `~/.codex`).
+Exporting a variable does not log it in. `codex login --with-access-token` is **Enterprise-only**
+and not available on our Pro plan, so there is no `CODEX_ACCESS_TOKEN` to keep; an earlier revision
+of this page said otherwise, and [ADR-0011](adr/0011-the-sanctioned-path-is-the-only-path.md)
+replaces it.
+
+**The container logs itself in, before the run starts.** The Codex CLI is baked into the image and
+`CODEX_HOME` points at `/state/codex`, inside the host mount:
+
+```bash
+docker run --env-file .env -v "$PWD/state:/state" -e CODEX_HOME=/state/codex solver:latest
+# then, once, in the container, before the scored window opens:
+codex login --device-auth
+```
+
+It prints a code you approve on your phone — no browser in the container, no localhost callback.
+Doing this **before** the Run is setup, not **Intervention** (`CONTEXT.md`); doing it mid-Run would
+be the penalised act, which is precisely why the file lives on the mount: a restarted container
+inherits the login instead of asking for one at 13:00.
+
+Two things follow. Codex refreshes tokens itself during use and a session goes stale only after
+about **eight days**, so a login taken minutes before a 5.5-hour run cannot expire inside it. And
+`CODEX_HOME` must be **writable**, because the refreshed token is written back there.
+
+Nothing is copied from your machine, and the `Dockerfile` must not bake `auth.json` into a layer any
+more than it may bake a key. **Prerequisite:** device-code login has to be enabled in the ChatGPT
+account's security settings — it is enabled on ours, and without it `--device-auth` fails with no
+browser to fall back to.
+
+**A credential on disk is not covered by the environment allowlist.** The orchestrator's allowlist
+spawn (below) stops a challenge reading a secret out of its own environment; it does nothing about a
+file. Challenge code runs as root in this container, so `$CODEX_HOME/auth.json` is readable by it.
+Accepted for v1 and recorded in ADR-0011 — the boundary that actually fixes it is v2's uid
+separation.
 
 **One credential per provider.** Within a provider these are not a fallback chain: the client
 takes the first credential it finds, and given both an API key and a token the Anthropic SDK sends
