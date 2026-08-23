@@ -23,6 +23,7 @@ def reading(**overrides):
         "started_at": CAME_BACK,
         "running": True,
         "login_needs_a_human": False,
+        "checked_at": probe.docker_moment("2026-09-21T11:30:00Z"),
     } | overrides
 
 
@@ -41,11 +42,20 @@ def test_a_reboot_that_needed_someone_to_log_in_is_recovery_with_a_human_in_it()
     assert "logged in" in result.summary
 
 
-def test_a_container_that_is_not_running_fails_however_the_clocks_read():
+def test_a_container_that_is_not_running_long_after_the_boot_has_failed():
     result = probe.verdict(**reading(running=False))
 
     assert result.outcome is probe.Outcome.NOT_PROVEN
     assert "not running" in result.summary
+
+
+def test_a_check_run_seconds_after_the_boot_waits_rather_than_recording_a_false_negative():
+    """The VM takes the best part of a minute to come up. A check run into that window would
+    otherwise read "did not come back" — the one answer nothing re-arms after."""
+    result = probe.verdict(**reading(running=False, checked_at=probe.docker_moment("2026-09-21T11:00:20Z")))
+
+    assert result.outcome is probe.Outcome.PENDING
+    assert "still be coming up" in result.summary
 
 
 def test_a_host_that_has_not_rebooted_yet_is_pending_rather_than_failed():

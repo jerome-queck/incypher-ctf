@@ -25,6 +25,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+# The VM starts from a LaunchAgent and takes the better part of a minute to be ready. A check run
+# inside that window would read an absent container as "it did not come back" — the one verdict
+# nothing re-arms after, so a false negative there is unrecoverable evidence.
+VM_GRACE = dt.timedelta(minutes=5)
+
 CONTAINER = "restart-probe"
 IMAGE = "alpine"
 ARMED_AT = "armed-at"
@@ -70,6 +75,7 @@ def verdict(
     started_at: dt.datetime,
     running: bool,
     login_needs_a_human: bool,
+    checked_at: dt.datetime,
 ) -> Verdict:
     """Whether this container came back by itself, or which part of the proof is still missing."""
     if booted_at <= armed_at:
@@ -79,6 +85,11 @@ def verdict(
         )
 
     if not running:
+        if checked_at - booted_at < VM_GRACE:
+            return Verdict(
+                Outcome.PENDING,
+                f"{CONTAINER} is not up yet and the VM may still be coming up this soon after a boot — check again in a minute",
+            )
         return Verdict(Outcome.NOT_PROVEN, f"{CONTAINER} is not running — it did not come back after the reboot")
 
     if started_at < booted_at:
@@ -144,6 +155,7 @@ def check() -> int:
         booted_at=boot_moment(_output("sysctl", "-n", "kern.boottime")),
         started_at=docker_moment(_inspect("{{.State.StartedAt}}")),
         running=_inspect("{{.State.Running}}") == "true",
+        checked_at=dt.datetime.now(dt.timezone.utc),
         login_needs_a_human=login_needs_a_human(
             _output("defaults", "read", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser"),
             _output("fdesetup", "status"),
