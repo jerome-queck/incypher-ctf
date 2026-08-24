@@ -200,7 +200,13 @@ mechanism to add.
 - **The scoreboard is recorded from v1 and acted on at v3.** `GET /api/v1/scoreboard` answers **200
   unauthenticated** on Brunner — verified 2026-08-24, and notably *more* readable than
   `/api/v1/challenges`, which is 403 without a token. So logging the top-N and every Challenge's
-  `(solves, value)` pair at each Intake costs one GET and no model. That makes the placing-aware
+  `(solves, value)` pair at each Intake costs one GET and no model. **Corrected the same day by
+  [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md):** that holds on Brunner and does not
+  generalise, because a Board can answer 200 with a canned empty body that never came from CTFd.
+  A Board failing ADR-0016's control contributes no scoreboard rather than zero rows — and since
+  `solves` and `value` ride the same LIST payload, this reaches the ranking function above as
+  well: on such a Board those terms are not stale, they were never sent, and Order would rank an
+  empty set while reporting success. That makes the placing-aware
   objective **back-testable against real Runs** instead of designed blind, which is ADR-0009's
   principle exactly. Two facts it will need: CTFd exposes none of `initial`/`decay`/`minimum` to a
   non-admin, so the curve is **fitted from our own logged pairs** rather than assumed — robust to

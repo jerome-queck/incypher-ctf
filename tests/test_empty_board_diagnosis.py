@@ -16,6 +16,11 @@ import pytest
 HOUR = dt.timedelta(hours=1)
 EMPTY_LIST = b'{"success": true, "data": []}'
 
+BOGUS_FIELD_REJECTION = (
+    b'{"success": false, "errors": {"field": "value is not a valid enumeration member; '
+    b"permitted: 'name', 'description', 'category', 'type'\"}}"
+)
+
 
 def now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -36,7 +41,14 @@ def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, t
     board = ctfd_probe.Board("https://board.example/", token)
 
     def answer(_method: str, path: str, *_args, **_kwargs):
-        return (200, page, "") if path == "/" else (200, EMPTY_LIST, "")
+        if path == "/":
+            return (200, page, "")
+        # CTFd validates `field` against an enumeration before any handler runs. A fixture that
+        # answered 200 here would be a board no CTFd install behaves like, and would quietly
+        # exempt every case below from the control that runs ahead of them.
+        if "field=" in path:
+            return (400, BOGUS_FIELD_REJECTION, "")
+        return (200, EMPTY_LIST, "")
 
     board.request = answer
     return board
@@ -138,3 +150,68 @@ def test_a_populated_board_is_still_summarised_rather_than_diagnosed():
     assert "1 challenges" in summary
     assert "(Practice) forensics" in summary
     assert [challenge["id"] for challenge in challenges] == [8]
+
+
+# The diagnosis above reasons about a board that answered. Whether CTFd answered at all is prior
+# to every cause it names, and is the one thing an empty list cannot tell you.
+
+
+def board_answering_the_control(status: int, body: bytes, *, token: str = "a-real-token") -> ctfd_probe.Board:
+    """A board open now, empty, answering the given status to the deliberately-invalid query."""
+    board = board_publishing(now() - HOUR, now() + HOUR, token=token)
+    listing = board.request
+
+    def answer(method: str, path: str, *args, **kwargs):
+        return (status, body, "") if "field=" in path else listing(method, path, *args, **kwargs)
+
+    board.request = answer
+    return board
+
+
+def test_a_board_that_accepts_an_invalid_field_is_not_answering_from_ctfd():
+    """CTFd rejects an unknown `field` in `validate_args` before any handler runs, so a 200 to it
+    is proof the reply was composed somewhere else — and an empty collection from that somewhere
+    is evidence of nothing. Measured on the IN-CYPHER arena, where every collection endpoint
+    answers this way while `/api/v1/challenges/8/solves` returns real rows."""
+    board = board_answering_the_control(200, EMPTY_LIST)
+
+    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from CTFd"):
+        ctfd_probe.name_the_cause_of_an_empty_list(board)
+
+
+def test_the_interposed_layer_is_named_before_the_clock_or_the_account():
+    """Ordering is the whole point. A board that is also outside its window would otherwise be
+    told it is closed, which is a true statement about a reply CTFd never composed."""
+    board = board_publishing(now() - 100 * HOUR, now() - HOUR, token="a-real-token")
+    listing = board.request
+    board.request = lambda method, path, *a, **k: (
+        (200, EMPTY_LIST, "") if "field=" in path else listing(method, path, *a, **k)
+    )
+
+    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from CTFd"):
+        ctfd_probe.name_the_cause_of_an_empty_list(board)
+
+
+@pytest.mark.parametrize("status,body", [(400, BOGUS_FIELD_REJECTION), (403, b""), (302, b"")])
+def test_a_board_that_refuses_the_invalid_field_is_diagnosed_on_its_own_terms(status: int, body: bytes):
+    """Any refusal is CTFd-shaped enough to proceed. The control exists to catch the reply that is
+    too agreeable, not to certify the stack that produced a normal one."""
+    board = board_answering_the_control(status, body)
+
+    with pytest.raises(ctfd_probe.ProbeFailure, match="not a credential fault"):
+        ctfd_probe.name_the_cause_of_an_empty_list(board)
+
+
+def test_the_control_costs_nothing_on_a_board_that_lists_challenges():
+    """It runs only where an empty list already arrived, so a working board never pays for it."""
+    asked: list[str] = []
+    board = ctfd_probe.Board("https://board.example/", "a-real-token")
+
+    def answer(_method: str, path: str, *_args, **_kwargs):
+        asked.append(path)
+        return (200, b'{"success": true, "data": [{"id": 8, "type": "standard", "category": "web"}]}', "")
+
+    board.request = answer
+    ctfd_probe.check_challenges_enumerate(board)
+
+    assert not [path for path in asked if "field=" in path]

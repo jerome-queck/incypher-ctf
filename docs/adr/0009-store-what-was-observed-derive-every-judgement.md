@@ -85,6 +85,16 @@ our own logged pairs** or not known at all. The scoreboard is recorded because
 placing-aware objective it feeds is v3's, which means v1's only job is to make that objective
 back-testable against real Runs instead of designed blind.
 
+> **Corrected the same day by
+> [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md).** *"Costs one GET"* was verified on
+> Brunner and does not generalise: the IN-CYPHER practice arena answers that GET with a canned
+> **200 and an empty body** composed by something that is not CTFd, so the empty scoreboard read
+> there on 21 August was never evidence of an empty scoreboard. The mechanism stands and the
+> reason for recording stands. What changes is that **whether a Board answers at all is a
+> Board-profile discovery question** — a Board failing ADR-0016's control contributes *no*
+> scoreboard, which is a different record from zero rows, and the same caution applies to the
+> `(solves, value)` pairs, which ride on the same LIST payload.
+
 ## How an Attempt ends
 
 #16 proposed `flag` / `no-flag` / `abandoned` / `crashed`. ADR-0005 removed giving up — an Attempt
