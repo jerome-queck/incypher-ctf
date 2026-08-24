@@ -236,12 +236,28 @@ evidence, opposite verdicts, and the asymmetry in the handlers is the whole reas
 Telltale Beacon's **2026-08-20T09:21Z** — and [#12][issue12] and [#14][issue14] recorded
 Breadcrumbs at *four* solves on 21 Aug, so it gained one after that reading.
 
-**What this predicts about the team account — a prediction, not a measurement, and now a weaker
-one.** *If* the cause is `locked`, the Challenge is excluded for every non-admin, authenticated or
-not, so an account would not reopen the arena. If the cause is the interposed layer, an account
-tells us nothing about it either. Neither branch predicts an account helps, which is the only part
-of this that survives the state being undetermined. Nobody has held an account against this board, so it stays unverified, and
-the practice window closes 22 Sep 00:00 SGT either way.
+**The team account does not reopen the board — measured, 24 Aug 2026.** We hold a registered
+account on this arena (`.env.incypher`), and it authenticates: `/api/v1/users/me` and
+`/api/v1/teams/me` both answer **200**, naming user 108 on team 63 with four members. Authenticated,
+against the same board in the same minute:
+
+| Request | Authenticated result |
+| --- | --- |
+| `/api/v1/challenges` | 200, **0 items** |
+| `/api/v1/challenges?field=probe-is-not-a-field&q=a` | **200** — CTFd would answer 400 |
+| `/api/v1/challenges/8` | 404 |
+| `/api/v1/challenges/8/solves` | 200, **5 rows** |
+| `/api/v1/scoreboard` | 200, 0 items |
+| `/api/v1/teams` | 200, 0 items |
+
+**The suppression is not about being logged out.** A fully authenticated team member gets the same
+canned empty collections and the same failing control as a stranger, which rules out the reading
+that this is a visibility setting or an edge rule aimed at anonymous traffic. It also settles the
+practical question: **an account does not make this arena readable**, so the calibration the map
+planned against it cannot happen here today, and the practice window closes 22 Sep 00:00 SGT.
+
+It does not separate `locked` from the layer — an authenticated non-admin is shown nothing under
+either — so the Challenges' state stays undetermined.
 
 #### Participant enumeration is suppressed by something that is not CTFd's config
 

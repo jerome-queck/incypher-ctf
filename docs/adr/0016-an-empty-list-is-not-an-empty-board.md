@@ -16,6 +16,12 @@ layer invents — naming a team through a query that filters banned and hidden a
 `/api/v1/teams/4` answers **404**. Something that is not CTFd is composing the replies to collection
 endpoints.
 
+**It is not about being logged out.** Measured with a registered account on that arena: `/users/me`
+and `/teams/me` answer 200, and in the same minute the authenticated `/api/v1/challenges` answers
+200 with **zero items** and the authenticated control answers **200** where CTFd would answer 400.
+So this is not a visibility setting and not an edge rule aimed at anonymous traffic — a credential
+changes nothing about it, which is what makes it a read-contract problem rather than an auth one.
+
 **Its 404s are canned too, and that is the sharper fingerprint.** On this board
 `/api/v1/challenges/8`, `/api/v1/challenges/999999`, `/api/v1/teams/4` and
 `/api/v1/scoreboard/top/10` return **byte-identical** bodies — one MD5 across all four, including a
@@ -117,6 +123,11 @@ have not seen.
   function consumes `solves` and `value` from the LIST payload. On a Board that fails the control
   those fields are not merely stale — they were never sent, and a scheduler ranking an empty set
   ranks nothing while reporting success.
+- **The control has fired on a real Board, not only in tests.** Run against the IN-CYPHER arena with
+  a live token, `scripts/ctfd_probe.py` fails `challenges enumerate` with the interposed-layer
+  verdict while every other check passes — the edge, the token, `Content-Type` discipline and the
+  rate-limit read. That is the shape this is for: four green checks and one that says the list
+  cannot be believed, where the old message would have blamed the clock or the credential.
 - **This is a read-contract rule, not a retry rule.** Failing the control is not transient and must
   not be retried into a pass. **When it started is unknown** — the challenges list was working on
   21 August, so this is not dated and is not shown to be a competition-week regression. What the
