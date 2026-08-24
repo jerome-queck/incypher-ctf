@@ -60,3 +60,12 @@ def test_the_url_is_declared_and_is_not_a_secret():
     board."""
     assert "CTFD_URL" in declared_secrets.NOT_SECRETS
     assert "CTFD_URL" not in declared_secrets.SECRETS
+
+
+def test_a_credential_named_only_in_prose_is_still_covered():
+    """`ANTHROPIC_AUTH_TOKEN` is the standing case for the subset rule, and the template-to-set test
+    above cannot guard it: the template names it in a sentence rather than declaring it, so deleting
+    it from `SECRETS` would break nothing. The redactor may cover more than the template; this is
+    what stops "more" from quietly becoming "the same"."""
+    assert "ANTHROPIC_AUTH_TOKEN" in declared_secrets.SECRETS
+    assert "ANTHROPIC_AUTH_TOKEN" not in declared_secrets.template_declarations(TEMPLATE)

@@ -188,10 +188,11 @@ authenticates with nothing.
 
 This exists because its absence cost a wrong answer. Resolving
 [#59](https://github.com/jerome-queck/incypher-ctf/issues/59), a session read this repository, found
-nothing stating that an IN-CYPHER account existed, and recorded that we held none — while
-`.env.incypher` sat populated the whole time. The repository was not wrong to be silent; it had no
-way to be asked. **Silence about a secret is not evidence there is no secret**, and one command is
-cheaper than remembering that.
+nothing stating that an account for that board existed, recorded that we held none, and left an
+acceptance criterion unticked on it — when running the command above would have answered the
+question in one line. The repository was not wrong to be silent; it had no way to be asked.
+**Silence about a secret is not evidence there is no secret**, and one command is cheaper than
+remembering that.
 
 This works because the loader is `os.environ.setdefault` — **the environment wins and `.env` only
 fills the gaps** — so the overlay's two values shadow `.env`'s while everything it does not mention

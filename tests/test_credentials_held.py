@@ -13,6 +13,7 @@ was written to prevent.
 """
 
 import credentials_held
+import declared_secrets
 
 SECRET = "CTFD_API_TOKEN"
 
@@ -62,7 +63,7 @@ def test_the_report_names_every_declared_secret_even_when_a_file_holds_none(tmp_
     from a reader who forgot to ask about it."""
     holdings = credentials_held.read_holdings(env_file(tmp_path, ".env", "CTFD_URL=https://b.example\n"))
 
-    assert set(holdings) >= set(credentials_held.declared_secrets.SECRETS)
+    assert set(holdings) >= set(declared_secrets.SECRETS)
 
 
 def test_the_example_template_is_never_reported_as_a_holding(tmp_path):
@@ -96,3 +97,38 @@ def test_an_empty_value_makes_the_command_fail(tmp_path):
 
     env_file(tmp_path, ".env", f"{SECRET}=\n")
     assert credentials_held.report(tmp_path) == 1
+
+
+def test_absent_names_are_reported_rather_than_omitted(tmp_path, capsys):
+    """Omitting them recreated #59 in miniature — a reader who does not already hold the declared
+    set cannot tell a name that is absent from one nobody thought to ask about."""
+    env_file(tmp_path, ".env", f"{SECRET}=filled\n")
+
+    credentials_held.report(tmp_path)
+
+    printed = capsys.readouterr().out
+    assert "TEAM_KEY" in printed
+    assert "absent" in printed
+
+
+def test_a_clone_holding_nothing_is_not_a_failure(tmp_path):
+    """Absence is the correct answer to the question this command asks. Exiting non-zero would make
+    a pre-flight caller read a clean checkout as broken — and it contradicts the command's own
+    summary line, which says absent is ordinary."""
+    assert credentials_held.report(tmp_path) == 0
+
+
+def test_an_exported_assignment_is_a_holding(tmp_path):
+    """The bug that justified one shared parser: `docs/credentials.md` sources overlays with
+    `. ./.env.incypher`, where `export` is idiomatic, and the earlier reader called the secret
+    absent while its value sat in the file."""
+    holdings = credentials_held.read_holdings(env_file(tmp_path, ".env", "export TEAM_KEY=zzz\n"))
+
+    assert holdings["TEAM_KEY"] is credentials_held.SET
+
+
+def test_an_empty_quoted_value_is_empty(tmp_path):
+    """The mirror of it — counted as content, `TEAM_KEY=""` reports a credential we do not hold."""
+    holdings = credentials_held.read_holdings(env_file(tmp_path, ".env", 'TEAM_KEY=""\n'))
+
+    assert holdings["TEAM_KEY"] is credentials_held.EMPTY

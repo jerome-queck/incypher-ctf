@@ -27,7 +27,10 @@ competition's Agent Development Kit released 14 September 2026.)*
 
 To point the Solver at a board, run `bash scripts/setup-board.sh` — it walks the human-only steps
 (register, join the team, mint the CTFd token), writes `.env`, and proves the API path with
-`scripts/ctfd_probe.py`. Every secret and where it comes from is `docs/credentials.md`; secrets
+`scripts/ctfd_probe.py`. **What this machine actually holds is `python3 scripts/credentials_held.py`**
+— set/empty/absent per credential, never a value, and non-zero if one is empty. Ask it rather than
+inferring from the repository's silence: `.env.*` is gitignored, so a secret we hold leaves no trace
+in the tree at all. Every secret and where it comes from is `docs/credentials.md`; secrets
 are injected with `--env-file` at runtime and never built into an image layer. **Never commit the
 real values** — see Conventions.
 
