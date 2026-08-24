@@ -173,6 +173,26 @@ Source it in a subshell, so the default board is never silently switched:
 ( set -a; . ./.env.incypher; set +a; python3 scripts/ctfd_probe.py --no-attempt )
 ```
 
+**That table is the naming convention, not an inventory.** Which overlays exist on a given machine,
+and which of their values are filled, is state — it changes, it is gitignored by design, and a
+tracked copy would go stale the first time someone minted a token. Ask the machine instead:
+
+```bash
+python3 scripts/credentials_held.py
+```
+
+It prints **set / empty / absent** for every declared name in `.env` and each overlay, and **never
+prints a value**. Absent is ordinary: an overlay carries only its own board's values. **Empty is a
+defect and exits non-zero** — the trap named above, where the variable occupies its slot and
+authenticates with nothing.
+
+This exists because its absence cost a wrong answer. Resolving
+[#59](https://github.com/jerome-queck/incypher-ctf/issues/59), a session read this repository, found
+nothing stating that an IN-CYPHER account existed, and recorded that we held none — while
+`.env.incypher` sat populated the whole time. The repository was not wrong to be silent; it had no
+way to be asked. **Silence about a secret is not evidence there is no secret**, and one command is
+cheaper than remembering that.
+
 This works because the loader is `os.environ.setdefault` — **the environment wins and `.env` only
 fills the gaps** — so the overlay's two values shadow `.env`'s while everything it does not mention
 still comes from `.env`. `.gitignore` already covers the pattern: `.env.*` is ignored, with
