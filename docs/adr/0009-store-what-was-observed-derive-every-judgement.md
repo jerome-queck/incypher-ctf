@@ -1,5 +1,19 @@
 # Store what was observed, derive every judgement
 
+> **Corrected in three places by
+> [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md), and one of those
+> narrowed again by [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md).** The principle and
+> the stream stand entirely; what moves is three details, and ADR-0015's *Corrections to ADR-0009*
+> holds them in full. In short: **"a cut Challenge goes to the back of the queue" is wrong** —
+> there is no queue, and that cause is a penalty inside a function recomputed at every Attempt
+> boundary. **Attempt-open also carries Order's rank for every unsolved Challenge**, without which
+> a Run that passed over sixty Challenges and one that only had fourteen read identically and eval
+> question 5 cannot be asked. And **each Intake records the scoreboard top-N and every Challenge's
+> `(solves, value)` pair** — which is where ADR-0016 lands: an empty collection is not evidence of
+> an empty Board, so a Board failing its control contributes *no* scoreboard rather than zero rows.
+> This record's *"a crowd-poller"* reasoning is untouched; the additions ride Intake's existing
+> cycle rather than adding a second poller.
+
 v1 emits telemetry, and two earlier records already rest their weight on it.
 [ADR-0005](0005-the-stall-call-lives-outside-the-solving-model.md) leaves its three stall
 thresholds uncalibrated on purpose and names this record as the thing that will calibrate them.
@@ -74,27 +88,6 @@ two — and `CONTEXT.md` already defines Intake as a *sync on a fixed cycle*. Th
 second one would be a second thing hitting a rate-limited Board for data Intake already holds.
 `solves` is snapshotted at Attempt-open, Attempt-close, and Flag-accepted.
 
-**Two additions from [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md),
-both on Intake's existing cycle.** Every Intake records each Challenge's **`(solves, value)` pair**
-and the **scoreboard top-N**. The pair is recorded because #18's *"strict function"* result was
-measured on one Board rather than being a CTFd law — dynamic value uses per-challenge `initial`,
-`decay` and `minimum`, none of which the API exposes to a non-admin, so the curve is **fitted from
-our own logged pairs** or not known at all. The scoreboard is recorded because
-`GET /api/v1/scoreboard` answers **200 unauthenticated** (verified 2026-08-24 on Brunner, where
-`/api/v1/challenges` is 403 without a token), so it costs one GET and no model — and because the
-placing-aware objective it feeds is v3's, which means v1's only job is to make that objective
-back-testable against real Runs instead of designed blind.
-
-> **Corrected the same day by
-> [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md).** *"Costs one GET"* was verified on
-> Brunner and does not generalise: the IN-CYPHER practice arena answers that GET with a canned
-> **200 and an empty body** composed by something that is not CTFd, so the empty scoreboard read
-> there on 21 August was never evidence of an empty scoreboard. The mechanism stands and the
-> reason for recording stands. What changes is that **whether a Board answers at all is a
-> Board-profile discovery question** — a Board failing ADR-0016's control contributes *no*
-> scoreboard, which is a different record from zero rows, and the same caution applies to the
-> `(solves, value)` pairs, which ride on the same LIST payload.
-
 ## How an Attempt ends
 
 #16 proposed `flag` / `no-flag` / `abandoned` / `crashed`. ADR-0005 removed giving up — an Attempt
@@ -110,11 +103,9 @@ not an outcome:
 
 `cut:self-reported-impossible` is ADR-0005's single narrow exception — a volunteered "impossible"
 may shorten a budget and never lengthen one — and it is in this list **because the aim is for it
-never to fire.** ~~A cut Challenge goes to the back of the queue instead.~~ **There is no queue** —
-[ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md) settled Order as a
-function recomputed at every Attempt boundary, and this cause is a large non-decaying penalty within
-it, never an exclusion. A cause that is not recorded is a defect that cannot be watched trending to
-zero, so it stays in the vocabulary as an alarm rather than as an ending.
+never to fire.** A cut Challenge goes to the back of the queue instead. A cause that is not
+recorded is a defect that cannot be watched trending to zero, so it stays in the vocabulary as an
+alarm rather than as an ending.
 
 ## The stream
 
@@ -139,12 +130,8 @@ when prices move. #16's "context size per turn" needs no field of its own — it
 `tokens_in + cache_read`.
 
 Attempt-open carries the Challenge's id, name, category and `type`, `solves_at_open`, its Tier, its
-budget, **the Attempt's sequence number for that Challenge**, **Order's rank for every unsolved
-Challenge at this pick**, and an Instance's `until` if one was deployed. The rank vector is
-[ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)'s addition and it earns
-its place under question 5 below: without it, a Run that passed over sixty Challenges and a Run that
-only ever had fourteen are indistinguishable in the stream, and *"is Order banking Flags early"*
-cannot be asked of what Order never reached. Attempt-close carries the cause, the approach label, `solves_at_close`, and the number of
+budget, **the Attempt's sequence number for that Challenge**, and an Instance's `until` if one was
+deployed. Attempt-close carries the cause, the approach label, `solves_at_close`, and the number of
 extensions granted. Run-open carries the whole **Board profile as discovered** — ADR-0008's named
 failure is a profile that discovers the *wrong* thing, and a post-mortem cannot otherwise
 distinguish "the Solver behaved wrongly" from "the Solver read the Board wrongly", which want
@@ -248,13 +235,10 @@ description of a program nobody wrote.
 
 ## What this record does not settle
 
-~~Where a cut Challenge lands in the queue, and what recomputes Order.~~ **Settled by
-[ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)**, which found the
-question's framing wrong: there is no queue, so nothing lands anywhere. Order is a function
-recomputed at every Attempt boundary, every cause requeues alike except the volunteered
-"impossible", and no cause ever shortens a Challenge's budget. This record's obligation was to make
-that *evaluable* — the Attempt-sequence-per-Challenge field did half of it, and ADR-0015 added the
-rank vector for the other half.
+Where a cut Challenge lands in the queue, and what recomputes Order. "Back of the queue" is the
+intent behind `cut:self-reported-impossible` above, but the general policy — whether every cause
+requeues alike, and what Order reads — is a decision nothing on the map owns yet. Telemetry's only
+obligation is to make it *evaluable*, which the Attempt-sequence-per-Challenge field does.
 
 Bounding what accumulates in `/state` remains v2's, unchanged by this record except that Observation
 bodies are now identified as the bulk of it.

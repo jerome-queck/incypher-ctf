@@ -156,9 +156,20 @@ def test_a_populated_board_is_still_summarised_rather_than_diagnosed():
 # to every cause it names, and is the one thing an empty list cannot tell you.
 
 
-def board_answering_the_control(status: int, body: bytes, *, token: str = "a-real-token") -> ctfd_probe.Board:
-    """A board open now, empty, answering the given status to the deliberately-invalid query."""
-    board = board_publishing(now() - HOUR, now() + HOUR, token=token)
+def board_answering_the_control(
+    status: int,
+    body: bytes,
+    *,
+    token: str = "a-real-token",
+    opens: dt.datetime | None = None,
+    closes: dt.datetime | None = None,
+) -> ctfd_probe.Board:
+    """A board whose challenge list is empty and which answers the given status to the control.
+
+    The window defaults to open-now, because most of these assertions are about the control alone.
+    Passing one is how a test asks what happens when a second cause is *also* true.
+    """
+    board = board_publishing(opens or now() - HOUR, closes or now() + HOUR, token=token)
     listing = board.request
 
     def answer(method: str, path: str, *args, **kwargs):
@@ -182,11 +193,7 @@ def test_a_board_that_accepts_an_invalid_field_is_not_answering_from_ctfd():
 def test_the_interposed_layer_is_named_before_the_clock_or_the_account():
     """Ordering is the whole point. A board that is also outside its window would otherwise be
     told it is closed, which is a true statement about a reply CTFd never composed."""
-    board = board_publishing(now() - 100 * HOUR, now() - HOUR, token="a-real-token")
-    listing = board.request
-    board.request = lambda method, path, *a, **k: (
-        (200, EMPTY_LIST, "") if "field=" in path else listing(method, path, *a, **k)
-    )
+    board = board_answering_the_control(200, EMPTY_LIST, opens=now() - 100 * HOUR, closes=now() - HOUR)
 
     with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from CTFd"):
         ctfd_probe.name_the_cause_of_an_empty_list(board)

@@ -11,10 +11,18 @@ CTFd's answer at all. `/api/v1/teams?field=bogusfield` returns **200 and the sam
 CTFd validates `field` against an enumeration before any handler runs and Brunner — the live control,
 same CTFd generation — returns **400** naming the permitted values. `/api/v1/teams` carries no
 `meta.pagination`, which `TeamList` returns unconditionally. Meanwhile
-`/api/v1/challenges/8/solves` answers **200 with five dated solve rows**, naming a team through a
-query that filters banned and hidden accounts *out*, while `/api/v1/teams/4` answers **404**, which
-only a banned or hidden team does. Both cannot be true. Something that is not CTFd is composing the
-replies to collection endpoints.
+`/api/v1/challenges/8/solves` answers **200 with five dated solve rows** — a body no interposed
+layer invents — naming a team through a query that filters banned and hidden accounts *out*, while
+`/api/v1/teams/4` answers **404**. Something that is not CTFd is composing the replies to collection
+endpoints.
+
+**Its 404s are canned too, and that is the sharper fingerprint.** On this board
+`/api/v1/challenges/8`, `/api/v1/challenges/999999`, `/api/v1/teams/4` and
+`/api/v1/scoreboard/top/10` return **byte-identical** bodies — one MD5 across all four, including a
+route that takes no id at all. CTFd's `first_or_404` appends the requested URI and a suggested rule
+(*"You have requested this URI […] but did you mean …"*), which Brunner returns and this board never
+does. So **a 404 here is no more informative than an empty list**, and any reasoning that treats one
+as CTFd's own answer is reasoning about a reply CTFd may never have seen.
 
 The decision: **a collection endpoint's empty reply is never taken as fact. It is corroborated by a
 request the Board must refuse, or it is treated as unknown.**
@@ -45,6 +53,11 @@ removed.
 
 `GET /api/v1/challenges?field=<not-a-field>&q=a`. CTFd rejects it in `validate_args` before any
 handler runs, so a **non-200 is CTFd-shaped and a 200 is proof the reply came from somewhere else.**
+
+The measured 400 is on `/api/v1/teams`, because Brunner's challenge list is private and answers the
+challenges control **403**. That is a gap in the evidence rather than in the rule — no Board has yet
+been seen returning the CTFd-shaped 400 on the challenges endpoint specifically — and it is why any
+refusal counts rather than the 400 alone.
 
 Three properties earn it the job:
 
@@ -87,21 +100,26 @@ have not seen.
 - **The Board seam inherits it, not just the probe.** ADR-0008 makes `scripts/ctfd_probe.py`'s
   `Board` *the* seam that moves into `solver/`, so the probe and the competition path are provably
   the same code. This is a property of that seam's read contract.
-- **Corrects [ADR-0009](0009-store-what-was-observed-derive-every-judgement.md).** Its scoreboard
-  addition says logging the top-N *"costs one GET and no model"*, verified on Brunner. On the
-  IN-CYPHER arena that GET returns a canned empty payload, and the empty scoreboard recorded there on
-  21 August is the same effect rather than "no scores yet" — so it was never evidence of an empty
-  scoreboard. The mechanism stands; **whether a given Board answers is a Board-profile discovery
-  question**, and a Board that fails the control contributes no scoreboard rather than zero rows.
-- **Corrects [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)** in the same
-  claim, which it carries as a consequence. It reaches nothing else there: Order reads Intake's
-  copy, and a Board that lists nothing produces no Order to compute.
+- **Corrects [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md), and through
+  it [ADR-0009](0009-store-what-was-observed-derive-every-judgement.md).** ADR-0015 added scoreboard
+  logging as a Consequence and corrected ADR-0009 to carry it, on the claim that it *"costs one GET
+  and no model"* — verified on Brunner. On the IN-CYPHER arena that GET returns a canned empty
+  payload, so an empty scoreboard read from that Board is not evidence of an empty scoreboard.
+  **Whether the same was true on 21 August is unknown and deliberately not claimed**: the
+  challenges list — a collection endpoint — carried two real Challenges that day
+  ([#12](https://github.com/jerome-queck/incypher-ctf/issues/12),
+  [#14](https://github.com/jerome-queck/incypher-ctf/issues/14)), so the suppression was either
+  absent then or never uniform, and "the empty scoreboard was the same effect" is a guess the
+  evidence does not carry. The mechanism stands and the reason for recording stands; **whether a
+  given Board answers is a Board-profile discovery question**, and a Board failing the control
+  contributes no scoreboard rather than zero rows.
 - **A `w_value` and `w_solves` term is only as good as the list it reads.** ADR-0015's ranking
   function consumes `solves` and `value` from the LIST payload. On a Board that fails the control
   those fields are not merely stale — they were never sent, and a scheduler ranking an empty set
   ranks nothing while reporting success.
 - **This is a read-contract rule, not a retry rule.** Failing the control is not transient and must
-  not be retried into a pass; the arena has behaved this way since at least 21 August. What the
+  not be retried into a pass. **When it started is unknown** — the challenges list was working on
+  21 August, so this is not dated and is not shown to be a competition-week regression. What the
   Solver does about a Board it cannot read is a separate question this record does not answer.
 - **`CONTEXT.md` gains no term.** **Board profile** already names the thing being discovered and
   ADR-0008 already names the failure of discovering the wrong thing; a word for *"a reply that
@@ -119,10 +137,13 @@ yet. Recorded here so `/to-spec` carries it.
 measured. The arena and the scored Board may not share infrastructure, and the scored Board does not
 exist to read yet.
 
-**Why the arena does this.** Not determinable from outside, and deliberately not guessed at. The
-Challenges themselves are `state: "locked"` — withdrawn from play, established from CTFd's own
-handler filters and recorded in `docs/competitions/incypher-2026-hackathon.md` — which is an ordinary
-organiser action and is a separate fact from the collection endpoints.
+**Why the arena does this**, and **what state the two practice Challenges are actually in.** Neither
+is determinable from outside. `state: "locked"` fits — `Challenge.get` excludes `hidden` and `locked`
+for a non-admin — but so does the interposed layer, because the 404 that inference rested on is
+byte-identical to the layer's other 404s. Two hypotheses, one body, and the simpler one is the layer
+we have already proven exists. What *is* measured is narrower and still useful: both Challenges'
+solve rows are live, so they are neither deleted nor `hidden`, and the Board's window and its three
+visibilities are unchanged. `docs/competitions/incypher-2026-hackathon.md` carries the full working.
 
 ## Revisit when
 
