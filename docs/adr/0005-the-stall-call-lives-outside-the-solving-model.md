@@ -1,5 +1,13 @@
 # The stall call lives outside the solving model
 
+> **Extended by [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md).**
+> *Time is bought by state transitions* now reaches **across** Attempts as well as within one: a
+> Challenge's Tier rises by the Checkpoints it has earned, capped at the same small K, so the
+> evidence this record trusts to extend an Attempt is the same evidence that decides how long the
+> next one gets. Nothing lowers a Tier — a barren Attempt costs a Challenge its place in Order and
+> never its budget. Nothing here is contradicted; the asymmetry is the same one, applied one level
+> up.
+
 > **Amended in one bullet by [ADR-0014](0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md).**
 > The decision above, and six of the seven Consequences, stand exactly as written — the title most of
 > all: the stall call still lives outside the solving model. What moves is a mechanism this record

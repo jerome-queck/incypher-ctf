@@ -160,20 +160,47 @@ _Avoid_: ranking, scoring, classification, assessment
 
 **Tier**:
 The effort budget Triage assigns a Challenge — how much of the run it is worth spending before an
-Attempt is cut. **A Tier is not a difficulty grade and not a rank.** It is deliberately biased
-toward the Categories the Solver is *weakest* at, because that is where more budget changes an
-outcome; where it is strong, it needs no help. Only real evidence lowers a Tier — a Claim that a
-Challenge is easy buys nothing, exactly as it buys no time within an Attempt (ADR-0005).
+Attempt is cut. **A Tier is not a difficulty grade and not a rank.** It **rises on evidence and never
+falls**: Checkpoints earned across a Challenge's Attempts raise it, capped, because attempting a
+Challenge is the only real evidence of its difficulty we ever get and Triage's prior is a weak one.
+Nothing lowers it — a Claim that a Challenge is easy buys nothing, exactly as it buys no time within
+an Attempt (ADR-0005), and a barren Attempt is evidence about whether to come back rather than about
+how long to stay, which is **Order**'s question
+([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
+The intended bias toward the Categories the Solver is *weakest* at is **deferred, not dropped**: it
+needs a per-Category strength signal, and Category is an open string read from the Board, so v1 has
+no entry for the categories that will actually be scored. Until a stable Category vocabulary and
+real per-Category solve rates exist, a Tier is the difficulty a Board **states**, which Triage
+extracts.
 _Avoid_: difficulty, priority, rank, score, weight
 
 **Order**:
-The sequence the Solver takes Challenges in — recomputed from the Board's own signals every time it
-picks, never fixed at the start. Order and Tier read the same inputs and weight them **oppositely**,
-which is the whole reason they are two words: Order goes where the Solver is strongest, to bank
-Flags early, while Tier spends longest where it is weakest. A design that merges them silently picks
-one of those goals and loses the other.
-_Avoid_: priority, queue position, tier (the other half of the pair, and deliberately a different
-word)
+The sequence the Solver takes Challenges in — **a pure, deterministic, total function** over the
+Board's own signals and the Run's, recomputed at every Attempt boundary and never stored. **There is
+no queue**: a cut Challenge is not placed anywhere, it simply becomes eligible again, and where it
+next ranks falls out of the function
+([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)). Order and Tier
+are two words because they read the same inputs and weight them **oppositely** — Order goes where the
+Solver is strongest to bank Flags early, Tier spends longest where it is weakest — and a design that
+merges them silently picks one goal and loses the other. That opposition is the pair's *design
+intent*; the term it turns on is the same deferred strength signal Tier's entry describes, so in v1
+Order is what remains and all of it is measured: tractability, payoff, progress, a live Lease, and a
+monotone penalty on what has already been spent.
+_Avoid_: priority, queue position, queue (there isn't one), tier (the other half of the pair, and
+deliberately a different word)
+
+**Working set**:
+The Challenges the remaining clock is actually committed to — the top of **Order**, as many as the
+time left can still afford Attempts for. It exists because the alternative allocation is the one
+that looks fair and solves nothing: dividing the remaining hours by the number of unsolved
+Challenges puts every Attempt below the length at which anything is ever solved. So the clock buys a
+*number of Attempts*, and those go to the top of Order — which means the working set narrows on its
+own as the Run burns down, and the end-of-Run scramble is a consequence of the same arithmetic
+rather than a mode with rules of its own. A Challenge outside it is not banned and never becomes
+banned; on a fixed clock, not being reached is simply what most of a Board does
+([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
+_Avoid_: queue, backlog, shortlist, and **eligible set** — that is every unsolved Challenge, which is
+the thing the working set is a slice of
 
 ### How the Solver works a Challenge
 
