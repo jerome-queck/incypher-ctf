@@ -1,5 +1,12 @@
 # Truth about an Instance lives on the Board, split by question
 
+> **Extended in one line by [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md).**
+> The leak sweep runs at **Run close** as well as at every Attempt boundary. chall-manager never
+> evicts, so a Lease still held when the process exits is capacity nobody reclaims. ADR-0015 also
+> rejected a late-run gate on new deploys: `min(budget, TTL)` here already prevents an Attempt
+> outliving its Instance, so the surviving rule is cause-neutral — do not start an Attempt shorter
+> than `L_min`, whether or not it needs a deploy.
+
 > **Amended in one line by [ADR-0014](0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md).**
 > Everything about where truth lives stands: existence is the ledger page, the deadline is the deploy
 > response, renewal is late, the leak sweep runs at every Attempt boundary. Only **the hold being 1:1
