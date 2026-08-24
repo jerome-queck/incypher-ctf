@@ -159,8 +159,9 @@ be expired — since it settles whether a crash-restart loop is defensible or me
 
 ### 5. Live platform settings — partly answerable already
 
-The practice board answers unauthenticated, so some of this did not need to wait for 14 September.
-Read 21 Aug 2026:
+The practice board answered unauthenticated, so some of this did not need to wait for 14 September.
+Read 21 Aug 2026 — and see [what changed on 24 August](#what-changed-on-24-august-2026), which
+took the two practice Challenges out of the list:
 
 - **chall-manager is live** — `/plugins/ctfd-chall-manager/instances` is in the board's own nav.
 - **`max_attempts: 0`** on both practice challenges: no per-challenge attempt cap on this batch.
@@ -180,6 +181,121 @@ Read 21 Aug 2026:
 Still unknown, and still ADK- or event-gated: the exact CTFd version,
 `incorrect_submissions_per_min` (`/api/v1/configs` is admin-only — assume CTFd's default of 10
 wrong submissions per minute), the mana total, and the instance TTL.
+
+#### What changed on 24 August 2026
+
+`GET /api/v1/challenges`, browser UA and `Content-Type: application/json`, unauthenticated, now
+answers **200 with `{"success": true, "data": []}`**, and `/api/v1/challenges/8` answers 404. The
+two practice Challenges are gone from the list. Resolution of [#59][issue59]; everything below was
+read on 24 Aug 2026, with BrunnerCTF Global as a live control and CTFd's own source at tag
+`3.8.0` as the reference for what each handler does.
+
+**Nothing below rests on the empty list, or on the 404.** The next section shows that this board
+cans both: its collection endpoints do not reliably reach CTFd, and its 404s are byte-identical
+across routes that should answer differently. Those are the two weakest readings here, not the
+strongest. **One endpoint carries the whole section** — `/api/v1/challenges/8/solves`, which answers
+**200 with five dated solve rows**, a body no interposed layer invents. Findings are marked
+**measured** (read off the wire) or **inferred** (it follows from CTFd's source, but the board never
+said it), as the rest of this section marks its own; where a reading is measured but its *meaning*
+comes from the source, it says both.
+
+- **Not an event-state change — measured 200, inferred meaning.** `ChallengeSolves.get` is decorated
+  `@during_ctf_time_only`, so its 200 places the reading inside the board's own event window.
+  `window.init` agrees: `start` 1782835200 and `end` 1790006400 are **1 Jul 2026 00:00 SGT** to
+  **22 Sep 2026 00:00 SGT**, the window recorded at the top of this file, unchanged.
+- **Not a `challenge_visibility` flip to private — measured 200, inferred meaning**, and that is
+  what map [#11][issue11]
+  guessed when it corrected itself in place. `ChallengeSolves.get` also carries
+  `@check_challenge_visibility`, `@check_account_visibility` and `@check_score_visibility`, each
+  of which aborts **403** for an unauthenticated request carrying `Content-Type:
+  application/json`. It answered 200 with real rows, so all three visibilities are still
+  **public**. Brunner is the live control on the same CTFd generation: its challenge list *is*
+  private, and it answers exactly that 403.
+- **Not deleted, and not `hidden` — measured 200, inferred meaning.** `ChallengeSolves.get` aborts 404 when the
+  Challenge's `state` is `hidden`. Both id 8 and id 15 answer 200, so both rows are still in the
+  database and neither is hidden.
+- **`state: "locked"` — a hypothesis, and no longer the only one.** `Challenge.get` selects a
+  non-admin's Challenge with `state != "hidden" AND state != "locked"` and 404s otherwise, and
+  `hidden` is ruled out above, so `locked` fits. **But the 404 it rests on is not CTFd's.** This
+  board returns a *byte-identical* body for `/api/v1/challenges/8`, `/api/v1/challenges/999999`,
+  `/api/v1/teams/4` and `/api/v1/scoreboard/top/10` — one MD5 across all four, including a route
+  taking no id — while CTFd's `first_or_404` appends the requested URI and a suggested rule, which
+  Brunner returns and this board never does. The interposed layer of the next section explains that
+  404 as readily as `locked` does, and it is the simpler cause because we have already proven the
+  layer exists. **Both fit; the state is undetermined.**
+
+**Why that reads as a consistent answer here and as a contradiction for teams**, which is the
+first objection to raise against it. CTFd's three *challenge* handlers filter differently:
+`get_all_challenges` and `Challenge.get` exclude `hidden` and `locked`, while `ChallengeSolves`
+excludes only `hidden`. A single value of `state` therefore satisfies all three observations at
+once. CTFd's three *team* handlers filter **identically** — `hidden` and `banned` in every one —
+so the team readings in the next section cannot be satisfied by any value at all. Same shape of
+evidence, opposite verdicts, and the asymmetry in the handlers is the whole reason.
+
+**They were live until days before.** Breadcrumbs' fifth solve is dated **2026-08-21T04:19Z** and
+Telltale Beacon's **2026-08-20T09:21Z** — and [#12][issue12] and [#14][issue14] recorded
+Breadcrumbs at *four* solves on 21 Aug, so it gained one after that reading.
+
+**The team account does not reopen the board — measured, 24 Aug 2026.** We hold a registered
+account on this arena (`.env.incypher`), and it authenticates: `/api/v1/users/me` and
+`/api/v1/teams/me` both answer **200**, naming user 108 on team 63 with four members. Authenticated,
+against the same board in the same minute:
+
+| Request | Authenticated result |
+| --- | --- |
+| `/api/v1/challenges` | 200, **0 items** |
+| `/api/v1/challenges?field=probe-is-not-a-field&q=a` | **200** — CTFd would answer 400 |
+| `/api/v1/challenges/8` | 404 |
+| `/api/v1/challenges/8/solves` | 200, **5 rows** |
+| `/api/v1/scoreboard` | 200, 0 items |
+| `/api/v1/teams` | 200, 0 items |
+
+**The suppression is not about being logged out.** A fully authenticated team member gets the same
+canned empty collections and the same failing control as a stranger, which rules out the reading
+that this is a visibility setting or an edge rule aimed at anonymous traffic. It also settles the
+practical question: **an account does not make this arena readable**, so the calibration the map
+planned against it cannot happen here today, and the practice window closes 22 Sep 00:00 SGT.
+
+It does not separate `locked` from the layer — an authenticated non-admin is shown nothing under
+either — so the Challenges' state stays undetermined.
+
+#### Participant enumeration is suppressed by something that is not CTFd's config
+
+The empty scoreboard noted above is the visible corner of a larger one. On this board
+`/api/v1/teams`, `/api/v1/users`, `/api/v1/scoreboard` and `/api/v1/scoreboard/top/<n>` do not
+behave like CTFd 3.8's handlers at all:
+
+| Request | IN-CYPHER arena | Brunner, same CTFd generation |
+| --- | --- | --- |
+| `/api/v1/teams` | `{"success": true, "data": []}`, no `meta` | `meta.pagination`, 1521 teams |
+| `/api/v1/teams?field=bogusfield&q=a` | 200, the same empty body | **400** from `validate_args` |
+| `/api/v1/teams/4` | **404** | 200 |
+| `/api/v1/scoreboard/top/10` | **404** | 200 |
+
+One contradiction is internal and needs no control: `/api/v1/challenges/8/solves` lists team 4 by
+name, and `get_solves_for_challenge_id` filters `banned` and `hidden` accounts *out* — while
+`TeamPublic.get` 404s for a banned or hidden team — and, being `first_or_404()`, for an id that
+does not exist at all, so it is not *only* those two. Team 4 demonstrably exists, which is what
+makes it a contradiction.
+`TeamList` returns a `PaginatedAPIListSuccessResponse` unconditionally, so a body carrying no
+`meta` is not its output either. The application is up behind the same prefixes —
+`/api/v1/challenges/types` and `/api/v1/teams/me` answer with CTFd's own 403 — and both
+`account_visibility` and `score_visibility` are **public**, because `ChallengeSolves.get` carries
+both guards and answers 200.
+
+The cause is not determinable from outside: an edge rule, a plugin and a fork all fit. The
+consequence is what binds the Solver — **on this board `{"success": true, "data": []}` is not
+evidence of an empty collection.** It arrives with `success: true`, the right `Content-Type`, no
+redirect and no 403: every shape a client would read as an honest answer. **When it started is
+not established.** It is tempting to read the empty scoreboard of 21 Aug as the same effect and
+conclude this is not a competition-week regression — but `/api/v1/challenges` is a collection
+endpoint too and it carried two real Challenges that day, so the suppression was either absent then
+or was never uniform across collections. Both readings fit, and nothing here separates them.
+
+[issue11]: https://github.com/jerome-queck/incypher-ctf/issues/11
+[issue12]: https://github.com/jerome-queck/incypher-ctf/issues/12
+[issue14]: https://github.com/jerome-queck/incypher-ctf/issues/14
+[issue59]: https://github.com/jerome-queck/incypher-ctf/issues/59
 
 **One finding here belongs to the credential posture, not to this ticket — and it is now
 settled.** How-to-play says "Every member can see the team key under **Settings → Access
@@ -201,7 +317,7 @@ board carries — in the logged-in hero block on the landing page, and under *Jo
 
 ```console
 $ curl -s https://discord.com/api/v10/invites/MKUvNVE5
-{"message": "Invite is expired.", "code": 50270}   # HTTP 404 — re-checked 21 Aug 2026
+{"message": "Invite is expired.", "code": 50270}   # HTTP 404 — re-checked 24 Aug 2026
 ```
 
 **Check it with the API, never by opening the URL.** `https://discord.com/invite/<code>` returns

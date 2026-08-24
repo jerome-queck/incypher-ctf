@@ -22,7 +22,7 @@ import datetime as dt
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 PASS, SKIP, FAIL = "pass", "skip", "fail"
 
@@ -176,6 +176,68 @@ def refuse_to_blame_the_token(board: Board, status: int) -> None:
         )
 
 
+def collection_endpoints_reach_ctfd(board: Board) -> bool:
+    """Whether a collection endpoint's reply was composed by CTFd, asked with a query it must refuse.
+
+    `field` is validated against an enumeration before any handler runs, so CTFd answers an unknown
+    one with a 400 naming the permitted values. A 200 to it cannot have come from CTFd, and a board
+    that agreeable is one whose empty collections mean nothing at all — the IN-CYPHER practice arena
+    answers every collection endpoint this way while `/api/v1/challenges/8/solves` returns real rows
+    ([ADR-0016](../docs/adr/0016-an-empty-list-is-not-an-empty-board.md)).
+
+    Any refusal counts as CTFd-shaped: the control is here to catch the reply that is too agreeable,
+    not to certify the stack behind a normal one.
+    """
+    status, _body, _reason = board.request("GET", "/api/v1/challenges?field=probe-is-not-a-field&q=a")
+    return status != 200
+
+
+def name_the_cause_of_an_empty_list(board: Board) -> NoReturn:
+    """Say which situation emptied the challenge list, because all of them answer the same JSON.
+
+    A 200 has already cleared the credential, and that is what makes the causes separable at all:
+    every way of *not being shown* the board is a non-200 — no token answers 302, a rejected one
+    401, a request without `Content-Type: application/json` 302, and the edge 403. So what is left
+    is the clock, the difference between a stranger's board and an account's, and a board that is
+    genuinely listing nothing. The message this replaced offered "auth degraded silently" as one
+    of two causes, which sends someone to rotate a token the response shape had already exonerated.
+    """
+    # Asked first, because it is prior to every cause below: the clock and the account are facts
+    # about a board that answered, and this is the question of whether the board answered at all.
+    if not collection_endpoints_reach_ctfd(board):
+        raise ProbeFailure(
+            "the empty list did not come from CTFd — this board also answers 200 to a query CTFd "
+            "rejects with a 400, so its collection endpoints are being composed by something else "
+            "and an empty one is evidence of nothing. Ask a known id directly "
+            "(GET /api/v1/challenges/<id>/solves) before believing anything this board lists"
+        )
+
+    opens, closes = board_window(board)
+    now = dt.datetime.now(dt.timezone.utc)
+    if opens and opens > now:
+        raise Unproven(
+            f"the board opens {opens.astimezone():%Y-%m-%d %H:%M %Z} — it lists nothing because it "
+            "has not started, and that is the clock rather than a fault"
+        )
+    if closes and closes < now:
+        raise Unproven(
+            f"the board closed {closes.astimezone():%Y-%m-%d %H:%M %Z} — it lists nothing because "
+            "the event is over, and that is the clock rather than a fault"
+        )
+    if not board.authenticated:
+        raise ProbeFailure(
+            "the board answered 200 and listed nothing to an anonymous reader — this is what a "
+            "stranger is shown, which is not what the Solver will be shown. Set CTFD_API_TOKEN "
+            "and re-run before recording the board as empty"
+        )
+    raise ProbeFailure(
+        "the board answered 200 and listed nothing to an authenticated account inside its own "
+        "event window — not a credential fault and not a login page. A Challenge withdrawn from "
+        "the list reads exactly like one that was never there, and still answers "
+        "GET /api/v1/challenges/<id>/solves; ask a known id before recording the board as empty"
+    )
+
+
 def check_edge_is_not_blocking(board: Board) -> str:
     """Cloudflare rejects a machine-looking client with a 403 indistinguishable from a bad token.
 
@@ -225,7 +287,7 @@ def check_challenges_enumerate(board: Board) -> tuple[str, list[dict[str, Any]]]
         )
     challenges = board.json("GET", "/api/v1/challenges")
     if not challenges:
-        raise ProbeFailure("the board listed zero challenges — either it has not opened, or auth degraded silently")
+        name_the_cause_of_an_empty_list(board)
     kinds = sorted({challenge.get("type", "?") for challenge in challenges})
     categories = sorted({challenge.get("category", "?") for challenge in challenges})
     return (

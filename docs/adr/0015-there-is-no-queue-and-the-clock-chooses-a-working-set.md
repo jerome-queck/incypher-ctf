@@ -1,5 +1,15 @@
 # There is no queue, and the clock chooses a working set
 
+> **Corrected in one claim by [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md)**, found
+> hours after this record merged. Order, the working set, Tier's one-way movement and every
+> rejected alternative below all stand. What is overtaken is the scoreboard Consequence's
+> *"costs one GET and no model"*: that was verified on Brunner and does not generalise, because a
+> Board can answer **200 with a canned empty body that never came from CTFd** — so a Board failing
+> ADR-0016's control contributes *no* scoreboard rather than zero rows. It reaches the ranking
+> function too, which this record did not anticipate: `solves` and `value` ride that same LIST
+> payload, so on such a Board those terms are not stale — they were never sent, and Order would
+> rank an empty set while reporting success.
+
 [#47](https://github.com/jerome-queck/incypher-ctf/issues/47) was chartered to settle where a cut
 Challenge lands and what recomputes the sequence. It inherited its own framing from
 [ADR-0009](0009-store-what-was-observed-derive-every-judgement.md) and
