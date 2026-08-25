@@ -21,8 +21,8 @@ path that waits for a human has no use at competition time.
 
 ## Getting it running
 
-*(The commands an agent could not have guessed. How the Solver itself is run waits on the
-competition's Agent Development Kit, released 14 September 2026. The checks below do not.)*
+*(The commands an agent could not have guessed. There is no run command yet — the image builds,
+but `solver/__main__.py` arrives with #74. The checks below never waited on it.)*
 
 **Neither tool this repository is linted and tested by is installed here.** `ruff` and `pytest`
 were settled in [#22](https://github.com/jerome-queck/incypher-ctf/issues/22), and `.github/workflows/ci.yml`
@@ -192,6 +192,8 @@ repository (ADR-0003), so every Dependabot bump is landed by hand on a green che
 
 ## Repository notes
 
-The competition-facing work — the Solver itself, its Dockerfile, the ADK integration — is
-deliberately out of scope for the scaffolding this file describes. It arrives once the ADK is
-released. The decisions that shaped this scaffolding are recorded in `docs/adr/` (0002–0004).
+The Solver is being built now, against
+[spec #63](https://github.com/jerome-queck/incypher-ctf/issues/63): `solver/` holds the `Board`
+seam and the root `Dockerfile` builds the image around it. The **ADK integration** is the one part
+still gated on an outside release — ADR-0008 expects it behind `Target` rather than `Board`, and
+names the kit's arrival as the date that expectation gets tested.
