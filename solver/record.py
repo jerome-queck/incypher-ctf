@@ -55,6 +55,38 @@ NEVER_REDACTED = ("flag",)
 OBSERVATIONS = "observations"
 CLAIMS = "claims"
 
+# Why an Attempt ended, and the whole of it — the vocabulary `CONTEXT.md` closes, given one home
+# here because this is where a cause becomes permanent. `cut:novely` reaching the stream is a typo
+# nothing goes red for, and it breaks the eval query that counts which counter fired.
+#
+# **Declared, never enforced.** ADR-0009 makes the record never fatal and never silent, so an
+# unrecognised cause at 14:00 is a bug at the call site rather than a reason to end a Run. What one
+# home buys is that the vocabulary cannot be invented twice.
+#
+# There is no `no-flag`: that is the *absence* of a cause rather than one, and naming it hides which
+# counter fired — the only thing calibration needs to know.
+FLAG = "flag"
+CUT_REPETITION = "cut:repetition"
+CUT_NOVELTY = "cut:novelty"
+CUT_STEP_CLIFF = "cut:step-cliff"
+CUT_BUDGET = "cut:budget"
+CUT_INSTANCE_EXPIRED = "cut:instance-expired"
+# ADR-0005's single narrow exception, in the list **because the aim is for it never to fire**: a
+# cause nobody records is a defect nobody can watch trending to zero.
+CUT_SELF_REPORTED_IMPOSSIBLE = "cut:self-reported-impossible"
+CRASHED = "crashed"
+
+CAUSES = (
+    FLAG,
+    CUT_REPETITION,
+    CUT_NOVELTY,
+    CUT_STEP_CLIFF,
+    CUT_BUDGET,
+    CUT_INSTANCE_EXPIRED,
+    CUT_SELF_REPORTED_IMPOSSIBLE,
+    CRASHED,
+)
+
 
 @dataclass(frozen=True)
 class Usage:
