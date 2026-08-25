@@ -31,6 +31,13 @@ out of the Step stream rather than out of the working directory. A rule that rea
 is a rule an offline replay cannot recompute, and replaying stored streams at other thresholds is
 the only calibration v1 will ever get.
 
+What that costs is named rather than hidden, and both directions of it. A transition a *new*
+command reveals — an archive extracted, a shell gained — mints nothing, so it buys no time and does
+not clear the tried list; and a command whose output is nondeterministic mints one every time it is
+re-run. The cap at K is what bounds the second, and the first is a Checkpoint we simply do not see.
+A rule that read the working directory would catch both and could never be replayed, which is the
+trade this makes.
+
 Every threshold is a **parameter**. None of them has been calibrated against a Board, and a
 constant is a number nobody can move on the day it turns out to be wrong.
 
@@ -209,7 +216,7 @@ class Watch:
     last: str = ""
     _answered: dict[str, tuple[int | None, str]] = field(default_factory=dict)
     _digests: set[str] = field(default_factory=set)
-    _repeats: int = 0
+    _repeats: dict[str, int] = field(default_factory=dict)
     _stale: int = 0
     _impossible: bool = False
 
@@ -255,7 +262,7 @@ class Watch:
         """
         if self._impossible:
             return CUT_SELF_REPORTED_IMPOSSIBLE
-        if self._repeats >= self.thresholds.repeats:
+        if max(self._repeats.values(), default=0) >= self.thresholds.repeats:
             return CUT_REPETITION
         if self._stale >= self.thresholds.novelty:
             return CUT_NOVELTY
@@ -273,8 +280,10 @@ class Watch:
         self._stale += 1
 
     def _repeat(self, key: str, exit_code: int | None, *, repeated: bool) -> None:
+        """Counted per command rather than as one tally, because the rule is *a* normalised command
+        already seen — five different commands each run twice is not one command looping."""
         if repeated:
-            self._repeats += 1
+            self._repeats[key] = self._repeats.get(key, 0) + 1
         self.tried = [entry for entry in self.tried if entry.command != key]
         self.tried.append(Tried(command=key, exit_code=exit_code))
 
@@ -291,7 +300,7 @@ class Watch:
         )
         self.checkpoints.append(checkpoint)
         self.tried = []
-        self._repeats = 0
+        self._repeats = {}
         self._stale = 0
         self.deadline.extend(self.thresholds.extension_seconds, cap=self.thresholds.extensions)
         return checkpoint
@@ -330,9 +339,12 @@ class Breaker:
         return CRASHED if self._barren[challenge] >= self.limit else ""
 
     def backoff(self) -> float:
-        """How long to wait before the next Attempt — zero until the barren streak has crossed from
-        one Challenge to another, which is what separates a broken Solver from a dead Target."""
-        spread = len(set(self._streak))
-        if spread < 2:
+        """How long to wait before the next Attempt.
+
+        Two different numbers, and conflating them is how a broken Solver cycling a two-Challenge
+        working set stays at the first step forever: the streak **crossing** from one Challenge to
+        another is what starts the backoff, and the length of the streak is what grows it.
+        """
+        if len(set(self._streak)) < 2:
             return 0.0
-        return min(self.cap_seconds, self.base_seconds * 2 ** (spread - 2))
+        return min(self.cap_seconds, self.base_seconds * 2 ** (len(self._streak) - 2))

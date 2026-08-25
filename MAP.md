@@ -15,7 +15,7 @@ Start here: `README.md`, then `AGENTS.md`.
 | Agent conventions | The routines an agent follows here, one file per topic | `docs/agents/` |
 | Competitions | The boards we play — a rules snapshot and the platform facts, one file per event | `docs/competitions/` |
 | Credentials | Every secret, where it comes from, and how it reaches the container | `docs/credentials.md` |
-| The Solver | The agent's own code — the seams it reaches the outside world through and the Instance path behind them, the deterministic cascade every Attempt opens with, the seam that hands an Attempt to the vendor's agent and watches its event stream, the stall call that ends an Attempt and the five things that cross into the next one, and the record it leaves behind: every Step, every Claim, every Observation, and the credentials taken out of all three | `solver/`, starting at `board.py` |
+| The Solver | The agent's own code — the seams it reaches the outside world through, the recon every Attempt opens with, the stall call that ends one, and the record it leaves behind | `solver/`, starting at `board.py` |
 | The image | The container the Solver ships as — the pinned base, the package list every recon step assumes, and the allowlist that keeps a secret out of a layer | `Dockerfile`, `.dockerignore` |
 | Scripts | Setup and pre-flight checks run by hand — the runtime this repo pins, the live board read through `solver/`, and which credentials this machine holds | `scripts/` |
 | Tests | What CI runs over `solver/` and `scripts/` — the seams that decide offline | `tests/`, configured in `pyproject.toml` |

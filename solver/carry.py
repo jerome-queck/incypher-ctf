@@ -43,6 +43,7 @@ DERIVED = "[derived]"
 # could arrive as a paragraph.
 LABEL_LIMIT = 80
 UNNAMED = "unnamed"
+NO_COMMAND = "none"
 
 # The field separator the line is read by, taken out of the label so a label cannot forge a field.
 FIELD = " · "
@@ -60,18 +61,25 @@ SECTIONS = (
 NOTHING_YET = "— nothing yet"
 
 
-def label(approach: str) -> str:
-    """The one model-authored field, cut to a field of a line.
+def trimmed(text: str, *, empty: str) -> str:
+    """One field of the line, cut to one field of one line.
 
-    Everything that could make it more than that is taken out: the provenance marker, so a label
-    cannot forge a derived line; the separator, so it cannot forge a field; and every newline, so
-    K Attempts cost K lines.
+    Applied to the approach label and to the last command alike. The label is model-authored and the
+    command was model-chosen, so both are text a model picked: everything that could make either
+    more than a field is taken out — the provenance marker, so neither can forge a derived record;
+    the separator, so neither can forge a field; and every newline, because a heredoc in a command
+    would cost the same bound the label does.
     """
-    bare = approach.replace(DERIVED, " ").replace(FIELD, " ").replace("·", " ")
+    bare = text.replace(DERIVED, " ").replace(FIELD, " ").replace("·", " ")
     said = " ".join(bare.split())
     if not said:
-        return UNNAMED
+        return empty
     return said if len(said) <= LABEL_LIMIT else said[: LABEL_LIMIT - 1].rstrip() + "…"
+
+
+def label(approach: str) -> str:
+    """The one model-authored field the boundary carries."""
+    return trimmed(approach, empty=UNNAMED)
 
 
 @dataclass(frozen=True)
@@ -85,6 +93,19 @@ class Line:
     cause: str
     last: str
 
+    @classmethod
+    def of(cls, watch: Watch, *, sequence: int, approach: str, cause: str) -> Line:
+        """One finished Attempt as its line — the facts read here rather than by whatever is
+        folding it in, because these are the fields this type is made of."""
+        return cls(
+            sequence=sequence,
+            approach=approach,
+            steps=watch.steps,
+            checkpoints=len(watch.checkpoints),
+            cause=cause,
+            last=watch.last,
+        )
+
     def render(self) -> str:
         return FIELD.join(
             [
@@ -93,7 +114,7 @@ class Line:
                 f"{self.steps} steps",
                 f"{self.checkpoints} checkpoints",
                 self.cause,
-                f"last: {label(self.last)}",
+                f"last: {trimmed(self.last, empty=NO_COMMAND)}",
             ]
         )
 
@@ -116,14 +137,7 @@ class Boundary:
         """Fold one finished Attempt in, and answer with the line it costs."""
         self.checkpoints += watch.checkpoints
         self.tried = list(watch.tried) if watch.checkpoints else _merged(self.tried, watch.tried)
-        line = Line(
-            sequence=len(self.lines) + 1,
-            approach=approach,
-            steps=watch.steps,
-            checkpoints=len(watch.checkpoints),
-            cause=cause,
-            last=watch.last,
-        )
+        line = Line.of(watch, sequence=len(self.lines) + 1, approach=approach, cause=cause)
         self.lines.append(line)
         return line
 

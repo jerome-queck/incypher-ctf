@@ -243,7 +243,7 @@ def run_attempt(
     root = Path(workdir).resolve()
     if Path(recorder.run_dir).resolve().is_relative_to(root):
         raise ValueError(f"the working directory {root} holds this Run's own record, which the model could rewrite")
-    watch = _Watch(
+    transcript = _Transcript(
         recorder=recorder,
         attempt_id=attempt_id,
         workdir=Path(workdir),
@@ -252,7 +252,7 @@ def run_attempt(
         launch=launch or _spawn,
         now=now or _utcnow,
     )
-    return watch.run(prompt, deadline, tuple(chain))
+    return transcript.run(prompt, deadline, tuple(chain))
 
 
 @dataclass
@@ -266,7 +266,7 @@ class _Flight:
 
 
 @dataclass
-class _Watch:
+class _Transcript:
     """One Attempt in flight: the Steps it has spent, the invocations it has made, and the one
     place a line of the vendor's stream becomes a record."""
 

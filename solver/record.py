@@ -229,6 +229,10 @@ class Recorder:
     ) -> None:
         """Close an Attempt with the **cause** that ended it, never an outcome.
 
+        `cause` is one of `CAUSES` above, and passing a string that is not one is a bug at the call
+        site rather than a reason to end a Run: this refuses nothing, because ADR-0009 makes the
+        record never fatal. `cut:novely` is the mistake the constants exist to stop.
+
         `no-flag` is the absence of a cause rather than one, and naming it hides which counter
         fired — which is the only thing calibration needs to know.
         """

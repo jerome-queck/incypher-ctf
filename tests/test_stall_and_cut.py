@@ -52,6 +52,17 @@ def test_the_vocabulary_has_no_no_flag_and_names_every_counter():
     }
 
 
+def test_repetition_is_counted_per_command_rather_than_as_one_tally():
+    """The rule is *a* normalised command already seen — three different commands each run twice is
+    three commands, not one looping."""
+    watch = watching(repeats=3)
+
+    for command in ("ls -la", "file note.txt", "cat note.txt"):
+        loop(watch, command, 2, digest=command)
+
+    assert watch.cause(NOON) == ""
+
+
 def test_a_command_that_answers_the_same_way_twice_is_repetition():
     watch = watching()
 
@@ -303,6 +314,18 @@ def test_barren_across_different_challenges_backs_off_and_the_backoff_is_capped(
     breaker.closed("misc-4", steps=0)
     breaker.closed("pwn-5", steps=0)
     assert breaker.backoff() == 120.0
+
+
+def test_the_streak_grows_the_backoff_even_when_the_working_set_is_two_challenges():
+    """The crossing is what starts it and the length is what grows it. A Solver cycling two
+    Challenges is exactly as broken on the tenth barren Attempt as on the twentieth, and one that
+    stayed at the first step forever would burn the quota window at full speed."""
+    breaker = Breaker(limit=99, base_seconds=30.0, cap_seconds=900.0)
+
+    for challenge in ("web-1", "crypto-2", "web-1", "crypto-2", "web-1"):
+        breaker.closed(challenge, steps=0)
+
+    assert breaker.backoff() == 240.0
 
 
 def test_one_challenge_failing_alone_is_not_the_solver_backing_off():
