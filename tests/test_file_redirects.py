@@ -7,8 +7,6 @@ exception must not cost: the file still arrives, the token does not travel with 
 redirect is still caught.
 """
 
-import urllib.error
-
 import pytest
 from solver.board import MAX_FILE_REDIRECTS, Board, BoardFailure
 
@@ -17,16 +15,12 @@ STORAGE = "https://nbg1.your-objectstorage.com/bucket/challenge.zip?X-Amz-Signat
 
 def board_following(*answers):
     """A board whose transport replays a scripted sequence of answers, one per request."""
-    board = Board("https://board.example/", "not-a-real-token")
     remaining = list(answers)
 
-    def answer(_method, path, *_args, **_kwargs):
-        board.asked.append(path)
+    def transport(_request):
         return remaining.pop(0)
 
-    board.asked = []
-    board.request = answer
-    return board
+    return Board("https://board.example/", "not-a-real-token", transport)
 
 
 def test_a_file_on_object_storage_is_fetched_and_its_host_reported():
@@ -42,16 +36,18 @@ def test_a_file_on_object_storage_is_fetched_and_its_host_reported():
 
 
 def test_the_board_token_is_not_forwarded_to_the_storage_host():
-    """The presigned URL carries its own credentials. Ours would be a gift to a stranger."""
-    board = Board("https://board.example", "a-real-looking-token")
+    """The presigned URL carries its own credentials. Ours would be a gift to a stranger.
+
+    Asserted against the real `urllib.request.Request` the transport is handed, because what is
+    on trial is the headers that would have gone on the wire.
+    """
     sent = []
 
-    class Recorder:
-        def open(self, request, timeout=None):
-            sent.append(request)
-            raise urllib.error.HTTPError(request.full_url, 200, "ok", {}, None)
+    def transport(request):
+        sent.append(request)
+        return 200, b"", ""
 
-    board._opener = Recorder()
+    board = Board("https://board.example", "a-real-looking-token", transport)
 
     board.request("GET", "/api/v1/challenges")
     board.request("GET", STORAGE)
