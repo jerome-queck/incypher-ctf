@@ -134,4 +134,43 @@ jobs:
       # Ten minutes is §5's bound rather than a fitted one: an uncached `--no-cache --pull` build
       # of this file measured 18 s.
       - name: docker build
-        run: docker build .
+        run: docker build -t solver:ci .
+
+      # The recon cascade, run in the image it will run in, over an artefact whose name lies. The
+      # Python job cannot prove this and never will: the machine it runs on has a package manager
+      # and `exiftool` already on it, so a cascade reaching for a tool the image does not install
+      # passes there and fails at 14:00 on competition day. `tests/test_recon_cascade.py` holds the
+      # branch table against the `Dockerfile`'s text, which is a proxy; this is the thing itself.
+      #
+      # It costs about a second on an image the step above has just built.
+      - name: the recon cascade runs inside the built image
+        run: |
+          docker run --rm -i --entrypoint python3 solver:ci - <<'PY'
+          import pathlib, zipfile
+          from solver.recon import recon
+          from solver.record import Recorder
+          from solver.redaction import Redactor
+
+          shed = pathlib.Path("/tmp/artefacts")
+          shed.mkdir()
+          png = bytes.fromhex("89504e470d0a1a0a") + b"\x00\x00\x00\rIHDR" + bytes(24)
+          # The name says text, the bytes say PNG. Dispatch is on the bytes.
+          (shed / "readme.txt").write_bytes(png)
+          with zipfile.ZipFile(shed / "challenge.zip", "w") as writing:
+              writing.writestr("inner/notes.md", "brunner{inside_the_archive}")
+
+          found = recon(
+              "The archive password is in the notes.",
+              sorted(shed.iterdir()),
+              flag_pattern=r"brunner\{[^}]*\}",
+              recorder=Recorder(pathlib.Path("/state"), run_id="ci", redactor=Redactor({})),
+              attempt_id="ci-1",
+          )
+          by_tool = {(probe.subject, probe.tool): probe.shown for probe in found.probes}
+
+          assert by_tool["readme.txt", "file"].strip() == "image/png", by_tool["readme.txt", "file"]
+          assert "ExifTool" in by_tool["readme.txt", "exiftool"], by_tool["readme.txt", "exiftool"]
+          assert "inner/notes.md" in by_tool["challenge.zip", "unzip"], by_tool["challenge.zip", "unzip"]
+          assert all(probe.shown.strip() for probe in found.probes), "a probe produced no Observation"
+          print(f"{len(found.probes)} probes, every one an Observation")
+          PY
