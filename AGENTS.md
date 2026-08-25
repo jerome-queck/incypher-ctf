@@ -21,9 +21,26 @@ path that waits for a human has no use at competition time.
 
 ## Getting it running
 
-*(The commands an agent could not have guessed — install, run, test, lint — and any constraint
-on where they may be run. Empty until the first Solver code, which is built against the
-competition's Agent Development Kit released 14 September 2026.)*
+*(The commands an agent could not have guessed. How the Solver itself is run waits on the
+competition's Agent Development Kit, released 14 September 2026. The checks below do not.)*
+
+**Neither tool this repository is linted and tested by is installed here.** `ruff` and `pytest`
+were settled in [#22](https://github.com/jerome-queck/incypher-ctf/issues/22), and `.github/workflows/ci.yml`
+installs them unversioned on the runner every run — deliberately, for the reason written beside
+that step. So `pyproject.toml` carries their settings and declares no dependency at all, and the
+tree reads as though the tools are here. Build them a throwaway virtualenv under `.cache/`, which
+is where their scratch already goes and is gitignored:
+
+```
+python3 -m venv .cache/venv && .cache/venv/bin/pip install -q ruff pytest
+.cache/venv/bin/ruff check . && .cache/venv/bin/ruff format --check . && .cache/venv/bin/pytest
+```
+
+They are CI-side tools and are in no image — ADR-0008's package list is CTF tooling, and nothing
+lints at 14:00 on competition day. **Two checks need no interpreter at all:**
+`sh conformance/check-conformance.sh .` and `sh conformance/check-trailers.sh main..HEAD`. Run
+both before you push, because the conformance workflow fires *after* the push — the same reason a
+caught credential is already burned (Conventions).
 
 To point the Solver at a board, run `bash scripts/setup-board.sh` — it walks the human-only steps
 (register, join the team, mint the CTFd token), writes `.env`, and proves the API path with
