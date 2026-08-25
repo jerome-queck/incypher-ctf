@@ -1,5 +1,17 @@
 # The subscription is the credential, and nothing waits for a human
 
+> **The declared set has an address, from [#61](https://github.com/jerome-queck/incypher-ctf/issues/61).**
+> Nothing below is reversed. This record requires a test asserting the redactor's declared set covers
+> *"every secret variable in `.env.example`"*, and that phrase has three answers: `^[A-Z_]+=` finds
+> four names, counting the commented-out overlay-only keys finds six, and neither is right, because
+> `CTFD_URL` is a variable and not a secret. **The two keys the obvious parser drops are the two that
+> spend money**, so the check would have passed while a Run leaked them. The set now lives in
+> [`scripts/declared_secrets.py`](../../scripts/declared_secrets.py) and the template is bound to it
+> by a test. **Only `scripts/credentials_held.py` reads it today** — the redactor and the boot check
+> below do not exist yet (both are post-ADK), and this banner records the address they are to use
+> rather than a wiring that is already in place. It is deliberately allowed to cover **more** than
+> the template declares, and never less.
+
 > **Superseded in part by [ADR-0011](0011-the-sanctioned-path-is-the-only-path.md).** The chain, the
 > quota arithmetic, the overlay rule, the environment allowlist and the refusal to bake a key all
 > stand. Three statements about the **Codex credential specifically** are overtaken: that a piped

@@ -24,6 +24,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
+import env_file
+
 PASS, SKIP, FAIL = "pass", "skip", "fail"
 
 # Enough for CTFd -> object storage and a storage-side hop. More than that is a loop,
@@ -344,14 +346,16 @@ def check_rate_limits_are_visible(board: Board) -> str:
 
 
 def load_env(path: Path) -> None:
+    """Put the file's assignments into the environment, without overriding what is already set.
+
+    What a line *means* is `env_file`'s, shared with the credential reporter — the two read the same
+    files and used to disagree about `export NAME=value`, which this one silently turned into a
+    variable called `export NAME` and so started the Solver without a credential the file held (#61).
+    """
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+    for key, value in env_file.assignments(path.read_text()).items():
+        os.environ.setdefault(key, value)
 
 
 def main() -> int:
