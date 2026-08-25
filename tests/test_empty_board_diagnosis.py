@@ -14,6 +14,7 @@ import ctfd_probe
 import pytest
 from solver.board import Board
 
+BOARD = "https://board.example"
 HOUR = dt.timedelta(hours=1)
 EMPTY_LIST = b'{"success": true, "data": []}'
 
@@ -27,11 +28,19 @@ def now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, token: str = "") -> Board:
-    """A board whose challenge list is empty and whose landing page publishes the given window.
+def transport_publishing(
+    opens: dt.datetime | None,
+    closes: dt.datetime | None,
+    control: tuple[int, bytes] = (400, BOGUS_FIELD_REJECTION),
+):
+    """A transport whose challenge list is empty and whose landing page publishes the given window.
 
     CTFd embeds the window in `window.init` on every HTML page, which is where `board_window`
     reads it and the only place a competitor can.
+
+    `control` defaults to CTFd's own refusal, because a fixture that answered 200 there would be a
+    board no CTFd install behaves like, and would quietly exempt every case below from the control
+    that runs ahead of them.
     """
     window = "".join(
         f"'{name}': {int(moment.timestamp())},"
@@ -39,20 +48,19 @@ def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, t
         if moment is not None
     )
     page = f"<script>window.init = {{{window}}}</script>".encode()
-    board = Board("https://board.example/", token)
 
-    def answer(_method: str, path: str, *_args, **_kwargs):
-        if path == "/":
+    def transport(request):
+        if request.full_url == f"{BOARD}/":
             return (200, page, "")
-        # CTFd validates `field` against an enumeration before any handler runs. A fixture that
-        # answered 200 here would be a board no CTFd install behaves like, and would quietly
-        # exempt every case below from the control that runs ahead of them.
-        if "field=" in path:
-            return (400, BOGUS_FIELD_REJECTION, "")
+        if "field=" in request.full_url:
+            return (*control, "")
         return (200, EMPTY_LIST, "")
 
-    board.request = answer
-    return board
+    return transport
+
+
+def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, token: str = "") -> Board:
+    return Board(BOARD, token, transport_publishing(opens, closes))
 
 
 # The four situations, built on call rather than held as values: a board fixed at import carries
@@ -139,11 +147,14 @@ def test_the_enumeration_check_routes_an_empty_list_through_the_diagnosis():
 
 def test_a_populated_board_is_still_summarised_rather_than_diagnosed():
     """The diagnosis is for the empty case only; a board with Challenges on it reports them."""
-    board = Board("https://board.example/", "a-real-token")
-    board.request = lambda *_args, **_kwargs: (
-        200,
-        b'{"success": true, "data": [{"id": 8, "type": "standard", "category": "(Practice) forensics"}]}',
-        "",
+    board = Board(
+        BOARD,
+        "a-real-token",
+        lambda _request: (
+            200,
+            b'{"success": true, "data": [{"id": 8, "type": "standard", "category": "(Practice) forensics"}]}',
+            "",
+        ),
     )
 
     summary, challenges = ctfd_probe.check_challenges_enumerate(board)
@@ -170,14 +181,11 @@ def board_answering_the_control(
     The window defaults to open-now, because most of these assertions are about the control alone.
     Passing one is how a test asks what happens when a second cause is *also* true.
     """
-    board = board_publishing(opens or now() - HOUR, closes or now() + HOUR, token=token)
-    listing = board.request
-
-    def answer(method: str, path: str, *args, **kwargs):
-        return (status, body, "") if "field=" in path else listing(method, path, *args, **kwargs)
-
-    board.request = answer
-    return board
+    return Board(
+        BOARD,
+        token,
+        transport_publishing(opens or now() - HOUR, closes or now() + HOUR, control=(status, body)),
+    )
 
 
 def test_a_board_that_accepts_an_invalid_field_is_not_answering_from_ctfd():
@@ -213,13 +221,11 @@ def test_a_board_that_refuses_the_invalid_field_is_diagnosed_on_its_own_terms(st
 def test_the_control_costs_nothing_on_a_board_that_lists_challenges():
     """It runs only where an empty list already arrived, so a working board never pays for it."""
     asked: list[str] = []
-    board = Board("https://board.example/", "a-real-token")
 
-    def answer(_method: str, path: str, *_args, **_kwargs):
-        asked.append(path)
+    def transport(request):
+        asked.append(request.full_url)
         return (200, b'{"success": true, "data": [{"id": 8, "type": "standard", "category": "web"}]}', "")
 
-    board.request = answer
-    ctfd_probe.check_challenges_enumerate(board)
+    ctfd_probe.check_challenges_enumerate(Board(BOARD, "a-real-token", transport))
 
-    assert not [path for path in asked if "field=" in path]
+    assert not [url for url in asked if "field=" in url]

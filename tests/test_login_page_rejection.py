@@ -13,14 +13,12 @@ LOGIN_PAGE = b"<!DOCTYPE HTML>\n<HTML><head><title>Login</title></head><body>Log
 
 
 def board_answering(status, payload, location=""):
-    """A board whose transport is stubbed at `request`, its one edge to the network."""
-    board = Board("https://board.example/", "not-a-real-token")
+    """A board whose transport answers the same way whatever it is asked."""
 
-    def answer(*_args, **_kwargs):
+    def transport(_request):
         return status, payload, location
 
-    board.request = answer
-    return board
+    return Board("https://board.example/", "not-a-real-token", transport)
 
 
 def test_a_challenge_file_is_returned_as_bytes():

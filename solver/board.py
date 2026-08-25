@@ -16,6 +16,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 # Enough for CTFd -> object storage and a storage-side hop. More than that is a loop,
@@ -28,6 +29,12 @@ MAX_FILE_REDIRECTS = 4
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
 )
+
+
+# `Board`'s one edge to the network: it is handed a request with every transport rule already
+# applied, and answers with the status, the body and any `Location`. Injectable because that is
+# the honest place to stand a test — above it are this module's rules, below it is a socket.
+Transport = Callable[[urllib.request.Request], tuple[int, bytes, str]]
 
 
 class BoardFailure(Exception):
@@ -43,10 +50,10 @@ class Board:
     says why.
     """
 
-    def __init__(self, url: str, token: str) -> None:
+    def __init__(self, url: str, token: str, transport: Transport | None = None) -> None:
         self.url = url.rstrip("/")
         self._token = token
-        self._opener = urllib.request.build_opener(_NoRedirect)
+        self._transport = transport or _over_the_network()
 
     @property
     def authenticated(self) -> bool:
@@ -69,11 +76,7 @@ class Board:
         request.add_header("Accept", "application/json")
         if json_content_type:
             request.add_header("Content-Type", "application/json")
-        try:
-            with self._opener.open(request, timeout=30) as response:
-                return response.status, response.read(), response.headers.get("Location", "")
-        except urllib.error.HTTPError as error:
-            return error.code, error.read(), error.headers.get("Location", "")
+        return self._transport(request)
 
     def json(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         status, raw, location = self.request(method, path, body)
@@ -120,3 +123,22 @@ class Board:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):  # noqa: D102 - urllib hook
         return None
+
+
+def _over_the_network() -> Transport:
+    """The real transport: one no-redirect opener, reused for the life of a `Board`.
+
+    An `HTTPError` is an answer, not an accident — CTFd says 401, 403 and 404 through it — so it
+    is normalised into the same triple as a 200 rather than raised at a caller who would have to
+    know that urllib splits the status range in two.
+    """
+    opener = urllib.request.build_opener(_NoRedirect)
+
+    def fetch(request: urllib.request.Request) -> tuple[int, bytes, str]:
+        try:
+            with opener.open(request, timeout=30) as response:
+                return response.status, response.read(), response.headers.get("Location", "")
+        except urllib.error.HTTPError as error:
+            return error.code, error.read(), error.headers.get("Location", "")
+
+    return fetch
