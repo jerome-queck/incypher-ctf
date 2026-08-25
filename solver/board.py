@@ -51,6 +51,53 @@ LOCKED = "locked"
 ABSENT = "absent"
 UNREACHABLE = "unreachable"
 
+# Where a submitted Flag is graded, and the vocabulary CTFd grades it in. The status code is not the
+# verdict and never agrees with it: `correct` and `incorrect` both answer 200, the rate limiter
+# answers 429 and a paused Board 403, and every one of them carries the verdict in `data.status`.
+# The names are here rather than above this seam because they are CTFd's wire words — a caller that
+# had to know them would be a caller holding a wire format ADR-0008 puts here.
+ATTEMPT = "/api/v1/challenges/attempt"
+
+CORRECT = "correct"
+INCORRECT = "incorrect"
+ALREADY_SOLVED = "already_solved"
+RATE_LIMITED = "ratelimited"
+PAUSED = "paused"
+# Ours rather than CTFd's: the Board answered something no verdict could be read out of. It is not
+# `incorrect` — a Flag nobody graded must never be recorded as one that was graded wrong.
+UNREAD = "unread"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """How the Board graded one submitted Flag.
+
+    `http_status` is carried so a post-mortem can see what the wire said, and is never what the
+    verdict is read from: a wrong Flag answers 200 carrying `incorrect`, and a Solver reading the
+    status would record it as a solve.
+    """
+
+    outcome: str
+    message: str = ""
+    http_status: int = 0
+
+    @property
+    def correct(self) -> bool:
+        """Whether **this Flag** was right, which is a narrower thing than the Challenge being ours
+        (see `solved`) and is the only verdict that says anything about the string we sent."""
+        return self.outcome == CORRECT
+
+    @property
+    def solved(self) -> bool:
+        """Whether the Challenge is this team's now — so there is nothing left here to win.
+
+        `already_solved` says exactly that and says **nothing about the Flag**: Brunner answered a
+        deliberately wrong Flag against a solved Challenge with `already_solved` and the message
+        *"Incorrect but you already solved this"* (read live, 25 Aug 2026). A caller that treated the
+        two as one verdict would record a junk string as the Flag that solved a Challenge.
+        """
+        return self.outcome in (CORRECT, ALREADY_SOLVED)
+
 
 @dataclass(frozen=True)
 class Reply:
@@ -151,6 +198,24 @@ class Board:
         if not document.get("success", False):
             raise BoardFailure(f"{method} {path} answered success=false — {document}")
         return document["data"]
+
+    def submit(self, challenge_id: int | str, flag: str) -> Verdict:
+        """Submit one Flag, and answer with what the **body** said about it.
+
+        A transport fault is a `Verdict` rather than an exception for the same reason a
+        chall-manager fault is a name: the caller is spending a submission slot under a Board-wide
+        limiter, and an unhandled `URLError` there says "we do not know whether that was graded" as
+        a crash. `UNREAD` says it as an answer.
+        """
+        try:
+            status, raw, location = self.request("POST", ATTEMPT, {"challenge_id": challenge_id, "submission": flag})
+        except OSError as unreachable:
+            return Verdict(UNREAD, f"the submission never reached the Board — {unreachable}")
+        data = (_json_or_none(raw) or {}).get("data")
+        graded = data if isinstance(data, dict) else {}
+        if not (outcome := str(graded.get("status", ""))):
+            return Verdict(UNREAD, _answered("POST", ATTEMPT, status, location), status)
+        return Verdict(outcome, str(graded.get("message", "")), status)
 
     def deploy_instance(self, challenge_id: int | str) -> Reply:
         return self._instance_call("POST", "", {"challengeId": challenge_id})

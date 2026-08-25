@@ -255,6 +255,18 @@ mistaken for what happened (ADR-0005).
 _Avoid_: note, assertion, conclusion-as-fact — and not *observation*, which is the other half of
 the pair and deliberately a different word
 
+**Candidate**:
+A string that might be a Challenge's Flag, and **how strongly it is known** — which is the whole of
+what decides whether it may spend a submission slot. Four strengths, and the ordering between them
+is the policy: **reproduced** (the exact command that emitted it was replayed and the same string
+came back), **observed** (a real command's output carried it and the replay did not confirm it),
+**unverified** (no Observation carries it — the model said it and nothing else did), and **guessed**
+(an Observation did carry it, and then the Instance that minted it expired underneath it). A
+candidate is not a Flag until the Board says so; keeping the two words apart is what stops "we found
+the Flag" from meaning four different things.
+_Avoid_: found flag, the flag (before a verdict), guess — *guessed* is one of the four strengths
+rather than the word for all of them
+
 **Checkpoint**:
 An environment state change that can be re-verified by replaying a command: a shell that answers, a
 route that was 403 and is now 200, an archive that extracted, a crash that reproduces. A Checkpoint
