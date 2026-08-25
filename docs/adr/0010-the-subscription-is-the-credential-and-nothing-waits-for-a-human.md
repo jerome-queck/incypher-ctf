@@ -12,6 +12,17 @@
 > rather than a wiring that is already in place. It is deliberately allowed to cover **more** than
 > the template declares, and never less.
 
+> **The address moved when the redactor arrived, from
+> [#66](https://github.com/jerome-queck/incypher-ctf/issues/66).** The banner above still describes
+> the arrangement; only the file changed. The names are now
+> [`solver/credentials.py`](../../solver/credentials.py), because the redactor runs *inside* the
+> image and the image copies `solver/` and nothing else — a second list beside the container would
+> be a rule in two places, and the direction it would disagree in is a credential declared for the
+> reporter and not for the redactor. `scripts/declared_secrets.py` still exists and still exports
+> the set: what stayed there is the half that only makes sense in a checkout, since the template is
+> a repository file no container ever sees. The redactor is wired now, so *"only
+> `scripts/credentials_held.py` reads it today"* has expired; the boot check remains #74's.
+
 > **Superseded in part by [ADR-0011](0011-the-sanctioned-path-is-the-only-path.md).** The chain, the
 > quota arithmetic, the overlay rule, the environment allowlist and the refusal to bake a key all
 > stand. Three statements about the **Codex credential specifically** are overtaken: that a piped
