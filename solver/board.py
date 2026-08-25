@@ -12,6 +12,8 @@ Standard library only — this runs inside the Solver image, which has nothing i
 
 from __future__ import annotations
 
+import datetime as dt
+import itertools
 import json
 import urllib.error
 import urllib.parse
@@ -54,13 +56,16 @@ UNREACHABLE = "unreachable"
 class Reply:
     """What one call on the Instance resource answered.
 
+    `until` arrives as a moment rather than as the RFC3339 the plugin wrote, because repairing that
+    text is exactly the wire format this module exists to stop at its own edge.
+
     `detail` is the plugin's own message where it sent one, because the Solver writes it into the
     record and a shape without the sentence that produced it is unreviewable afterwards.
     """
 
     outcome: str
     connection_info: str = ""
-    until: str = ""
+    until: dt.datetime | None = None
     detail: str = ""
 
 
@@ -139,11 +144,10 @@ class Board:
     def json(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         status, raw, location = self.request(method, path, body)
         if status != 200:
-            raise BoardFailure(f"{method} {path} answered {status}" + (f" → {location}" if location else ""))
-        try:
-            document = json.loads(raw)
-        except json.JSONDecodeError:
-            raise BoardFailure(f"{method} {path} answered 200 but not JSON — {raw[:120]!r}") from None
+            raise BoardFailure(_answered(method, path, status, location))
+        document = _json_or_none(raw)
+        if document is None:
+            raise BoardFailure(f"{method} {path} answered 200 but not JSON — {raw[:120]!r}")
         if not document.get("success", False):
             raise BoardFailure(f"{method} {path} answered success=false — {document}")
         return document["data"]
@@ -155,10 +159,15 @@ class Board:
         return self._instance_call("GET", f"?challengeId={challenge_id}")
 
     def renew_instance(self, challenge_id: int | str) -> Reply:
-        return self._instance_call("PATCH", f"?challengeId={challenge_id}")
+        return self._instance_call("PATCH", f"?challengeId={challenge_id}", {"challengeId": challenge_id})
 
     def terminate_instance(self, challenge_id: int | str) -> Reply:
-        return self._instance_call("DELETE", f"?challengeId={challenge_id}")
+        # The id goes in the query *and* in a body. The one source-read of the plugin has the
+        # deploy taking a JSON body, the read taking a query string, and the terminate taking a
+        # body ([#38](https://github.com/jerome-queck/incypher-ctf/issues/38)) — and no board we
+        # hold a token for has a `dynamic_iac` Challenge to re-verify that against. Sending both
+        # costs a line; sending the wrong one costs every terminate, and so every leak sweep.
+        return self._instance_call("DELETE", f"?challengeId={challenge_id}", {"challengeId": challenge_id})
 
     def mana(self) -> Mana:
         """Read once and branched on rather than tracked (ADR-0007).
@@ -179,7 +188,7 @@ class Board:
         """
         status, raw, location = self.request("GET", INSTANCE_LEDGER)
         if status != 200:
-            raise BoardFailure(f"the instance ledger answered {status}" + (f" \u2192 {location}" if location else ""))
+            raise BoardFailure(_answered("GET", INSTANCE_LEDGER, status, location))
         rows = _LedgerTable.rows_of(raw.decode("utf-8", "replace"))
         if rows is None:
             raise BoardFailure("the instance ledger carried no table — a login page reads as an empty ledger")
@@ -187,7 +196,7 @@ class Board:
 
     def _instance_call(self, method: str, query: str, body: dict[str, Any] | None = None) -> Reply:
         outcome, data, detail = self._plugin_call(method, f"{CHALL_MANAGER}/instance{query}", body)
-        return Reply(outcome, str(data.get("connectionInfo", "")), str(data.get("until", "") or ""), detail)
+        return Reply(outcome, str(data.get("connectionInfo", "")), _moment(str(data.get("until", "") or "")), detail)
 
     def _plugin_call(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[str, dict, str]:
         """One chall-manager call, answered as a name.
@@ -207,11 +216,7 @@ class Board:
             # The plugin sends its refusals as JSON and its lock as an empty body, so the status is
             # what names them and the message is only ever what the record quotes afterwards.
             named = {403: REFUSED, 429: LOCKED, 404: ABSENT}.get(status, UNREACHABLE)
-            return (
-                named,
-                {},
-                message or f"{method} {path} answered {status}" + (f" \u2192 {location}" if location else ""),
-            )
+            return named, {}, message or _answered(method, path, status, location)
         if not document:
             return UNREACHABLE, {}, f"{method} {path} answered 200 but not JSON — {raw[:120]!r}"
         return (ANSWERED if document.get("success") else DENIED), data, message
@@ -313,6 +318,32 @@ class _LedgerTable(HTMLParser):
             if self._row:
                 self.rows.append(self._row)
             self._row = None
+
+
+def _answered(method: str, path: str, status: int, location: str) -> str:
+    """One sentence for a board that answered something other than the 200 the caller wanted, with
+    the destination where there was one — a bare status hides that this was a redirect to /login."""
+    return f"{method} {path} answered {status}" + (f" → {location}" if location else "")
+
+
+def _moment(until: str) -> dt.datetime | None:
+    """chall-manager's `until`, which is RFC3339 written by Go and so may carry more fractional
+    digits than `fromisoformat` accepts.
+
+    A timestamp that cannot be read is **no deadline** rather than a wrong one: the Attempt's own
+    budget then decides, which is early but never late.
+    """
+    if not until:
+        return None
+    text = until.replace("Z", "+00:00")
+    if "." in text:
+        head, _, rest = text.partition(".")
+        digits = "".join(itertools.takewhile(str.isdigit, rest))
+        text = f"{head}.{digits[:6]}{rest[len(digits) :]}"
+    try:
+        return dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _json_or_none(raw: bytes) -> dict[str, Any] | None:

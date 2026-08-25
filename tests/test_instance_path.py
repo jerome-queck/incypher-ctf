@@ -14,6 +14,8 @@ import datetime as dt
 import json
 
 import pytest
+from solver import board as board_module
+from solver import instance as instance_module
 from solver.board import Board
 from solver.instance import (
     CHALL_MANAGER_DOWN_AT_SUBMIT,
@@ -35,6 +37,13 @@ from solver.instance import (
 )
 from solver.record import Recorder
 from solver.redaction import Redactor
+
+
+def _kebab(name: str) -> str:
+    """A shape constant is one whose value is its own name, so `MARK` and `INSTANCED_TYPE` are not
+    shapes and a shape left out of the tuple is not a constant nobody notices."""
+    return name.lower().replace("_", "-")
+
 
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
 INSTANCE = "/api/v1/plugins/ctfd-chall-manager/instance"
@@ -233,7 +242,9 @@ def test_the_forbidden_is_disambiguated_by_the_flag_we_already_hold_before_any_m
     assert wire.times_asked(f"GET {MANA}") == 0
 
 
-def test_a_shared_challenge_an_admin_has_deployed_is_used_and_never_managed(recorder):
+def test_a_shared_challenge_an_admin_has_deployed_is_a_never_rather_than_a_not_yet(recorder):
+    """Both names mean ineligible; they mean it for opposite reasons, and whoever picks the next
+    Challenge needs the difference."""
     wire = Wire(
         **{
             f"POST {INSTANCE}": [(403, MANA_EXHAUSTED, "")],
@@ -243,9 +254,8 @@ def test_a_shared_challenge_an_admin_has_deployed_is_used_and_never_managed(reco
 
     answer = instances_of(wire, recorder).deploy(Terms.of({**INSTANCED, "shared": True}), attempt_id="a1")
 
-    assert answer.shape == DEPLOY_REFUSED_SHARED
-    assert answer.lease.connection_info == "https://a.example"
-    assert not answer.lease.ours, "POST, PATCH and DELETE all fail for us on a shared Challenge"
+    assert (answer.shape, answer.lease) == (DEPLOY_REFUSED_SHARED, None)
+    assert "https://a.example" in answer.shown, "the record keeps the address it may not manage"
 
 
 def test_mana_genuinely_short_is_named_from_exactly_one_read(recorder):
@@ -379,6 +389,36 @@ def test_a_held_instance_the_board_never_listed_is_reported_rather_than_dropped(
     assert "A Challenge Renamed Yesterday" in swept.shown
 
 
+def test_a_liveness_read_that_failed_is_never_reported_as_alive(recorder):
+    """The read is bought by a cause and a cause buys exactly one, so a reply that establishes
+    neither has to say so — answering "alive" would answer with the one thing it cannot show."""
+    wire = Wire(
+        **{
+            f"POST {INSTANCE}": [answered(connectionInfo="nc a 1", until="2026-09-22T12:20:00Z")],
+            f"GET {INSTANCE}": [(500, b"", "")],
+        }
+    )
+    instances = instances_of(wire, recorder)
+    lease = instances.deploy(Terms.of(INSTANCED), attempt_id="a1").lease
+
+    answer = instances.liveness(lease, attempt_id="a1", because="nc a 1: connection refused")
+
+    assert answer.shape == ""
+    assert "not established" in answer.shown
+    assert wire.times_asked(f"GET {INSTANCE}") == 1
+
+
+def test_a_terminate_the_lock_refused_is_never_swept_up_as_released(recorder):
+    """Trap 4 again, and its likeliest trigger: the per-team lock 429s a DELETE immediately, and a
+    sweep issues them back to back. A leak recorded as reclaimed is capacity lost for the Run."""
+    wire = Wire(**{f"GET {LEDGER_PAGE}": [ledger_of("Silent Skies")], f"DELETE {INSTANCE}": [(429, b"", "")]})
+
+    swept = instances_of(wire, recorder).sweep(attempt_id="a1", keeping=None, known={"Silent Skies": 42})
+
+    assert (swept.terminated, swept.still_held) == ((), ("Silent Skies",))
+    assert "still held" in swept.shown
+
+
 def test_the_two_submission_messages_are_named_apart():
     """A late Flag grades `incorrect` and spends a slot of the Board-wide budget, so which of the
     two happened is the difference between our clock being wrong and the platform being down."""
@@ -390,9 +430,20 @@ def test_the_two_submission_messages_are_named_apart():
     assert submission_shape({"status": "incorrect", "message": "Incorrect"}) == ""
 
 
-def test_the_vocabulary_is_closed(recorder):
+def test_the_vocabulary_is_closed():
+    """Closed means the tuple and the constants cannot drift apart: a shape added as a constant and
+    not to the tuple is a failure that reaches the orchestrator unnamed after all."""
+    # The Board's own outcome names are the same shape and are imported rather than declared here,
+    # so they are subtracted rather than matched around.
+    imported = set(vars(board_module))
+    declared = {
+        value
+        for name, value in vars(instance_module).items()
+        if name not in imported and isinstance(value, str) and value == _kebab(name)
+    }
+
+    assert set(FAILURE_SHAPES) == declared
     assert len(FAILURE_SHAPES) == 10
-    assert INSTANCE_EXPIRED_AT_SUBMIT in FAILURE_SHAPES
 
 
 def test_every_operation_leaves_a_named_observation_in_the_stream(recorder):

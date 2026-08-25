@@ -7,6 +7,7 @@ them, so nothing above it ever branches on a status code
 ([ADR-0008](../docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
 """
 
+import datetime as dt
 import json
 import urllib.error
 
@@ -83,7 +84,53 @@ def test_a_deploy_that_worked_carries_the_address_and_the_deadline():
 
     assert reply.outcome == ANSWERED
     assert reply.connection_info == "nc 10.0.0.1 1337"
-    assert reply.until == "2026-08-25T10:00:00Z"
+    assert reply.until == dt.datetime(2026, 8, 25, 10, 0, tzinfo=dt.timezone.utc)
+
+
+def test_a_deadline_is_a_moment_by_the_time_it_leaves_this_module():
+    """Go writes RFC3339 with nanoseconds, which `fromisoformat` will not take. Repairing that text
+    is the wire format, and the wire format stops here."""
+    board = board_of(
+        {
+            ("POST", "/api/v1/plugins/ctfd-chall-manager/instance"): (
+                200,
+                json.dumps({"success": True, "data": {"until": "2026-08-25T10:00:00.123456789Z"}}).encode(),
+                "",
+            )
+        }
+    )
+
+    assert board.deploy_instance(42).until == dt.datetime(2026, 8, 25, 10, 0, 0, 123456, tzinfo=dt.timezone.utc)
+
+
+def test_a_deadline_the_board_wrote_unreadably_is_no_deadline_rather_than_a_wrong_one():
+    board = board_of(
+        {
+            ("POST", "/api/v1/plugins/ctfd-chall-manager/instance"): (
+                200,
+                json.dumps({"success": True, "data": {"until": "whenever"}}).encode(),
+                "",
+            )
+        }
+    )
+
+    assert board.deploy_instance(42).until is None
+
+
+def test_a_terminate_carries_the_challenge_in_the_query_and_in_a_body():
+    """The one source-read of the plugin has the deploy taking a JSON body, the read taking a query
+    string and the terminate taking a body, and no board we hold a token for has an instanced
+    Challenge to re-verify it against. Sending both is a line; sending the wrong one is every
+    terminate, and so every leak sweep."""
+    calls = []
+    board = board_of(
+        {("DELETE", "/api/v1/plugins/ctfd-chall-manager/instance?challengeId=42"): (200, b'{"success": true}', "")},
+        calls,
+    )
+
+    board.terminate_instance(42)
+
+    assert json.loads(calls[0][2]) == {"challengeId": 42}
 
 
 def test_a_deploy_names_the_challenge_in_a_json_body():
@@ -181,17 +228,10 @@ def test_renewing_patches_the_instance_resource():
 
 
 def test_the_ledger_answers_with_records_and_never_with_html():
-    board = board_of({("GET", "/plugins/ctfd-chall-manager/instances"): (200, LEDGER.encode(), "")})
-
-    held = board.instances_held()
-
-    assert [record.challenge_name for record in held] == ["Silent Skies", "Vital Signs"]
-
-
-def test_a_heading_is_the_tag_that_opened_the_cell_and_never_the_one_that_closed_it():
-    """The plugin's own template opens every heading `<th>` and closes it `</td>`. Trusting the
-    closing tag finds no headings, and a page that could not be read reported as an empty ledger is
-    the one reading that leaves a leaked Instance held for the rest of the Run."""
+    """A heading is the tag that *opened* the cell: the plugin's own template opens every heading
+    `<th>` and closes it `</td>`. Trusting the closing tag finds no headings at all, and a page that
+    could not be read reported as an empty ledger is the one reading that leaves a leaked Instance
+    held for the rest of the Run."""
     board = board_of({("GET", "/plugins/ctfd-chall-manager/instances"): (200, LEDGER.encode(), "")})
 
     assert [record.challenge_name for record in board.instances_held()] == ["Silent Skies", "Vital Signs"]

@@ -277,6 +277,8 @@ def check_instance_lifecycle(board: Board, challenges: list[dict[str, Any]]) -> 
         if renewed.shape:
             raise ProbeFailure(f"the renew answered {renewed.shape}: {renewed.shown}")
     finally:
+        # In a `finally` because a probe that failed halfway is exactly the run that must not leave
+        # an Instance behind: chall-manager never evicts, so a leak here costs capacity all day.
         released = instances.terminate(terms.challenge_id, attempt_id="ctfd-probe")
 
     still_held = [record.challenge_name for record in board.instances_held()]
@@ -293,9 +295,10 @@ def check_instance_lifecycle(board: Board, challenges: list[dict[str, Any]]) -> 
 
 def _probe_recorder() -> Recorder:
     """The Instance path records Steps like everything else, so the probe gives it somewhere to
-    write. `.cache/` is the repository's disposable scratch and is gitignored, which is what makes
-    a record left behind here readable afterwards and never committed."""
-    return Recorder(REPO_ROOT / ".cache" / "probe-state", "ctfd-probe", Redactor.for_declared_secrets(os.environ))
+    write — `state/`, which is where every Run's stream goes and is gitignored (`MAP.md`). The run
+    id is fixed, so a re-run appends to the same stream rather than scattering one file per probe.
+    """
+    return Recorder(REPO_ROOT / "state", "ctfd-probe", redactor=Redactor.for_declared_secrets(os.environ))
 
 
 def check_rate_limits_are_visible(board: Board) -> str:

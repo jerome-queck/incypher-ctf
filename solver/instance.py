@@ -35,15 +35,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from solver.board import ABSENT, ANSWERED, DENIED, LOCKED, REFUSED, Board, Mana, Reply
-from solver.record import Recorder, Usage
+from solver.record import NO_MODEL, Recorder
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
 # gives: a reader of a stream can tell what the Solver said from what a tool said, and never takes
 # one of these for a shell command they could replay.
 MARK = "[instance]"
-
-# Nothing here invokes a model, so every Step it records names none. The empty name is the fact.
-NO_MODEL = Usage(model="")
 
 # Hardcoded in the plugin's SQLAlchemy `polymorphic_identity`, so it is baked into the database
 # rows and an organiser cannot rename it without forking. Anything else falls to the default branch
@@ -155,9 +152,6 @@ class Lease:
     until: dt.datetime | None
     terms: Terms
     reserves: Reserves = field(default_factory=Reserves)
-    # False for an Instance the admins deployed on a `shared` Challenge: we may connect to it, and
-    # POST, PATCH and DELETE all fail for us, so it is not ours to renew or to release.
-    ours: bool = True
 
     def attempt_deadline(self, budget_deadline: dt.datetime) -> dt.datetime:
         """The earlier of the Attempt's own budget and what the Instance leaves us, minus the
@@ -174,30 +168,36 @@ class Lease:
         margin = self.reserves.submission_seconds + self.reserves.renew_round_trip_seconds
         return (self.until - now).total_seconds() <= margin
 
-    def expired(self, now: dt.datetime) -> bool:
-        return self.until is not None and now >= self.until
-
 
 @dataclass(frozen=True)
 class Answer:
     """What one operation on this path did: the Lease if we now hold one, the shape if something
-    has to be named, and the Observation as the model is shown it."""
+    has to be named, and the Observation as the model is shown it.
+
+    `released` is a separate fact from either: a terminate that came back 429 names no shape and
+    hands back no Lease, and reading that as a release is how a leak is recorded as reclaimed.
+    """
 
     shape: str = ""
     lease: Lease | None = None
     shown: str = ""
+    released: bool = False
 
 
 @dataclass(frozen=True)
 class Swept:
-    """What a leak sweep reclaimed, and what it could not.
+    """What a leak sweep reclaimed, and what it did not.
 
-    `unresolved` is the ledger's own lossiness surfacing: it keys rows by challenge name and a
-    terminate takes an id, so a row nothing on the Board answers to is capacity that stays spent —
-    reported rather than dropped, because chall-manager never evicts.
+    Three outcomes rather than two, because the two failures want different responses and neither
+    may read as a release. `still_held` is a terminate the Board refused — the per-team lock 429s a
+    DELETE immediately, and back-to-back DELETEs in one sweep are the likeliest way to meet it, so
+    the next boundary comes back for it. `unresolved` is the ledger's own lossiness: it keys rows by
+    challenge name and a terminate takes an id, so a row nothing on the Board answers to is capacity
+    that stays spent. Both are reported rather than dropped, because chall-manager never evicts.
     """
 
     terminated: tuple[str, ...] = ()
+    still_held: tuple[str, ...] = ()
     unresolved: tuple[str, ...] = ()
     shown: str = ""
 
@@ -294,10 +294,14 @@ class Instances:
         """
         if not lease.terms.renewable:
             return self._answer("renew", "not renewed — the Challenge defines no timeout", attempt_id, lease=lease)
+        # Read before the call rather than after it: the `now` chall-manager used is the moment it
+        # processed the PATCH, so a clock sampled on the reply puts the deadline one round-trip
+        # later than the Board's own — which is the direction that submits a Flag after expiry.
+        asked_at = self._now()
         reply = self._board.renew_instance(lease.challenge_id)
         if reply.outcome == ANSWERED:
-            until = self._now() + dt.timedelta(seconds=int(lease.terms.timeout or 0))
-            renewed = Lease(lease.challenge_id, lease.connection_info, until, lease.terms, lease.reserves, lease.ours)
+            until = asked_at + dt.timedelta(seconds=int(lease.terms.timeout or 0))
+            renewed = Lease(lease.challenge_id, lease.connection_info, until, lease.terms, lease.reserves)
             return self._answer("renew", f"renewed until {until.isoformat()}", attempt_id, lease=renewed)
         if reply.outcome == ABSENT:
             return self._answer(
@@ -319,10 +323,14 @@ class Instances:
         if reply.outcome == ABSENT:
             shape = INSTANCE_DESTROYED_ON_FLAG if after_flag else ""
             return self._answer(
-                "terminate", f"{shape or 'released'} — there was no Instance to destroy", attempt_id, shape=shape
+                "terminate",
+                f"{shape or 'released'} — there was no Instance to destroy",
+                attempt_id,
+                shape=shape,
+                released=True,
             )
         if reply.outcome == ANSWERED:
-            return self._answer("terminate", f"released challenge {challenge_id}", attempt_id)
+            return self._answer("terminate", f"released challenge {challenge_id}", attempt_id, released=True)
         # Not a named shape and not fatal: the boundary sweep reads the ledger and comes back for
         # whatever this left behind, which is what makes terminate-on-cut survive its own failure.
         return self._answer(
@@ -337,13 +345,20 @@ class Instances:
         minute after it died. `because` is the command whose connection was refused, and it is
         required so that asking without a cause is not a thing this seam can express."""
         reply = self._board.read_instance(lease.challenge_id)
-        shape = INSTANCE_DIED_EARLY if reply.outcome == ABSENT else ""
+        if reply.outcome == ABSENT:
+            return self._answer(
+                "liveness", f"{INSTANCE_DIED_EARLY} — asked because {because}", attempt_id, shape=INSTANCE_DIED_EARLY
+            )
+        if reply.outcome == ANSWERED:
+            return self._answer("liveness", f"alive — asked because {because}", attempt_id, lease=lease)
+        # Neither alive nor dead. Saying "alive" here would answer the question the caller asked
+        # with the one thing this read cannot establish, and there is no second read: liveness is
+        # bought by a cause and a cause buys exactly one.
         return self._answer(
             "liveness",
-            f"{shape or 'alive'} — asked because {because}",
+            f"not established — the read was answered {reply.outcome}: {reply.detail}. Asked because {because}",
             attempt_id,
-            shape=shape,
-            lease=None if shape else lease,
+            lease=lease,
         )
 
     def sweep(self, *, attempt_id: str, keeping: str | None, known: Mapping[str, int | str]) -> Swept:
@@ -357,18 +372,26 @@ class Instances:
         Intake already holds, and turns those names back into the ids a terminate takes.
         """
         held = [record.challenge_name for record in self._board.instances_held()]
-        leaked = [name for name in held if name != keeping]
-        terminated, unresolved = [], []
-        for name in leaked:
+        terminated, still_held, unresolved = [], [], []
+        for name in (name for name in held if name != keeping):
             if name not in known:
                 unresolved.append(name)
-                continue
-            self.terminate(known[name], attempt_id=attempt_id)
-            terminated.append(name)
-        told = f"the ledger holds {held or 'nothing'}; released {terminated or 'nothing'}" + (
-            f"; no id on the Board for {unresolved}" if unresolved else ""
+            elif self.terminate(known[name], attempt_id=attempt_id).released:
+                terminated.append(name)
+            else:
+                still_held.append(name)
+        told = (
+            f"the ledger holds {held or 'nothing'}; released {terminated or 'nothing'}"
+            + (f"; still held after a refused terminate: {still_held}" if still_held else "")
+            + (f"; no id on the Board for {unresolved}" if unresolved else "")
         )
-        return Swept(tuple(terminated), tuple(unresolved), self._record("sweep", told, attempt_id, ok=not unresolved))
+        left_behind = still_held + unresolved
+        return Swept(
+            tuple(terminated),
+            tuple(still_held),
+            tuple(unresolved),
+            self._record("sweep", told, attempt_id, ok=not left_behind),
+        )
 
     def _recover(self, terms: Terms, reply: Reply, attempt_id: str) -> Answer:
         """Trap 1 — a POST for a Challenge that already has an Instance answers **HTTP 200** with
@@ -417,23 +440,28 @@ class Instances:
 
     def _shared(self, terms: Terms, attempt_id: str) -> Answer:
         """Trap 3 — a `shared` Challenge is undeployable by us entirely: POST, PATCH *and* DELETE
-        fail. An admin deploys it, so the only useful question left is whether one is standing."""
+        all fail, and only an admin deploys one. They are ineligible either way; one read decides
+        which of the two names says so, because the two mean opposite things to whoever picks the
+        next Challenge — *never* against *not yet*."""
         standing = self._board.read_instance(terms.challenge_id)
         if standing.outcome == ANSWERED and standing.connection_info:
-            return self._leased("deploy", terms, standing, attempt_id, shape=DEPLOY_REFUSED_SHARED, ours=False)
+            return self._answer(
+                "deploy",
+                f"{DEPLOY_REFUSED_SHARED} — shared, and an admin's Instance is standing at "
+                f"{standing.connection_info}. Never ours to deploy, renew or release",
+                attempt_id,
+                shape=DEPLOY_REFUSED_SHARED,
+            )
         return self._answer(
             "deploy",
-            f"{SHARED_NOT_DEPLOYED} — shared, so ours to use and never to deploy, and none is standing",
+            f"{SHARED_NOT_DEPLOYED} — shared, and none is standing; an admin may yet deploy one",
             attempt_id,
             shape=SHARED_NOT_DEPLOYED,
         )
 
-    def _leased(
-        self, tool: str, terms: Terms, reply: Reply, attempt_id: str, *, shape: str = "", ours: bool = True
-    ) -> Answer:
-        until = _moment(reply.until)
-        lease = Lease(terms.challenge_id, reply.connection_info, until, terms, self._reserves, ours)
-        deadline = until.isoformat() if until else "no deadline the Board would state"
+    def _leased(self, tool: str, terms: Terms, reply: Reply, attempt_id: str, *, shape: str = "") -> Answer:
+        lease = Lease(terms.challenge_id, reply.connection_info, reply.until, terms, self._reserves)
+        deadline = reply.until.isoformat() if reply.until else "no deadline the Board would state"
         return self._answer(
             tool,
             f"{shape or 'deployed'} at {reply.connection_info} until {deadline}",
@@ -442,8 +470,20 @@ class Instances:
             lease=lease,
         )
 
-    def _answer(self, tool: str, told: str, attempt_id: str, *, shape: str = "", lease: Lease | None = None) -> Answer:
-        return Answer(shape, lease, self._record(tool, told, attempt_id, ok=not shape or lease is not None))
+    def _answer(
+        self,
+        tool: str,
+        told: str,
+        attempt_id: str,
+        *,
+        shape: str = "",
+        lease: Lease | None = None,
+        released: bool = False,
+    ) -> Answer:
+        # A Step's exit code is the operation's own verdict: it came away with what it asked for —
+        # a Lease, a release, or nothing that had to be named — or it did not.
+        went_well = lease is not None or released or not shape
+        return Answer(shape, lease, self._record(tool, told, attempt_id, ok=went_well), released)
 
     def _record(self, tool: str, told: str, attempt_id: str, *, ok: bool) -> str:
         """One Step per operation, as a `step-begin` / `step-end` pair like any other — a deploy
@@ -456,20 +496,3 @@ class Instances:
             tool=tool,
         )
         return step.end(exit_code=0 if ok else 1, output=f"{MARK} {told}".encode(), usage=NO_MODEL).shown
-
-
-def _moment(until: str) -> dt.datetime | None:
-    """chall-manager's `until`, which is RFC3339 and may carry more fractional digits than
-    `fromisoformat` accepts. A timestamp we cannot read is no deadline rather than a wrong one:
-    the Attempt's own budget then decides, which is late but never early."""
-    if not until:
-        return None
-    text = until.replace("Z", "+00:00")
-    if "." in text:
-        head, _, rest = text.partition(".")
-        digits = "".join(itertools.takewhile(str.isdigit, rest))
-        text = f"{head}.{digits[:6]}{rest[len(digits) :]}"
-    try:
-        return dt.datetime.fromisoformat(text)
-    except ValueError:
-        return None

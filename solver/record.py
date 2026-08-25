@@ -62,6 +62,11 @@ class Usage:
     cache_write: int = 0
 
 
+# A Step that invoked no model still names one, and the empty name is the fact rather than a
+# placeholder — the deterministic cascade and the Instance path both spend Steps and no tokens.
+NO_MODEL = Usage(model="")
+
+
 class Step:
     """A Step in flight — the handle a `step-begin` returns, and the only route to its `step-end`.
 
