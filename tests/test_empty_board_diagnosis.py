@@ -12,6 +12,7 @@ import datetime as dt
 
 import ctfd_probe
 import pytest
+from solver.board import Board
 
 HOUR = dt.timedelta(hours=1)
 EMPTY_LIST = b'{"success": true, "data": []}'
@@ -26,7 +27,7 @@ def now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, token: str = "") -> ctfd_probe.Board:
+def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, token: str = "") -> Board:
     """A board whose challenge list is empty and whose landing page publishes the given window.
 
     CTFd embeds the window in `window.init` on every HTML page, which is where `board_window`
@@ -38,7 +39,7 @@ def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, t
         if moment is not None
     )
     page = f"<script>window.init = {{{window}}}</script>".encode()
-    board = ctfd_probe.Board("https://board.example/", token)
+    board = Board("https://board.example/", token)
 
     def answer(_method: str, path: str, *_args, **_kwargs):
         if path == "/":
@@ -58,19 +59,19 @@ def board_publishing(opens: dt.datetime | None, closes: dt.datetime | None, *, t
 # the clock reading of collection time, which is not the one the assertion is about.
 
 
-def not_yet_open() -> ctfd_probe.Board:
+def not_yet_open() -> Board:
     return board_publishing(now() + HOUR, now() + 100 * HOUR, token="a-real-token")
 
 
-def already_closed() -> ctfd_probe.Board:
+def already_closed() -> Board:
     return board_publishing(now() - 100 * HOUR, now() - HOUR, token="a-real-token")
 
 
-def open_to_a_stranger() -> ctfd_probe.Board:
+def open_to_a_stranger() -> Board:
     return board_publishing(now() - HOUR, now() + HOUR)
 
 
-def open_to_an_account() -> ctfd_probe.Board:
+def open_to_an_account() -> Board:
     return board_publishing(now() - HOUR, now() + HOUR, token="a-real-token")
 
 
@@ -138,7 +139,7 @@ def test_the_enumeration_check_routes_an_empty_list_through_the_diagnosis():
 
 def test_a_populated_board_is_still_summarised_rather_than_diagnosed():
     """The diagnosis is for the empty case only; a board with Challenges on it reports them."""
-    board = ctfd_probe.Board("https://board.example/", "a-real-token")
+    board = Board("https://board.example/", "a-real-token")
     board.request = lambda *_args, **_kwargs: (
         200,
         b'{"success": true, "data": [{"id": 8, "type": "standard", "category": "(Practice) forensics"}]}',
@@ -163,7 +164,7 @@ def board_answering_the_control(
     token: str = "a-real-token",
     opens: dt.datetime | None = None,
     closes: dt.datetime | None = None,
-) -> ctfd_probe.Board:
+) -> Board:
     """A board whose challenge list is empty and which answers the given status to the control.
 
     The window defaults to open-now, because most of these assertions are about the control alone.
@@ -212,7 +213,7 @@ def test_a_board_that_refuses_the_invalid_field_is_diagnosed_on_its_own_terms(st
 def test_the_control_costs_nothing_on_a_board_that_lists_challenges():
     """It runs only where an empty list already arrived, so a working board never pays for it."""
     asked: list[str] = []
-    board = ctfd_probe.Board("https://board.example/", "a-real-token")
+    board = Board("https://board.example/", "a-real-token")
 
     def answer(_method: str, path: str, *_args, **_kwargs):
         asked.append(path)
