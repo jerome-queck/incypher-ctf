@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
 PROBE_WRAPPER = r"brunner\{[^}]{1,64}\}"
 PROBE_COMMAND = f"printf '%s\\n' '{PROBE_FLAG}'"
-PROBE_ATTEMPT = "probe-attempt"
+PROBE_ATTEMPT = "ctfd-probe"
 
 # `python3 scripts/ctfd_probe.py` puts `scripts/` on the import path and not the repository root,
 # so the package this probe consumes has to be pointed at. Importing the seam rather than keeping
@@ -312,17 +312,17 @@ def check_instance_lifecycle(board: Board, challenges: list[dict[str, Any]]) -> 
 
     terms = Terms.of(board.json("GET", f"/api/v1/challenges/{instanced['id']}"))
     instances = Instances(board, _probe_recorder())
-    deployed = instances.deploy(terms, attempt_id="ctfd-probe")
+    deployed = instances.deploy(terms, attempt_id=PROBE_ATTEMPT)
     if deployed.lease is None:
         raise ProbeFailure(f"the deploy produced no Instance — {deployed.shape}: {deployed.shown}")
     try:
-        renewed = instances.renew(deployed.lease, attempt_id="ctfd-probe")
+        renewed = instances.renew(deployed.lease, attempt_id=PROBE_ATTEMPT)
         if renewed.shape:
             raise ProbeFailure(f"the renew answered {renewed.shape}: {renewed.shown}")
     finally:
         # In a `finally` because a probe that failed halfway is exactly the run that must not leave
         # an Instance behind: chall-manager never evicts, so a leak here costs capacity all day.
-        released = instances.terminate(terms.challenge_id, attempt_id="ctfd-probe")
+        released = instances.terminate(terms.challenge_id, attempt_id=PROBE_ATTEMPT)
 
     still_held = [record.challenge_name for record in board.instances_held()]
     if instanced["name"] in still_held:

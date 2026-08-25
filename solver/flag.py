@@ -73,16 +73,6 @@ REPLAY = "flag-replay"
 SUBMIT = "flag-submit"
 NEVER_SWEPT = (SWEEP, SUBMIT)
 
-# The line the Attempt's prompt carries, owned here because this module is what enforces it. A
-# transformation run as a tool call lands in real output, which turns *trust its arithmetic* into
-# *observe its arithmetic*; a transformation the model performs in its head produces a Claim, and a
-# Claim authorises nothing below.
-DERIVE_WITH_A_TOOL = (
-    "If a Flag has to be decoded, decrypted or assembled, run that transformation as a command so "
-    "its result lands in real output. A Flag you only write down is recorded unverified: nothing "
-    "you say authorises a submission, and a command's output is the only thing that does."
-)
-
 # Read in blocks so an Observation nothing bounded — `aggregated_output` from the vendor's stream is
 # whatever a command wrote — is never held whole in memory. A partial line is carried across the
 # boundary so a Flag straddling one is still matched, and the carry is bounded because output with
@@ -148,6 +138,12 @@ class Candidate:
     def authorised(self) -> bool:
         """Whether an Observation carried it — which is what a submission is allowed to rest on."""
         return self.strength in (REPRODUCED, OBSERVED)
+
+    @property
+    def rank(self) -> int:
+        """Where it sorts against the others: strongest first, which is the order slots are spent
+        in and the reason `STRENGTHS` is written as a sequence rather than as four constants."""
+        return STRENGTHS.index(self.strength)
 
 
 @dataclass(frozen=True)
@@ -247,8 +243,11 @@ def confusables(candidate: str) -> tuple[str, ...]:
     string* from the one an Observation carried, and this module submits nothing an Observation did
     not carry.
 
-    Deliberately not "anything non-ASCII". A Board is free to ship a Flag with an emoji in it, and
-    refusing that would be this guard costing a solve rather than saving one.
+    Deliberately not "anything non-ASCII", and deliberately not "anything that folds to ASCII"
+    either — the second would refuse `zephyr{caf\u00e9}` for the whole Run, which is this guard
+    costing a solve rather than saving one. What it looks for is a character *substituted* for an
+    ASCII one: another script's letter drawn identically, a compatibility form of an ASCII letter,
+    or something with no width at all. An accent is none of those, and neither is an emoji.
     """
     named = []
     for at, character in enumerate(candidate):
@@ -313,11 +312,11 @@ class Flags:
         swept = 0
         for command, ref in _observations(self._recorder.stream_path, attempt_id):
             swept += 1
-            for text in _matches(self._recorder.run_dir / ref, matcher):
+            for text in _in_body(self._recorder.run_dir / ref, matcher):
                 found.setdefault(text, Candidate(text, OBSERVED, command=command, ref=ref))
-        for text in (match for prose in said for match in _matched(prose.encode(), matcher)):
+        for text in (match for prose in said for match in _in_line(prose.encode(), matcher)):
             found.setdefault(text, Candidate(text, UNVERIFIED))
-        ordered = tuple(sorted(found.values(), key=lambda candidate: STRENGTHS.index(candidate.strength)))
+        ordered = tuple(sorted(found.values(), key=lambda candidate: candidate.rank))
         self._record(
             SWEEP,
             f"{MARK} sweep {self._pattern}",
@@ -350,10 +349,10 @@ class Flags:
         """
         graded: list[Graded] = []
         held: list[Candidate] = []
-        spent = 0
+        spent_here = 0
         for found in candidates:
             candidate = self._degraded(self._reproduced(found, attempt_id=attempt_id, workdir=workdir), lease)
-            if refusal := _refuses(candidate, slots, spent, last_call=last_call):
+            if refusal := _refuses(candidate, slots, spent_here, last_call=last_call):
                 held.append(candidate)
                 self._record(
                     SUBMIT, f"{MARK} hold {candidate.text}", f"{MARK} {refusal}".encode(), attempt_id, ok=False
@@ -361,9 +360,9 @@ class Flags:
                 continue
             answer = self._graded(candidate, attempt_id=attempt_id, challenge_id=challenge_id)
             graded.append(answer)
-            spent += 1
+            spent_here += 1
             if answer.verdict.solved:
-                self._release(lease, attempt_id=attempt_id)
+                self._release(challenge_id, lease, attempt_id=attempt_id)
                 return Outcome(True, candidate.text if answer.verdict.correct else "", tuple(graded), tuple(held))
         return Outcome(False, "", tuple(graded), tuple(held))
 
@@ -431,12 +430,17 @@ class Flags:
             self._sleep(waited)
         return waited
 
-    def _release(self, lease: Lease | None, *, attempt_id: str) -> None:
+    def _release(self, challenge_id: int | str, lease: Lease | None, *, attempt_id: str) -> None:
         """A correct Flag releases the Instance it was found on, and **a 404 is success** — the
         Challenge's own `destroy_on_flag` may have got there first. The whole rule lives in
-        `Instances.terminate`; what is here is that a solve is one of the moments it runs."""
+        `Instances.terminate`; what is here is that a solve is one of the moments it runs.
+
+        The Lease says *whether* one is held and the caller says *which Challenge*, so the id that
+        was submitted against is the id that is released — two sources for one Challenge is a
+        mismatched pair somebody eventually expresses.
+        """
         if lease is not None and self._instances is not None:
-            self._instances.terminate(lease.challenge_id, attempt_id=attempt_id, after_flag=True)
+            self._instances.terminate(challenge_id, attempt_id=attempt_id, after_flag=True)
 
     def _matcher(self) -> re.Pattern[bytes] | None:
         """The Board's own Flag wrapper, read from the profile and never hardcoded — so a Board we
@@ -459,19 +463,21 @@ class Flags:
         return step.end(exit_code=0 if ok else 1, output=output, usage=NO_MODEL).shown
 
 
-def _refuses(candidate: Candidate, slots: Slots, spent: int, *, last_call: bool) -> str:
+def _refuses(candidate: Candidate, slots: Slots, spent_here: int, *, last_call: bool) -> str:
     """Why this candidate may not be submitted right now, or the empty string where it may.
 
     The whole submission policy, in the order the checks have to run in. The guard is first because
     it is the one refusal that is about the candidate rather than about the budget: a homoglyph is
-    wrong however many attempts remain.
+    wrong however many attempts remain. It is also the one refusal `last_call` overrides outright —
+    a homoglyph submitted at the end of a Run spends a slot nothing else will ever use, where one
+    held back is a Flag the Solver found and never submitted.
     """
-    if wrong := confusables(candidate.text):
+    if not last_call and (wrong := confusables(candidate.text)):
         return f"the confusable-character guard held it back — {'; '.join(wrong)}"
     if slots.unlimited:
         return ""
     left = slots.left
-    if left is not None and left - spent <= 0:
+    if left is not None and left - spent_here <= 0:
         return f"the Board states {slots.max_attempts} attempt(s) and every one is spent"
     if candidate.strength == REPRODUCED or last_call:
         return ""
@@ -480,7 +486,7 @@ def _refuses(candidate: Candidate, slots: Slots, spent: int, *, last_call: bool)
             f"max_attempts is unknown, which is treated as limited — so every attempt could be the "
             f"last, and this candidate is {candidate.strength} rather than {REPRODUCED}"
         )
-    if left - spent <= 1:
+    if left - spent_here <= 1:
         return f"the last attempt is reserved for a {REPRODUCED} candidate and this one is {candidate.strength}"
     return ""
 
@@ -510,17 +516,17 @@ def _observations(stream: Path, attempt_id: str) -> Iterator[tuple[str, str]]:
         yield str(record.get("command_raw", "")), str(ref)
 
 
-def _matches(body: Path, matcher: re.Pattern[bytes]) -> Iterator[str]:
+def _in_body(body: Path, matcher: re.Pattern[bytes]) -> Iterator[str]:
     try:
         for line in _lines(body):
-            yield from _matched(line, matcher)
+            yield from _in_line(line, matcher)
     except OSError:
         # A body file that has been deleted under us costs the candidates it held and nothing more:
         # `/state` is deletable mid-Run by design, and a Run that died sweeping is the worse trade.
         return
 
 
-def _matched(line: bytes, matcher: re.Pattern[bytes]) -> Iterator[str]:
+def _in_line(line: bytes, matcher: re.Pattern[bytes]) -> Iterator[str]:
     """The wrapper's matches in one line, unless the line is a derived record.
 
     `carry.DERIVED` marks the one line per Attempt that carries a model-authored field, and a model
@@ -555,9 +561,17 @@ def _listed(candidates: Sequence[Candidate]) -> str:
 
 
 def _folded(character: str) -> str:
-    """The ASCII the character decomposes to, where it decomposes to ASCII at all — which is what
-    catches a fullwidth or mathematical alphabet without a table for either."""
-    folded = unicodedata.normalize("NFKD", character).encode("ascii", "ignore").decode()
+    """The ASCII an ASCII character was *written as*, or the empty string where it is its own letter.
+
+    A compatibility decomposition is the substitution — fullwidth, mathematical, script, a Roman
+    numeral — and a canonical one is a letter with an accent on it, which is a character in its own
+    right and not a disguise for the letter underneath. So the two normal forms are compared: where
+    they agree, the fold is canonical and this is not a lookalike.
+    """
+    compatibility = unicodedata.normalize("NFKD", character)
+    if compatibility == unicodedata.normalize("NFD", character):
+        return ""
+    folded = compatibility.encode("ascii", "ignore").decode()
     return folded if folded.strip() else ""
 
 
