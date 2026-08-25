@@ -40,11 +40,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from solver.record import Recorder, Usage
-
-# Recon is the Attempt's opening move and runs before any model is invoked, so every Step it
-# records cost no tokens and names no model. The empty name is the fact, not a placeholder.
-NO_MODEL = Usage(model="")
+from solver.record import NO_MODEL, Recorder
 
 # Every line the cascade writes about itself opens with this — the name of an in-process probe, a
 # kill, a cap, a spent budget — so a reader of a stream can tell what the Solver said from what the
