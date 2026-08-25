@@ -16,10 +16,11 @@ shaped streams cannot be compared and comparing them is half of what per-model m
 
 Four rules shape the parser, and each is a refusal:
 
-- **A Claim never lands in the Observation channel.** Everything the model *said* — its messages,
-  its reasoning, its plan — goes to `claims/`, which Flag verification never sweeps. Anything this
-  module cannot classify goes there too: a Claim mistaken for an Observation is what would
-  authorise a fabricated Flag, and the opposite mistake only under-counts.
+- **A Claim never lands in the Observation channel.** Everything the model said and everything it
+  composed — its messages, its reasoning, its plan, the query behind a search, the text of a patch
+  it wrote — goes to `claims/`, which Flag verification never sweeps. Anything this module cannot
+  classify goes there too: a Claim mistaken for an Observation is what would authorise a fabricated
+  Flag, and the opposite mistake only under-counts.
 - **A proposed command is never echoed where it could be read back as output.** A command Step's
   Observation body is the command's own output and nothing else; the command itself lives in the
   record's `command_raw` field, which is not a body and is never swept.
@@ -89,10 +90,13 @@ HANDS_ON = (EXHAUSTED, UNUSABLE)
 CODEX_HOME = Path("/state/codex")
 
 # Matched lowercased against what the CLI said, and deliberately short. The first is the sentence
-# the CLI itself carries for a spent subscription; the third is broader than exhaustion, and is
-# here anyway because the CLI has already retried internally by the time it surfaces one, and
-# handing the Attempt on costs a re-invocation where waiting costs the 5-hour rolling window
-# against a 5.5-hour Run.
+# the CLI itself carries for a spent subscription.
+#
+# The third is broader than exhaustion and is here anyway, because the two mistakes cost different
+# amounts. The chain is re-read from the top on **every** Attempt, so reading a transient 429 as
+# exhaustion costs one Attempt starting a rung lower — where reading a spent subscription as an
+# ordinary failure records our own billing as a Cut against the Challenge, which is what ADR-0010
+# forbids. The CLI has also already retried internally by the time it surfaces one.
 EXHAUSTED_SAYS = ("you've hit your usage limit", "usage limit reached", "rate limit")
 
 # The vendor's item types mapped onto tool names that mean the same thing whoever emits them —
@@ -103,7 +107,6 @@ TOOLS = {
     "file_change": "file_change",
     "mcp_tool_call": "mcp",
     "web_search": "web_search",
-    "error": "codex",
 }
 
 # Enough to carry the CLI's own last words about why it failed. Its stderr is diagnostics, not
@@ -112,7 +115,9 @@ STDERR_KEPT_BYTES = 4096
 READ_BLOCK_BYTES = 65536
 
 # After EOF on its stdout the CLI has said everything it is going to say, so anything past this
-# grace is a process that will not exit rather than one still working.
+# grace is a process that will not exit rather than one still working. Longer than the cascade's
+# (`solver/recon.py`) on purpose: what is shutting down here is an agent, its shell and its
+# sandbox, where there a single tool is closing a pipe.
 REAP_GRACE_SECONDS = 2.0
 
 
@@ -146,8 +151,10 @@ class Invocation:
     # Off by default in the sandbox, and a Challenge whose Target is a socket is unsolvable without
     # it. ADR-0014 makes web search a Board profile value for the same reason it is on here.
     network: bool = True
-    # `-c key=value` overrides, so a setting we have not met yet costs a config value.
-    settings: tuple[str, ...] = ()
+    # Passed on every invocation rather than left to whatever `config.toml` the credential
+    # directory happens to hold — a dial nobody set is a dial that moves when a login is retaken.
+    # Spec #63 pins it to a constant so a later version tunes a number rather than reshaping this.
+    reasoning_effort: str = "medium"
 
 
 @dataclass(frozen=True)
@@ -300,7 +307,7 @@ class _Watch:
         self._usage, self._flights, self._said, self._broke = {}, {}, [], False
         argv = _argv(credential, self.invocation)
         flight = self._open(" ".join(argv), "codex")
-        if refused := _made(credential.home):
+        if refused := _could_not_make(credential.home):
             return UNUSABLE, self._shut(flight, credential, None, refused.encode(), kind=CLOSE)
         try:
             child = self.launch(argv, self.workdir, _environment(credential), prompt.encode())
@@ -404,10 +411,14 @@ class _Watch:
             yield self._reported(f"{MARK} the CLI reported an error", str(item.get("message", "")), credential)
             return
         if tool := TOOLS.get(shape):
-            # A tool call that is not a shell command still moved the environment or read the
-            # world, so it is an Observation and is counted like one. What it reported is the
-            # vendor's own record of it, kept whole rather than summarised into a sentence.
-            yield self._alone(f"{MARK} {shape}", json.dumps(item, sort_keys=True), tool=tool, credential=credential)
+            # A tool call that is not a shell command produces **two** records, and the split is
+            # the same one everything here turns on. The item is largely the model's own writing —
+            # a patch it authored, a query it composed — so it goes whole to the channel no check
+            # greps, and nothing about it is lost. The Step beside it is the fact that this
+            # happened, and its Observation carries only what a tool actually returned; a Flag the
+            # model *wrote into a file* must never be swept as one a command produced.
+            yield self._claimed(credential, shape, json.dumps(item, sort_keys=True).encode())
+            yield self._alone(f"{MARK} {shape}", _returned(item, shape), tool=tool, credential=credential)
             return
         # Everything else — the model's message, its reasoning, its plan, and any item type a later
         # release adds — is prose until proven otherwise.
@@ -575,8 +586,7 @@ def _argv(credential: Credential, invocation: Invocation) -> tuple[str, ...]:
         "-c",
         f"sandbox_workspace_write.network_access={network}",
     ]
-    for setting in invocation.settings:
-        argv += ["-c", setting]
+    argv += ["-c", f"model_reasoning_effort={invocation.reasoning_effort}"]
     return (*argv, "-")
 
 
@@ -586,9 +596,12 @@ def _environment(credential: Credential) -> dict[str, str]:
     return {**kept, "CODEX_HOME": str(credential.home)}
 
 
-def _made(home: Path) -> str:
-    """`CODEX_HOME` has to **exist**, not merely be writable: against a missing path the CLI
-    refuses to load configuration and never reaches the credential at all."""
+def _could_not_make(home: Path) -> str:
+    """Why `CODEX_HOME` is not there, or the empty string once it is.
+
+    It has to **exist** rather than merely be writable: against a missing path the CLI refuses to
+    load configuration and never reaches the credential at all.
+    """
     try:
         home.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -606,6 +619,21 @@ def _closing(cause: str, exit_code: int | None, errors: bytes) -> bytes:
     told = f"{MARK} {cause}, exit {exit_code}"
     tail = errors.decode("utf-8", "replace").strip()
     return f"{told}\n{tail}".encode() if tail else told.encode()
+
+
+def _returned(item: dict[str, Any], shape: str) -> str:
+    """The part of a tool item that is real output rather than the model's own writing.
+
+    Only a call out to a server has one, and a server's answer is the same class of thing as a
+    shell command's stdout. A search's query and a patch's text are the model writing; the record
+    keeps both, in `claims/` and in the Step's own `command_raw`, and neither is a body a Flag
+    could be swept out of.
+    """
+    if isinstance(result := item.get("result"), str) and result.strip():
+        return result
+    if isinstance(result, (dict, list)) and result:
+        return json.dumps(result, sort_keys=True)
+    return f"{MARK} the {shape} returned no output"
 
 
 def _prose(item: dict[str, Any]) -> str:
@@ -665,20 +693,20 @@ class _Spawned(Child):
         self._errors = b""
         with self._process.stdin as writing:
             writing.write(prompt)
-        self._open = [self._process.stdout, self._process.stderr]
+        self._talking = [self._process.stdout, self._process.stderr]
 
     def read(self, budget: float) -> bytes | None:
         deadline = time.monotonic() + budget
-        while self._open:
+        while self._talking:
             if (left := deadline - time.monotonic()) <= 0:
                 return None
-            ready, _, _ = select.select(self._open, [], [], left)
+            ready, _, _ = select.select(self._talking, [], [], left)
             if not ready:
                 return None
             for stream in ready:
                 block = os.read(stream.fileno(), READ_BLOCK_BYTES)
                 if not block:
-                    self._open.remove(stream)
+                    self._talking.remove(stream)
                 elif stream is self._process.stderr:
                     self._errors = (self._errors + block)[-STDERR_KEPT_BYTES:]
                 else:

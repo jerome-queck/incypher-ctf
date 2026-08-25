@@ -266,7 +266,7 @@ def test_the_chain_order_and_the_model_are_config_and_never_code(recorder):
         recorder,
         launcher,
         chain=(Credential(slot="practice", model="gpt-5-mini", home=NOWHERE),),
-        invocation=Invocation(sandbox="read-only", network=False, settings=("model_reasoning_effort=low",)),
+        invocation=Invocation(sandbox="read-only", network=False, reasoning_effort="low"),
     )
 
     argv = launcher.argv[0]
@@ -486,14 +486,39 @@ def test_an_item_type_nobody_has_met_is_prose_until_proven_otherwise(recorder):
 def test_a_tool_call_that_is_not_a_shell_command_is_still_a_step(recorder):
     """A search or a patch moved the world as surely as a command did, and a counter that cannot
     see it reads an Attempt that was working as an Attempt that was idle."""
-    searched = (
-        '{"type":"item.completed","item":{"id":"w","type":"web_search","query":"rsa wiener attack"}}\n'
-    ).encode()
+    searched = '{"type":"item.completed","item":{"id":"w","type":"web_search","query":"wiener attack"}}\n'.encode()
 
     taken = attempt(recorder, Launcher(Canned(searched)))
 
     assert kind(taken, COMMAND)[0].tool == "web_search"
-    assert "rsa wiener attack" in kind(taken, COMMAND)[0].shown
+    assert kind(taken, COMMAND)[0].command == "[codex] web_search"
+
+
+def test_what_the_model_composed_is_kept_and_still_never_swept(recorder):
+    """A query the model wrote and a patch it authored are the model writing. The record keeps
+    both — nothing is lost — but the channel a Flag is swept from carries neither."""
+    patched = (
+        '{"type":"item.completed","item":{"id":"p","type":"file_change","changes":'
+        '[{"path":"/tmp/notes.txt","kind":"add"}],"diff":"+' + FLAG + '"}}\n'
+    ).encode()
+
+    attempt(recorder, Launcher(Canned(patched)))
+
+    assert FLAG in bodies(recorder, "claims")
+    assert FLAG not in bodies(recorder, "observations")
+
+
+def test_a_server_that_answered_is_output_and_is_swept_like_any_other(recorder):
+    """The one part of a tool call that is not the model writing. A server's answer is the same
+    class of thing as a shell command's stdout, so it belongs where a Flag can be found."""
+    called = (
+        '{"type":"item.completed","item":{"id":"m","type":"mcp_tool_call","server":"oracle",'
+        '"tool":"decrypt","result":"' + FLAG + '","status":"completed"}}\n'
+    ).encode()
+
+    attempt(recorder, Launcher(Canned(called)))
+
+    assert FLAG in bodies(recorder, "observations")
 
 
 def test_an_in_progress_update_is_never_counted_as_a_second_step(recorder):
