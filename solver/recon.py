@@ -16,16 +16,14 @@ Three rules shape what is here, and each is a refusal:
   killed command, a spent budget, an unreadable artefact — is written down as the output of the
   Step that met it.
 
-The floor runs for **every** artefact including the unrecognised ones: bounded `strings`, entropy
-over fixed-offset windows, `od` head and tail, and a Flag-regex scan using the wrapper read from
-the Board at runtime. Two of the four need no binary — arithmetic over bytes the Solver has already
-opened — and they are recorded as Steps like any other, marked `(recon)` so a reader never mistakes
-one for a shell command that could be replayed.
+Two of the floor's four probes need no binary: they are arithmetic over bytes the Solver has
+already opened. They are recorded as Steps like everything else and their names carry `MARK`, so a
+reader never takes one for a shell command that could be replayed.
 
 The caps are enforced where the bytes are, rather than after they have arrived: output is capped as
-it is read off the pipe, wall-clock kills the child, and the size cap bounds what the in-process
-floor will read. Brunner links a **6.15 GB** archive from description prose, and a cap applied
-after that is in memory is a cap in name.
+it is read off the pipe, wall-clock kills the child and stops a scan mid-file, and the size cap
+bounds what the in-process floor will read. Brunner links a **6.15 GB** archive from description
+prose, and a cap applied after that is in memory is a cap in name.
 
 Standard library only — this runs inside the Solver image, which has nothing installed.
 """
@@ -38,7 +36,7 @@ import re
 import select
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,8 +46,9 @@ from solver.record import Recorder, Usage
 # records cost no tokens and names no model. The empty name is the fact, not a placeholder.
 NO_MODEL = Usage(model="")
 
-# What a probe that ran nothing writes instead. Prefixed so a reader of a stream can tell the
-# cascade's own account of a Step from the output of the tool the Step was for.
+# Every line the cascade writes about itself opens with this — the name of an in-process probe, a
+# kill, a cap, a spent budget — so a reader of a stream can tell what the Solver said from what the
+# tool said, and never mistakes the first for something they could replay in a shell.
 MARK = "[recon]"
 
 # The one call the whole cascade dispatches on.
@@ -69,6 +68,9 @@ SCAN_BLOCK_BYTES = 1 << 20
 # Carried between blocks so a wrapper straddling a block boundary is still matched.
 SCAN_OVERLAP_BYTES = 512
 MATCHES_SHOWN = 20
+# A Board's wrapper is its own regex and `brunner{.*}` is a real one, so a single match over binary
+# input can be most of the artefact. What is worth showing is that it matched and where it starts.
+MATCH_BYTES = 200
 
 EXIFTOOL = ("exiftool", "-a", "-G1", "-s")
 
@@ -77,6 +79,10 @@ EXIFTOOL = ("exiftool", "-a", "-G1", "-s")
 # appended last. An archive is **listed and never extracted**: extraction moves the environment,
 # which is a Checkpoint for the model to earn under the sandbox, and a zip bomb opened by recon
 # would be the Attempt's whole budget spent before a model saw anything.
+#
+# The `exiftool` entries are here for the artefact whose name lies, which is the case dispatching
+# on content exists for — and for whatever a Board we have not met ships, since the census that
+# makes `.zip` the one branch is Brunner's and not everyone's.
 #
 # What a branch may hold is a tool that answers a *question about the artefact*. `zsteg -a` is the
 # one measured against that and dropped: on a 16x16 PNG it filled the whole output cap with
@@ -182,7 +188,7 @@ class _Cascade:
             "description",
             lambda _budget: (0, prose or f"{MARK} the Board's description is empty".encode()),
         )
-        self._scan("description", prose)
+        self._scan("description", prose, "the description")
 
     def work(self, artefact: Path) -> None:
         """Dispatch, then the floor, then the branch — in that order, because the floor is what
@@ -195,37 +201,40 @@ class _Cascade:
             self._command(subject, (*command, str(artefact)))
 
     def _dispatch(self, subject: str, artefact: Path) -> str:
-        probe = self._command(subject, (*DISPATCH, str(artefact)))
-        if probe.exit_code != 0 or not probe.shown.strip():
+        """What `file` said, read from its own bytes rather than from the record's rendering of
+        them — dispatch is a function of the tool's answer, and never of how a Step is shown."""
+        exit_code, answered = self._command(subject, (*DISPATCH, str(artefact)))
+        if exit_code != 0 or not answered.strip():
             return ""
-        return probe.shown.strip().splitlines()[0]
+        return answered.decode("utf-8", "replace").strip().splitlines()[0]
 
     def _floor(self, subject: str, artefact: Path) -> None:
-        size = _size_of(artefact)
         self._command(subject, (*STRINGS, str(artefact)))
         self._probe(
             subject,
             f"{MARK} entropy over {ENTROPY_WINDOWS} windows of {ENTROPY_WINDOW_BYTES} bytes — {artefact}",
             "entropy",
-            lambda _budget: _entropy(artefact, size),
+            # No budget: the whole probe is eight window reads, so what bounds it is the window
+            # count rather than a clock.
+            lambda _budget: _entropy(artefact),
         )
         self._command(subject, (*OD, "-N", str(OD_EDGE_BYTES), str(artefact)))
         # An artefact the head already covered has no tail to show, and a second identical dump is
-        # the opening frame's context spent on bytes the model has just read.
-        if size > OD_EDGE_BYTES:
+        # the opening frame's context spent on bytes the model has just read. A size that could not
+        # be read is not a reason to dump the head twice — `od` will report that failure itself.
+        if (size := _size_of(artefact)) > OD_EDGE_BYTES:
             self._command(subject, (*OD, "-j", str(size - OD_EDGE_BYTES), "-N", str(OD_EDGE_BYTES), str(artefact)))
-        self._scan(subject, artefact)
+        self._scan(subject, artefact, str(artefact))
 
-    def _scan(self, subject: str, source: Path | bytes) -> None:
-        where = source if isinstance(source, Path) else "the description"
+    def _scan(self, subject: str, source: Path | bytes, where: str) -> None:
         self._probe(
             subject,
             f"{MARK} flag-scan for {self._pattern} — {where}",
             "flag-scan",
-            lambda _budget: _scanned(source, self._pattern, self._limits.artefact_bytes),
+            lambda budget: _scanned(source, where, self._pattern, self._limits.artefact_bytes, budget),
         )
 
-    def _command(self, subject: str, argv: tuple[str, ...]) -> Probe:
+    def _command(self, subject: str, argv: tuple[str, ...]) -> tuple[int | None, bytes]:
         return self._probe(
             subject,
             " ".join(argv),
@@ -239,9 +248,13 @@ class _Cascade:
         command: str,
         tool: str,
         produce: Callable[[float], tuple[int | None, bytes]],
-    ) -> Probe:
+    ) -> tuple[int | None, bytes]:
         """Record one probe, whatever it turned out to be — including one the budget left no room
-        for, which is a fact about the Attempt and so is written like any other."""
+        for, which is a fact about the Attempt and so is written like any other.
+
+        Answers with what the probe produced rather than with the `Probe`, so a caller that acts on
+        an output acts on the bytes and not on the record's rendering of them.
+        """
         self._step += 1
         step = self._recorder.step_begin(
             attempt_id=self._attempt_id,
@@ -259,10 +272,14 @@ class _Cascade:
             output = output.encode()
         else:
             exit_code, output = produce(min(left, self._limits.command_seconds))
+        # A tool that ran and said nothing is a fact — `strings` finds nothing in a 36-byte PNG —
+        # but an empty body reaches the model as a blank space under a command, which reads as a
+        # tool that was never run. What it said is that it had nothing to say.
+        if not output.strip():
+            output = f"{MARK} {tool} produced no output, exit {exit_code}".encode()
         observation = step.end(exit_code=exit_code, output=output, usage=NO_MODEL)
-        probe = Probe(subject, tool, command, exit_code, observation.shown)
-        self.probes.append(probe)
-        return probe
+        self.probes.append(Probe(subject, tool, command, exit_code, observation.shown))
+        return exit_code, output
 
 
 def _branch_for(mime: str) -> tuple[tuple[str, ...], ...]:
@@ -271,8 +288,12 @@ def _branch_for(mime: str) -> tuple[tuple[str, ...], ...]:
 
 
 def _rendered(probe: Probe) -> str:
-    status = "" if probe.exit_code in (0, None) else f"  [exit {probe.exit_code}]"
-    return f"## {probe.subject}\n$ {probe.command}{status}\n{probe.shown.rstrip()}"
+    """One probe as the model reads it. A shell prompt only where a shell command ran, and a
+    stopped probe marked as stopped — a killed tool that reads like a clean one is the silence
+    this module exists to refuse."""
+    prompt = "" if probe.command.startswith(MARK) else "$ "
+    status = {0: ""}.get(probe.exit_code, "  [stopped]" if probe.exit_code is None else f"  [exit {probe.exit_code}]")
+    return f"## {probe.subject}\n{prompt}{probe.command}{status}\n{probe.shown.rstrip()}"
 
 
 def _size_of(artefact: Path) -> int:
@@ -331,19 +352,22 @@ def _captured(process: subprocess.Popen[bytes], budget: float, cap: int) -> tupl
                 return b"".join(blocks)[:cap], f"\n{MARK} output capped at {cap} bytes".encode()
 
 
-def _entropy(artefact: Path, size: int) -> tuple[int | None, bytes]:
-    """Shannon entropy per window, at fixed offsets across the artefact.
+def _entropy(artefact: Path) -> tuple[int | None, bytes]:
+    """Shannon entropy per window, at fixed offsets spanning the artefact end to end.
+
+    The last window is the artefact's tail rather than one stride short of it, for the same reason
+    `od` is asked for both ends: an appended blob lives past everything a head-first sweep reaches.
 
     Measurements and no verdict: whether 7.99 bits/byte means compressed, encrypted or neither is a
     judgement, and ADR-0009 keeps judgements out of the record so they stay recomputable.
     """
-    if size == 0:
-        return 0, f"{MARK} the artefact is empty".encode()
-    stride = max(ENTROPY_WINDOW_BYTES, size // ENTROPY_WINDOWS)
-    lines = []
     try:
+        size = artefact.stat().st_size
+        if size == 0:
+            return 0, f"{MARK} the artefact is empty".encode()
+        lines = []
         with artefact.open("rb") as reading:
-            for offset in range(0, size, stride)[:ENTROPY_WINDOWS]:
+            for offset in _window_offsets(size):
                 reading.seek(offset)
                 if not (window := reading.read(ENTROPY_WINDOW_BYTES)):
                     break
@@ -353,16 +377,20 @@ def _entropy(artefact: Path, size: int) -> tuple[int | None, bytes]:
     return 0, "\n".join(lines).encode()
 
 
+def _window_offsets(size: int) -> list[int]:
+    last = max(size - ENTROPY_WINDOW_BYTES, 0)
+    if last == 0:
+        return [0]
+    spread = [round(step * last / (ENTROPY_WINDOWS - 1)) for step in range(ENTROPY_WINDOWS)]
+    return sorted(set(spread))
+
+
 def _shannon(window: bytes) -> float:
-    return sum(-(share := count / len(window)) * math.log2(share) for count in _counts(window))
+    return sum(-(share := window.count(value) / len(window)) * math.log2(share) for value in set(window))
 
 
-def _counts(window: bytes) -> list[int]:
-    return [count for count in (window.count(value) for value in set(window)) if count]
-
-
-def _scanned(source: Path | bytes, pattern: str, cap: int) -> tuple[int | None, bytes]:
-    """The Board's own Flag wrapper, over as much of the artefact as the size cap allows.
+def _scanned(source: Path | bytes, where: str, pattern: str, cap: int, budget: float) -> tuple[int | None, bytes]:
+    """The Board's own Flag wrapper, over as much of the artefact as the caps allow.
 
     The pattern comes from the Board profile at runtime, so a wrapper this code has never seen
     costs a config value. A Board that publishes one we cannot compile is a fact about the Board,
@@ -372,9 +400,11 @@ def _scanned(source: Path | bytes, pattern: str, cap: int) -> tuple[int | None, 
         matcher = re.compile(pattern.encode())
     except re.error as broken:
         return None, f"{MARK} the Board's Flag wrapper {pattern!r} did not compile — {broken}".encode()
+    deadline = time.monotonic() + budget
     found: list[bytes] = []
     read = 0
     carried = b""
+    stopped = ""
     try:
         for block in _blocks(source, cap):
             read += len(block)
@@ -382,23 +412,25 @@ def _scanned(source: Path | bytes, pattern: str, cap: int) -> tuple[int | None, 
                 if match.group(0) not in found:
                     found.append(match.group(0))
             carried = block[-SCAN_OVERLAP_BYTES:]
+            if time.monotonic() > deadline:
+                stopped = f", stopping after {budget:.1f}s"
+                break
+        else:
+            stopped = f", stopping at the {cap}-byte size cap" if read >= cap else ""
     except OSError as error:
-        return None, f"{MARK} {source} could not be read — {error}".encode()
-    return 0, _scan_report(found, read, cap)
+        return None, f"{MARK} {where} could not be read — {error}".encode()
+    return 0, _scan_report(found, read, stopped)
 
 
-def _scan_report(found: list[bytes], read: int, cap: int) -> bytes:
-    where = f"{MARK} scanned {read} bytes"
-    if read >= cap:
-        where += f", stopping at the {cap}-byte size cap"
+def _scan_report(found: list[bytes], read: int, stopped: str) -> bytes:
     if not found:
-        return f"{where}\nno match".encode()
-    shown = b", ".join(found[:MATCHES_SHOWN])
+        return f"{MARK} scanned {read} bytes{stopped}\nno match".encode()
+    shown = b", ".join(match[:MATCH_BYTES] for match in found[:MATCHES_SHOWN])
     more = f" (+{len(found) - MATCHES_SHOWN} more)" if len(found) > MATCHES_SHOWN else ""
-    return f"{where}\n{len(found)} match(es): ".encode() + shown + more.encode()
+    return f"{MARK} scanned {read} bytes{stopped}\n{len(found)} match(es): ".encode() + shown + more.encode()
 
 
-def _blocks(source: Path | bytes, cap: int):
+def _blocks(source: Path | bytes, cap: int) -> Iterator[bytes]:
     if isinstance(source, bytes):
         yield source[:cap]
         return

@@ -153,6 +153,15 @@ def test_a_tool_that_is_not_installed_becomes_the_observation(tmp_path, recorder
     assert "brunner{still_recorded}" in output_for(result, "flag-scan", subject="note.txt")
 
 
+def test_a_tool_with_nothing_to_say_says_that(tmp_path, recorder):
+    """`strings` finds nothing in a 36-byte PNG. An empty body under a command reads to a model as
+    a command that never ran, which is the same silence read from the other end."""
+    tiny = tmp_path / "tiny.png"
+    tiny.write_bytes(PNG)
+
+    assert "no output" in output_for(scout(recorder, artefacts=[tiny]), "strings", "tiny.png")
+
+
 def test_a_command_that_will_not_stop_is_killed_and_says_so(tmp_path, recorder, monkeypatch):
     monkeypatch.setitem(BRANCHES, "text/plain", (("python3", "-c", "import time; time.sleep(30)"),))
     artefact = tmp_path / "note.txt"
@@ -212,6 +221,54 @@ def test_the_size_cap_is_enforced_rather_than_intended(tmp_path, recorder):
 
     assert "brunner{past_the_cap}" not in scan
     assert "4096" in scan
+
+
+def test_the_scan_stops_on_the_clock_and_not_only_on_the_size_cap(tmp_path, recorder):
+    """The size cap bounds a 6 GB artefact; nothing bounds a slow disk under it. A reading is a
+    probe like any other, so the wall-clock reaches it too."""
+    slow = tmp_path / "slow.bin"
+    slow.write_bytes(b"." * (2 << 20) + b"brunner{after_the_clock}\n")
+
+    scan = output_for(scout(recorder, artefacts=[slow], limits=Limits(command_seconds=0)), "flag-scan", "slow.bin")
+
+    assert "brunner{after_the_clock}" not in scan
+    assert "stopping after" in scan
+
+
+def test_the_entropy_windows_reach_the_artefacts_tail(tmp_path, recorder):
+    """An appended blob lives past everything a head-first sweep reaches — the same reason `od` is
+    asked for both ends."""
+    appended = tmp_path / "appended.bin"
+    appended.write_bytes(bytes(400_000) + bytes(range(256)) * 16)
+
+    windows = output_for(scout(recorder, artefacts=[appended]), "entropy", "appended.bin").splitlines()
+
+    assert windows[-1].startswith(f"0x{appended.stat().st_size - 4096:08x}")
+    assert windows[-1].endswith("8.000 bits/byte")
+
+
+def test_one_enormous_match_does_not_become_the_whole_block(tmp_path, recorder):
+    """`brunner{.*}` is a real Board's wrapper, and over binary input one match can be most of the
+    artefact."""
+    greedy = tmp_path / "greedy.bin"
+    greedy.write_bytes(b"brunner{" + b"a" * 50_000 + b"}")
+
+    scan = output_for(scout(recorder, artefacts=[greedy], pattern=r"brunner\{.*\}"), "flag-scan", "greedy.bin")
+
+    assert "1 match(es)" in scan
+    assert len(scan) < 500
+
+
+def test_a_stopped_probe_is_marked_as_stopped_in_the_block(tmp_path, recorder, monkeypatch):
+    """A killed tool that reads like a clean one is the silence this cascade refuses, one layer up
+    — the block is what a model actually reads."""
+    monkeypatch.setitem(BRANCHES, "text/plain", (("python3", "-c", "import time; time.sleep(30)"),))
+    artefact = tmp_path / "note.txt"
+    artefact.write_bytes(b"ordinary text\n")
+
+    block = scout(recorder, artefacts=[artefact], limits=Limits(command_seconds=0.3)).block()
+
+    assert "[stopped]" in block
 
 
 def test_a_spent_cascade_budget_is_written_down_rather_than_skipped(tmp_path, recorder):
