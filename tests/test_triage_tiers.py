@@ -12,22 +12,12 @@ import json
 
 import pytest
 from solver.board import Board
-from solver.codex import Child, Credential, Invocation
+from solver.codex import Child, Credential, Invocation, asking
 from solver.intake import OVER_THE_CAP, Attachment, Sighting
 from solver.instance import Terms
 from solver.record import Recorder
 from solver.redaction import Redactor
-from solver.triage import (
-    EXTRACTED,
-    FLOOR,
-    JUDGED,
-    SOLVES,
-    UNJUDGED,
-    asking,
-    render,
-    triage,
-    unasked,
-)
+from solver.triage import EXTRACTED, FLOOR, JUDGED, SOLVES, UNJUDGED, render, triage, unasked
 
 
 @pytest.fixture
@@ -43,7 +33,6 @@ def sighting(challenge_id=1, *, description="", solves=0, files=(), category="fo
         challenge_type=fields.pop("challenge_type", "standard"),
         value=fields.pop("value", 500),
         solves=solves,
-        position=challenge_id,
         description=description,
         attempts=0,
         max_attempts=None,
@@ -123,10 +112,23 @@ def test_zero_solves_carry_no_ordering_at_all_and_go_to_the_judge(recorder):
     """At Run start every Challenge on a fresh Board has none, and a quantile over zeros would hand
     the whole Board one Tier and call it evidence."""
     judge, seen = transcribing()
+    board = [sighting(1, solves=0), sighting(2, solves=7), sighting(3, solves=2)]
 
-    triage([sighting(1, solves=0), sighting(2, solves=7)], recorder=recorder, judge=judge)
+    triage(board, recorder=recorder, judge=judge)
 
-    assert "id 1 " in seen[0] and "id 2 " not in seen[0]
+    assert [f"id {one} " in seen[0] for one in (1, 2, 3)] == [True, False, False]
+
+
+def test_a_board_whose_solve_counts_are_all_the_same_has_ranked_nothing(recorder):
+    """`solves` earns its place by ordering. Where it orders nothing, handing the set the *cheapest*
+    Tier would be the mistake `FLOOR` exists to refuse — unknown read as easy."""
+    judge, seen = transcribing()
+    board = [sighting(1, solves=5), sighting(2, solves=5), sighting(3, solves=5)]
+
+    judged = triage(board, recorder=recorder, judge=judge)
+
+    assert [f"id {one} " in seen[0] for one in (1, 2, 3)] == [True, True, True]
+    assert tiers(judged) == {one: (FLOOR, UNJUDGED) for one in (1, 2, 3)}
 
 
 def test_the_judge_is_asked_once_about_the_remainder_and_never_about_the_rest(recorder):
@@ -138,12 +140,13 @@ def test_the_judge_is_asked_once_about_the_remainder_and_never_about_the_rest(re
         sighting(2, solves=5),
         sighting(3),
         sighting(4),
+        sighting(5, solves=1),
     ]
 
     triage(board, recorder=recorder, judge=judge)
 
     assert len(seen) == 1
-    assert [f"id {one} " in seen[0] for one in (1, 2, 3, 4)] == [False, False, True, True]
+    assert [f"id {one} " in seen[0] for one in (1, 2, 3, 4, 5)] == [False, False, True, True, False]
 
 
 def test_the_judge_is_never_asked_at_all_where_nothing_is_left(recorder):
@@ -218,8 +221,9 @@ def test_the_category_changes_nothing_because_there_is_no_table_keyed_by_one(rec
     read from the Board, so a table keyed by name has no entry for the categories that will actually
     be scored (`CONTEXT.md`, *Tier*)."""
     web, unheard_of = sighting(1, solves=5, category="web"), sighting(2, solves=5, category="(Practice) misc")
+    board = [web, unheard_of, sighting(3, solves=1, category="crypto")]
 
-    judged = triage([web, unheard_of], recorder=recorder)
+    judged = triage(board, recorder=recorder)
 
     assert judged[0].tier == judged[1].tier
 
@@ -227,19 +231,19 @@ def test_the_category_changes_nothing_because_there_is_no_table_keyed_by_one(rec
 def test_every_tier_is_printed_and_recorded_with_its_provenance(recorder):
     """The provenance is the point of the record rather than a decoration on it: an extracted Tier,
     an inferred one and a judged one are three different qualities of evidence."""
-    board = [sighting(1, description="Difficulty: Easy"), sighting(2, solves=3), sighting(3)]
+    board = [sighting(1, description="Difficulty: Easy"), sighting(2, solves=3), sighting(3), sighting(4, solves=1)]
 
     judged = triage(board, recorder=recorder, judge=lambda _prompt: "3 4")
 
     printed = render(judged)
-    assert [EXTRACTED, SOLVES, JUDGED] == [line.split("·")[1].strip() for line in printed.splitlines()]
-    assert [one["provenance"] for one in records(recorder)[0]["tiers"]] == [EXTRACTED, SOLVES, JUDGED]
+    assert [EXTRACTED, SOLVES, JUDGED, SOLVES] == [line.split("·")[1].strip() for line in printed.splitlines()]
+    assert [one["provenance"] for one in records(recorder)[0]["tiers"]] == [EXTRACTED, SOLVES, JUDGED, SOLVES]
 
 
 def test_running_it_twice_over_an_unmoved_board_reaches_the_same_tiers(recorder):
     """One callable thing rather than a pipeline stage: it runs at Run start, again over what is
     unsolved, and over whatever arrives in between, and it holds nothing between calls."""
-    board = [sighting(1, description="Difficulty: Easy"), sighting(2, solves=3)]
+    board = [sighting(1, description="Difficulty: Easy"), sighting(2, solves=3), sighting(3, solves=1)]
 
     assert tiers(triage(board, recorder=recorder)) == tiers(triage(board, recorder=recorder))
 

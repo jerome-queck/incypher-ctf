@@ -186,7 +186,8 @@ class Recorder:
         challenges: list[dict[str, Any]],
         scoreboard: list[dict[str, Any]],
         mana: dict[str, Any] | None,
-        failed: str,
+        outcome: str,
+        detail: str,
     ) -> None:
         """One Intake cycle, as a record of what the Board said rather than of what we concluded.
 
@@ -196,9 +197,10 @@ class Recorder:
         fetched and what was refused, because a Challenge whose attachment was over the cap is one
         every later judgement is made without.
 
-        `failed` is the empty string on a sync that happened and a sentence on one that did not —
-        and a failed sync is a **record**, never an exception, because a Board that could not be
-        read is not a Board that emptied and a Run never ends on the Board looking finished.
+        `outcome` names how the cycle ended and `detail` carries the sentence behind it. A failed
+        sync is a **record**, never an exception, because a Board that could not be read is not a
+        Board that emptied and a Run never ends on the Board looking finished — and the two ways of
+        failing are named apart because spec #63 wants opposite responses to them.
         """
         self._write(
             "intake",
@@ -207,7 +209,8 @@ class Recorder:
                 "challenges": challenges,
                 "scoreboard": scoreboard,
                 "mana": mana,
-                "failed": failed,
+                "outcome": outcome,
+                "detail": detail,
             },
         )
 

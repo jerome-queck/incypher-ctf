@@ -28,6 +28,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+# `python3 scripts/intake_probe.py` puts `scripts/` on the import path, which is what makes the
+# pre-flight probe importable beside this one — the env-file reading is its rule and is not
+# reimplemented here. The repository root is what the insert above is for.
 import ctfd_probe  # noqa: E402
 from solver.board import MAX_FETCH_BYTES, Board  # noqa: E402
 from solver.intake import HELD, Intake, Snapshot  # noqa: E402
@@ -46,11 +49,11 @@ class Counting(Board):
     that the second cycle makes no such call, which is a claim about the seam being left alone.
     """
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, url: str, token: str, *, fetch_bytes: int) -> None:
+        super().__init__(url, token, fetch_bytes=fetch_bytes)
         self.fetches = 0
 
-    def download(self, file_path: str):
+    def download(self, file_path: str) -> tuple[bytes, list[str]]:
         self.fetches += 1
         return super().download(file_path)
 
@@ -77,6 +80,7 @@ def main() -> int:
     intake = Intake(board, recorder)
     print(f"syncing {board.url}" + ("" if board.authenticated else " (anonymously — no token set)"))
 
+    snapshot = intake.snapshot
     for _ in range(max(1, arguments.cycles)):
         before = board.fetches
         snapshot = intake.sync()
@@ -95,7 +99,7 @@ def _summary(snapshot: Snapshot, fetches: int) -> str:
     """One line per cycle, and the number that matters is `fetched`: on an unmoved board every cycle
     after the first must report zero, or change detection is not doing its job."""
     if not snapshot.believable:
-        return f"cycle {snapshot.cycle}: FAILED — {snapshot.failed}"
+        return f"cycle {snapshot.cycle}: FAILED, {snapshot.outcome} — {snapshot.detail}"
     files = [one for sighting in snapshot.challenges for one in sighting.attachments]
     held = [one for one in files if one.held]
     refused = [one for one in files if one.outcome != HELD]

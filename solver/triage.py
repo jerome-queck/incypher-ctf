@@ -35,17 +35,13 @@ Standard library only — this runs inside the Solver image, which has nothing i
 
 from __future__ import annotations
 
-import datetime as dt
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
-from solver.codex import CLAIM, Credential, Invocation, Launch, run_attempt
 from solver.intake import Sighting
 from solver.observation import elide
 from solver.record import Recorder
-from solver.stall import Deadline
 
 MARK = "[triage]"
 
@@ -110,7 +106,7 @@ DESCRIPTION_SHOWN_BYTES = 800
 # What the judge is asked for, in the shape that is cheapest to read back. Prose is not parsed for
 # meaning anywhere below: a line is looked at for an id we asked about and a digit in range, and a
 # line that carries neither is skipped rather than guessed at.
-ASKED = (
+QUESTION = (
     "You are grading effort, not solving anything. For each Challenge below, answer how much of a "
     f"fixed competition window is worth spending on it, as a Tier from 1 (least) to {TIERS} (most).\n"
     f"Answer one line per Challenge, `<id> <tier>`, and nothing else. Ids you omit take Tier {FLOOR}.\n"
@@ -135,9 +131,13 @@ class Judgement:
     stated: str = ""
 
 
-# The one way Triage reaches a model: a prompt in, prose out, and nothing in between that could act.
-# A seam rather than a call so that the default is *not asking*, and so a Run can be replayed with
-# the model's half removed entirely.
+# The one way Triage reaches a model: a prompt in, prose out, and no route back to the Board.
+#
+# A seam rather than a call, for three reasons: the default is *not asking*, so nothing here depends
+# on a model; a Run can be replayed with the model's half removed entirely; and **how little the
+# judge can act is the judge's own property rather than a claim this module makes**. The one that
+# exists is `solver/codex.py`'s `asking`, whose docstring says exactly what it withholds and what it
+# cannot.
 Judge = Callable[[str], str]
 
 
@@ -170,7 +170,8 @@ def triage(challenges: Sequence[Sighting], *, recorder: Recorder, judge: Judge =
     # for, which is ordering them.
     judged = _judged(judge(_prompt(unknown)), unknown) if unknown else {}
     judgements = tuple(
-        extracted.get(one.challenge_id) or inferred.get(one.challenge_id) or _asked(one, judged) for one in challenges
+        extracted.get(one.challenge_id) or inferred.get(one.challenge_id) or _from_the_judge(one, judged)
+        for one in challenges
     )
     recorder.triage(tiers=[_as_record(one) for one in judgements])
     return judgements
@@ -186,62 +187,6 @@ def render(judgements: Sequence[Judgement]) -> str:
     )
 
 
-def asking(
-    credential: Credential,
-    *,
-    recorder: Recorder,
-    workdir: Path,
-    attempt_id: str = "triage",
-    seconds: float = 180.0,
-    launch: Launch | None = None,
-    now: Callable[[], dt.datetime] | None = None,
-) -> Judge:
-    """A judge that is the vendor's CLI with as little to act on as it can be given.
-
-    **The shell cannot be taken away from it.** ADR-0014 measured that: `codex exec` has no door
-    marked *just answer*, and nothing removes its tools. So what keeps this judgement off the Board
-    is not a flag but the three things the invocation withholds — a **read-only sandbox**, so
-    nothing it does changes anything; **no network**, so no Board, no Instance and no submission is
-    reachable at all; and the allowlist environment every child gets, which holds no CTFd token and
-    not even the Board's URL (`solver/credentials.py`). A judge cannot spend a submission slot it
-    has no address for.
-
-    The residual is named rather than hidden, in the same spirit as the vendor's own context
-    compaction: a read-only sandbox can still *read*, so a judge that went looking could open a
-    file under `/state`. What is guaranteed here is narrower and is the thing that matters — Triage
-    itself never opens one, and the working directory it is pointed at holds nothing.
-
-    Everything the judge says lands in `claims/`, which Flag verification never sweeps, and the
-    tokens it spends are counted by the Steps the invocation writes.
-    """
-    clock = now or (lambda: dt.datetime.now(dt.timezone.utc))
-
-    def ask(prompt: str) -> str:
-        # The CLI is spawned *in* this directory, so it has to exist — and it stays empty, because
-        # pointing the judge at the Run's own files would hand a judgement the contents Triage is
-        # defined not to read. A directory that cannot be made ends as no answer at all, which every
-        # Challenge then records as `unjudged`: visible, and never a reason to lose the other Tiers.
-        try:
-            workdir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return ""
-        deadline = Deadline(budget=clock() + dt.timedelta(seconds=seconds))
-        said = run_attempt(
-            prompt,
-            workdir,
-            deadline,
-            recorder=recorder,
-            attempt_id=attempt_id,
-            chain=(credential,),
-            invocation=Invocation(sandbox="read-only", network=False),
-            launch=launch,
-            now=clock,
-        )
-        return "\n".join(taken.shown for taken in said if taken.kind == CLAIM)
-
-    return ask
-
-
 def _extracted(sighting: Sighting) -> Judgement | None:
     """The Tier the Board itself stated, or `None` where it stated nothing this table can read."""
     stated = _stated(sighting.description)
@@ -249,7 +194,7 @@ def _extracted(sighting: Sighting) -> Judgement | None:
     return Judgement(sighting.challenge_id, sighting.name, tier, EXTRACTED, stated) if tier else None
 
 
-def _asked(sighting: Sighting, judged: dict[int | str, int]) -> Judgement:
+def _from_the_judge(sighting: Sighting, judged: dict[int | str, int]) -> Judgement:
     tier = judged.get(sighting.challenge_id)
     return Judgement(
         sighting.challenge_id,
@@ -260,21 +205,28 @@ def _asked(sighting: Sighting, judged: dict[int | str, int]) -> Judgement:
     )
 
 
-def _by_solves(sighting_with_solves: Sequence[Sighting]) -> dict[int | str, Judgement]:
-    """`solves` carries the ordering, split into the same Tiers a stated difficulty buys.
+def _by_solves(solved_at_least_once: Sequence[Sighting]) -> dict[int | str, Judgement]:
+    """`solves` carries the ordering — where there is an ordering in it to carry.
 
-    Only Challenges with at least one solve are here, and that is the rule rather than an edge case:
-    at Run start every Challenge on a fresh Board has zero, and zeros carry no ordering at all. A
-    quantile over them would hand the whole Board one Tier and call it evidence.
+    Two conditions, and both are the same rule twice. Only Challenges with at least one solve are
+    passed in, because at Run start every Challenge on a fresh Board has zero; and a set whose solve
+    counts are **all the same** is turned down here, because a Board where everything is on five
+    solves has ranked nothing. Either way the Challenges fall through to the judge, and a judge that
+    says nothing leaves them at `FLOOR` — which is the point: unknown must not read as easy, and
+    handing an unordered set the *cheapest* Tier is exactly that mistake.
 
-    The band is taken from **how many Challenges are solved more often than this one**, so equal
-    solve counts buy equal budget. Splitting a tie by position would let the Board's own list order
-    decide how long an Attempt gets, which is the id doing the work the evidence was meant to.
+    Where there is an ordering, the band is taken from **how many Challenges are solved more often
+    than this one**, so equal solve counts buy equal budget and the Board's own list order never
+    decides how long an Attempt gets.
 
-    Descending, so the most-solved Challenge is the cheapest — `solves` read as the crowd's
-    measurement of difficulty, which is the only thing it can honestly be read as.
+    `solves` is read as an ordering and never as a distance: 50, 49 and 48 solves are three ranks
+    here rather than three nearly-equal numbers. Turning the gap into the Tier needs a scoring curve
+    nobody has fitted, which is why every cycle stores the `(solves, value)` pair instead
+    ([ADR-0015](../docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
     """
-    counts = sorted((one.solves for one in sighting_with_solves), reverse=True)
+    counts = sorted((one.solves for one in solved_at_least_once), reverse=True)
+    if len(set(counts)) < 2:
+        return {}
     return {
         one.challenge_id: Judgement(
             one.challenge_id,
@@ -283,7 +235,7 @@ def _by_solves(sighting_with_solves: Sequence[Sighting]) -> dict[int | str, Judg
             SOLVES,
             _stated(one.description),
         )
-        for one in sighting_with_solves
+        for one in solved_at_least_once
     }
 
 
@@ -291,7 +243,7 @@ def _prompt(unknown: Sequence[Sighting]) -> str:
     """What the judge is shown: the Board's prose, and the manifest — **names and sizes, never
     bytes**. Opening a file here would be Triage doing the Attempt's job with none of the Attempt's
     budget, over every Challenge on the Board."""
-    return ASKED + "\n" + "\n\n".join(_manifest(one) for one in unknown)
+    return QUESTION + "\n" + "\n\n".join(_manifest(one) for one in unknown)
 
 
 def _manifest(sighting: Sighting) -> str:

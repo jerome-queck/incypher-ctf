@@ -13,7 +13,7 @@ import json
 
 import pytest
 from solver.board import Board
-from solver.intake import OVER_THE_CAP, UNFETCHED, UNNAMED, Intake, Limits
+from solver.intake import OVER_THE_CAP, UNCORROBORATED, UNFETCHED, UNNAMED, UNREADABLE, Intake, Limits
 from solver.record import Recorder
 from solver.redaction import Redactor
 
@@ -29,6 +29,9 @@ COVER_REPLACED = "files/2b2b2b/cover.png?token=signed-at-10-05"
 CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "value is not a valid enumeration member"}}')
 CONTROL_AGREEABLE = (200, b'{"success": true, "data": []}')
 
+# So that `mana=None` can mean "this Board has no chall-manager" rather than "say nothing about it".
+_UNSAID = object()
+
 
 class Wire:
     """A CTFd that answers from a script, and remembers everything it was asked.
@@ -37,12 +40,12 @@ class Wire:
     "mana was read once for the Run" are both statements about which requests were *not* made.
     """
 
-    def __init__(self, *, listed=None, detail=None, files=None, control=CONTROL_REFUSED, mana=None, scoreboard=None):
+    def __init__(self, *, listed=None, detail=None, files=None, control=CONTROL_REFUSED, mana=_UNSAID, scoreboard=None):
         self.listed = [] if listed is None else listed
         self.detail = detail or {}
         self.files = files or {}
         self.control = control
-        self.mana = mana if mana is not None else {"used": 0, "total": 4}
+        self.mana = {"used": 0, "total": 4} if mana is _UNSAID else mana
         self.scoreboard = scoreboard if scoreboard is not None else {"1": {"name": "them", "score": 900}}
         self.asked: list[str] = []
         self.unreachable = False
@@ -61,7 +64,11 @@ class Wire:
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer(self.scoreboard)
         if path.endswith("/mana"):
-            return self._answer(self.mana)
+            # `None` is a Board with no chall-manager at all; a tuple is the plugin answering
+            # something other than a total — its per-team lock, or a fault.
+            if self.mana is None:
+                return (404, b'{"success": false}', "")
+            return (*self.mana, "") if isinstance(self.mana, tuple) else self._answer(self.mana)
         # The signature is sent — it is what the fetch needs — and is no part of what identifies
         # the file, which is the distinction the tests below turn on.
         if (served := self.files.get(path.split("?", 1)[0].lstrip("/"))) is not None:
@@ -255,10 +262,10 @@ def test_an_empty_list_the_control_does_not_corroborate_is_a_failed_sync(recorde
     wire.listed, wire.control = [], CONTROL_AGREEABLE
     kept = intake.sync()
 
-    assert not kept.believable
-    assert "evidence of nothing" in kept.failed
+    assert kept.outcome == UNCORROBORATED
+    assert "evidence of nothing" in kept.detail
     assert [one.challenge_id for one in kept.challenges] == [1]
-    assert records(recorder)[-1]["failed"] == kept.failed
+    assert records(recorder)[-1]["outcome"] == UNCORROBORATED
 
 
 def test_an_empty_list_the_control_corroborates_is_believed(recorder):
@@ -290,7 +297,7 @@ def test_a_board_that_stops_answering_is_a_failed_sync_and_not_an_emptied_board(
     wire.unreachable = True
     kept = intake.sync()
 
-    assert not kept.believable
+    assert kept.outcome == UNREADABLE
     assert [one.challenge_id for one in kept.challenges] == [1]
 
 
@@ -338,6 +345,48 @@ def test_the_mana_total_is_read_once_for_the_run_and_branched_on(recorder):
     assert [path for path in wire.asked if path.endswith("/mana")] == ["/api/v1/plugins/ctfd-chall-manager/mana"]
     assert not snapshot.mana_enabled
     assert records(recorder)[-1]["mana"] == {"outcome": "answered", "used": 1, "total": 0, "enabled": False}
+
+
+def test_a_mana_read_that_failed_is_not_a_total_and_is_asked_again(recorder):
+    """ADR-0008's own named failure: a discovered profile discovering the wrong thing, with a
+    transient `/mana` 403 as the example. Cached, that fault reads as `total: 0` — mana switched
+    off — and a mana-limited Board would be treated as having no cap for the rest of the Run."""
+    wire = Wire(listed=[listing(1)], detail={"1": detail(1)}, mana=(429, b""))
+    intake = intake_over(wire, recorder)
+
+    first = intake.sync()
+    wire.mana = {"used": 1, "total": 4}
+    second = intake.sync()
+
+    assert not first.mana_enabled
+    assert second.mana_enabled and second.mana.total == 4
+
+
+def test_a_board_with_no_chall_manager_is_asked_for_mana_once_and_not_again(recorder):
+    """A 404 is a settled fact about this Board rather than weather, so it is remembered — otherwise
+    a Board without the plugin pays for the read on every cycle for the whole Run."""
+    wire = Wire(listed=[listing(1)], detail={"1": detail(1)}, mana=None)
+    intake = intake_over(wire, recorder)
+
+    intake.sync()
+    snapshot = intake.sync()
+
+    assert len([path for path in wire.asked if path.endswith("/mana")]) == 1
+    assert not snapshot.mana_enabled
+
+
+def test_a_control_that_failed_once_is_never_retried_into_a_pass(recorder):
+    """ADR-0016: "failing the control is not transient and must not be retried into a pass." A Board
+    that answered the too-agreeable 200 at 12:00 does not get its empty list believed at 12:05."""
+    wire = Wire(listed=[], control=CONTROL_AGREEABLE)
+    intake = intake_over(wire, recorder)
+    assert intake.sync().outcome == UNCORROBORATED
+
+    wire.control = CONTROL_REFUSED
+    second = intake.sync()
+
+    assert second.outcome == UNCORROBORATED
+    assert len([path for path in wire.asked if "field=" in path]) == 1
 
 
 def test_category_and_type_are_read_as_the_open_strings_they_are(recorder):

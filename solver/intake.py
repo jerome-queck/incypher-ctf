@@ -15,7 +15,9 @@ Three refusals shape the rest:
 - **An empty list is never an emptied Board.** Corroborated by ADR-0016's read-contract control, an
   uncorroborated one is a **failed sync** that keeps the previous snapshot. A Run ends when the
   window closes or it crashes, never because the Board looks finished, and the cheapest way to end
-  one early is to believe a list that arrived from something that is not CTFd.
+  one early is to believe a list that arrived from something that is not CTFd. The control's verdict
+  is **sticky**: failing it is a read-contract fact rather than weather, and must never be retried
+  into a pass.
 - **A failed sync is a record, never an exception.** Nothing here raises at a caller for a Board
   fault: the Solver's answer to a Board it could not read is to keep working what it already has.
 - **Category and CTFd `type` are open strings**, carried as read. Code that switches on a fixed
@@ -34,12 +36,13 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from solver.board import Board, BoardFailure, Mana, Standing, TooLarge
+from solver.board import ABSENT, ANSWERED, Board, BoardFailure, Mana, Standing, TooLarge
+from solver.flag import Slots
 from solver.instance import Terms
 from solver.record import Recorder
 
@@ -47,10 +50,19 @@ from solver.record import Recorder
 # gives: a reader of a stream can tell what the Solver said from what the Board said.
 MARK = "[intake]"
 
-# What a Board that could not be read is told to us as. It is deliberately a sentence rather than a
-# code: it lands in the stream, and a post-mortem asking why a Run worked fourteen Challenges when
-# the Board had sixty needs the reason on the line rather than a lookup table.
-UNCORROBORATED = (
+# How one cycle ended, named rather than left as a sentence for a caller to match on. The two
+# failures are not interchangeable and spec #63 asks for opposite responses to them: a Board that
+# fails the read contract at boot is a Board to refuse to start against, where the same failure
+# mid-Run keeps the snapshot and carries on. A caller cannot make that split off a string.
+#
+# `detail` carries the sentence beside the name, because a post-mortem asking why a Run worked
+# fourteen Challenges when the Board had sixty wants the reason on the line and not a lookup table.
+SYNCED = "synced"
+UNCORROBORATED = "uncorroborated"
+UNREADABLE = "unreadable"
+
+# The sentence behind `UNCORROBORATED`, beside the name so the two cannot drift apart.
+UNCORROBORATED_SAYS = (
     "the list came back empty and this Board also answers 200 to a query CTFd refuses, so an empty "
     "collection here is evidence of nothing (ADR-0016) — keeping the previous snapshot"
 )
@@ -60,6 +72,11 @@ UNCORROBORATED = (
 # the one live credential on disk. The last path segment is taken and nothing else, and where that
 # leaves nothing this is what the file is called.
 UNNAMED = "attachment"
+
+# The two `/mana` answers that are facts rather than weather: the plugin answering, and a 404 saying
+# this Board does not have it. Everything else — the lock, a 403, an unreachable host — is asked
+# again next cycle rather than remembered as a total of zero.
+SETTLED_MANA = (ANSWERED, ABSENT)
 
 # What happened to one listed file, named rather than left as a sentence, because the two ways of
 # not holding one want **opposite** responses on the next cycle.
@@ -144,9 +161,6 @@ class Sighting:
     challenge_type: str
     value: int
     solves: int
-    # The Board's own position in the list, kept because it is Order's last tie-break and because
-    # it is the only ordering that exists before a single solve lands.
-    position: int
     description: str
     attempts: int
     max_attempts: int | None
@@ -162,15 +176,68 @@ class Sighting:
     # reader has to be able to tell it from one extracted from what the Board says now.
     stale: bool = False
 
+    @classmethod
+    def of(
+        cls,
+        listed: Mapping[str, Any],
+        detail: Mapping[str, Any],
+        attachments: tuple[Attachment, ...],
+        before: Sighting | None,
+    ) -> Sighting:
+        """One Challenge out of the Board's two payloads, with nothing decided that was not read.
+
+        Which half a field comes from is the point. `solves`, `value` and `solved_by_me` are in the
+        list and move every cycle; the description, `attempts`, `max_attempts` and the deploy terms
+        are detail-only, and are what the per-Challenge GET is paid for. `category` and `type` come
+        through as the open strings they are.
+
+        **A detail GET that failed does not cost the Challenge**: every detail-side field is taken
+        from the last cycle that read it and the Sighting is marked stale. The description matters
+        because a Challenge with no description is one recon opens onto a filename
+        (`solver/recon.py`); `attempts` matters more, because it is our own submission count and a
+        zero here would hand a Board with limited attempts a second full budget of wrong Flags.
+        """
+        carried = before if not detail and before else None
+        description = str(detail.get("description", "") or (carried.description if carried else ""))
+        return cls(
+            challenge_id=listed.get("id"),
+            name=str(listed.get("name", "")),
+            category=str(listed.get("category", "")),
+            challenge_type=str(listed.get("type", "")),
+            value=int(listed.get("value") or 0),
+            solves=int(listed.get("solves") or 0),
+            description=description,
+            attempts=carried.attempts if carried else int(detail.get("attempts") or 0),
+            max_attempts=carried.max_attempts if carried else detail.get("max_attempts"),
+            solved=bool(listed.get("solved_by_me", False)),
+            terms=carried.terms if carried else Terms.of(detail or listed),
+            attachments=attachments,
+            changed=_moved(before, description, attachments),
+            stale=carried is not None,
+        )
+
+    @property
+    def slots(self) -> Slots:
+        """This Challenge's submission budget as the Board states it, for the one caller that
+        spends it. It is a property rather than two fields a caller pairs up itself, because the
+        pair is only ever meaningful together — a count of what we have spent with no maximum
+        beside it says nothing about whether another submission is affordable.
+
+        A Sighting whose detail GET never succeeded carries `max_attempts` `None`, which the gate
+        reads as **limited** — so the zero `attempts` underneath it can never buy a Challenge a
+        second full budget of wrong Flags (`solver/flag.py`).
+        """
+        return Slots(self.max_attempts, self.attempts)
+
 
 @dataclass(frozen=True)
 class Snapshot:
     """What one cycle saw, or — where the sync failed — what the last one that worked saw.
 
-    `failed` is the empty string on a snapshot that was read and a sentence on one that was not.
-    Nothing here is ever half-believed: a failed sync answers with the previous snapshot's
-    Challenges, so the Solver keeps working what it already has rather than watching the Board
-    empty.
+    `outcome` is `SYNCED` on a snapshot that was read and one of the two failure names on one that
+    was not, with `detail` carrying the sentence. Nothing here is ever half-believed: a failed sync
+    answers with the previous snapshot's Challenges, so the Solver keeps working what it already has
+    rather than watching the Board empty.
     """
 
     at: dt.datetime
@@ -178,11 +245,12 @@ class Snapshot:
     challenges: tuple[Sighting, ...] = ()
     scoreboard: tuple[Standing, ...] = ()
     mana: Mana | None = None
-    failed: str = ""
+    outcome: str = SYNCED
+    detail: str = ""
 
     @property
     def believable(self) -> bool:
-        return not self.failed
+        return self.outcome == SYNCED
 
     @property
     def unsolved(self) -> tuple[Sighting, ...]:
@@ -198,6 +266,16 @@ class Snapshot:
         fact from having none left — and it short-circuits affordability entirely, so a Board with
         mana disabled costs no accounting at all."""
         return bool(self.mana and self.mana.total > 0)
+
+
+class _Uncorroborated(BoardFailure):
+    """The read-contract control did not corroborate an empty list.
+
+    Its own class so that the one failure spec #63 wants a policy for — refuse to start at boot,
+    keep the snapshot mid-Run — is told apart from every ordinary transport fault by type rather
+    than by matching a sentence. It never leaves this module: `sync` turns it into the Snapshot's
+    `UNCORROBORATED`, because a failed sync is an outcome Intake records and not one it raises.
+    """
 
 
 class Intake:
@@ -226,7 +304,7 @@ class Intake:
         self._cycle = 0
         self._synced_at: dt.datetime | None = None
         self._mana: Mana | None = None
-        self._mana_read = False
+        self._uncorroborated = False
 
     def due(self) -> bool:
         """Whether the cycle has come round. A sync that has never run is always due — the first
@@ -244,8 +322,10 @@ class Intake:
         self._cycle += 1
         try:
             snapshot = self._read()
+        except _Uncorroborated as lying:
+            return self._failed(UNCORROBORATED, str(lying))
         except (BoardFailure, OSError) as fault:
-            return self._failed(str(fault))
+            return self._failed(UNREADABLE, f"{MARK} the Board could not be read — {fault}")
         self.snapshot = snapshot
         self._synced_at = snapshot.at
         self._record(snapshot)
@@ -254,13 +334,14 @@ class Intake:
     def _read(self) -> Snapshot:
         listed = self._board.challenges()
         # Asked only where the list came back empty, which is the whole cost argument for the
-        # control: a Board that lists Challenges never pays for it (ADR-0016).
-        if not listed and not self._board.collection_endpoints_reach_ctfd():
-            raise BoardFailure(f"{MARK} {UNCORROBORATED}")
+        # control: a Board that lists Challenges never pays for it. And asked only *once* — ADR-0016
+        # is explicit that failing it is not transient and must never be retried into a pass, so a
+        # Board that failed at 12:00 does not get its empty list believed at 12:05.
+        if not listed and (self._uncorroborated or not self._board.collection_endpoints_reach_ctfd()):
+            self._uncorroborated = True
+            raise _Uncorroborated(f"{MARK} {UNCORROBORATED_SAYS}")
         seen = {one.challenge_id: one for one in self.snapshot.challenges}
-        challenges = tuple(
-            self._sighting(entry, position, seen.get(entry.get("id"))) for position, entry in enumerate(listed)
-        )
+        challenges = tuple(self._sighting(entry, seen.get(entry.get("id"))) for entry in listed)
         return Snapshot(
             at=self._now(),
             cycle=self._cycle,
@@ -269,43 +350,24 @@ class Intake:
             mana=self._read_mana_once(),
         )
 
-    def _sighting(self, listed: dict[str, Any], position: int, before: Sighting | None) -> Sighting:
-        """One Challenge, from the list entry and the detail GET the list makes unavoidable.
+    def _sighting(self, listed: dict[str, Any], before: Sighting | None) -> Sighting:
+        """One Challenge: the list entry, the detail GET the list makes unavoidable, and the files.
 
-        A detail GET that failed does not cost the Challenge: **everything the detail carried** is
-        taken from the last cycle that read it, and the Sighting is marked stale. The description
-        matters because a Challenge with no description is one recon opens onto a filename
-        (`solver/recon.py`); `attempts` matters more, because it is our own submission count and a
-        zero here would hand a Board with limited attempts a second full budget of wrong Flags.
+        The I/O is here and the mapping is on `Sighting`, which is where `Terms.of` already puts the
+        same job. A detail GET that failed re-fetches nothing, because the manifest we would fetch
+        from is the manifest we did not see.
         """
         challenge_id = listed.get("id")
         try:
             detail = self._board.challenge(challenge_id)
         except (BoardFailure, OSError):
             detail = {}
-        stale = not detail
-        carried = before if stale and before else None
-        description = str(detail.get("description", "") or (carried.description if carried else ""))
         attachments = (
-            carried.attachments if carried else self._attachments(challenge_id, detail.get("files") or [], before)
+            before.attachments
+            if not detail and before
+            else self._attachments(challenge_id, detail.get("files") or [], before)
         )
-        return Sighting(
-            challenge_id=challenge_id,
-            name=str(listed.get("name", "")),
-            category=str(listed.get("category", "")),
-            challenge_type=str(listed.get("type", "")),
-            value=int(listed.get("value") or 0),
-            solves=int(listed.get("solves") or 0),
-            position=position,
-            description=description,
-            attempts=carried.attempts if carried else int(detail.get("attempts") or 0),
-            max_attempts=carried.max_attempts if carried else detail.get("max_attempts"),
-            solved=bool(listed.get("solved_by_me", False)),
-            terms=carried.terms if carried else Terms.of(detail or listed),
-            attachments=attachments,
-            changed=_moved(before, description, attachments),
-            stale=stale,
-        )
+        return Sighting.of(listed, detail, attachments, before)
 
     def _attachments(
         self, challenge_id: int | str, files: Sequence[Any], before: Sighting | None
@@ -362,13 +424,22 @@ class Intake:
         Once is not an optimisation: `/mana` takes the same per-team lock as a deploy and **blocks**
         rather than failing while one is in flight, so a call on a cycle is a call that can hang for
         minutes behind an Attempt that is deploying.
+
+        **Once means once it answered.** A read that failed is not a total, and remembering one
+        would be ADR-0008's own named failure — a discovered profile discovering the wrong thing,
+        with a transient `/mana` 403 as the example it had in mind. Cached, that fault reads as
+        `total: 0`, which is *mana switched off*, and a mana-limited Board would then be treated as
+        one with no cap at all for the rest of the Run. So only a settled answer is kept: the plugin
+        answering, or a 404 that says this Board does not have it.
         """
-        if not self._mana_read:
-            self._mana_read = True
-            self._mana = self._board.mana()
+        try:
+            if self._mana is None or self._mana.outcome not in SETTLED_MANA:
+                self._mana = self._board.mana()
+        except (BoardFailure, OSError):
+            self._mana = None
         return self._mana
 
-    def _failed(self, why: str) -> Snapshot:
+    def _failed(self, outcome: str, detail: str) -> Snapshot:
         """A sync that did not happen, recorded, with the previous snapshot handed back unchanged.
 
         The cycle number moves and the snapshot does not, which is what makes a Run that spent an
@@ -379,7 +450,7 @@ class Intake:
         retry against a Board that stopped answering is a tight retry against its rate limiter.
         """
         self._synced_at = self._now()
-        failed = replace(self.snapshot, at=self._now(), cycle=self._cycle, failed=why)
+        failed = replace(self.snapshot, at=self._now(), cycle=self._cycle, outcome=outcome, detail=detail)
         self._record(failed)
         return failed
 
@@ -389,7 +460,8 @@ class Intake:
             challenges=[_as_record(one) for one in snapshot.challenges],
             scoreboard=[{"rank": one.rank, "name": one.name, "score": one.score} for one in snapshot.scoreboard],
             mana=_mana_record(snapshot),
-            failed=snapshot.failed,
+            outcome=snapshot.outcome,
+            detail=snapshot.detail,
         )
 
 
@@ -407,6 +479,7 @@ def _as_record(sighting: Sighting) -> dict[str, Any]:
         "value": sighting.value,
         "solves": sighting.solves,
         "attempts": sighting.attempts,
+        "max_attempts": sighting.max_attempts,
         "solved": sighting.solved,
         "changed": sighting.changed,
         "stale": sighting.stale,
