@@ -20,6 +20,7 @@ from solver.codex import CLAIM, CLOSE, COMMAND, SWITCH, Child, Credential, Invoc
 from solver.credentials import SECRETS
 from solver.record import Recorder
 from solver.redaction import Redactor
+from solver.stall import Deadline
 
 FLAG = "brunner{base64_is_not_encryption}"
 
@@ -148,7 +149,7 @@ def attempt(recorder, launcher, *, chain=(SUBSCRIPTION,), minutes=10, home=None,
         run_attempt(
             "recon says: one file, note.b64",
             workdir(recorder),
-            NOON + dt.timedelta(minutes=minutes),
+            Deadline(budget=NOON + dt.timedelta(minutes=minutes)),
             recorder=recorder,
             attempt_id="attempt-1",
             chain=chain,
@@ -584,7 +585,7 @@ def test_a_working_directory_holding_the_record_is_refused_before_anything_is_sp
         run_attempt(
             "recon says: nothing",
             Path(recorder.run_dir),
-            NOON + dt.timedelta(minutes=10),
+            Deadline(budget=NOON + dt.timedelta(minutes=10)),
             recorder=recorder,
             attempt_id="attempt-1",
             chain=(SUBSCRIPTION,),

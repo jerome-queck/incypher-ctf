@@ -57,6 +57,7 @@ from typing import Any
 
 from solver.credentials import CHILD_ENVIRONMENT
 from solver.record import Recorder, Step, Usage
+from solver.stall import Deadline
 
 # Every line this module writes about itself opens with this, so a reader of a stream can tell what
 # the adapter said from what a tool said — the same convention `solver/recon.py` holds, and for the
@@ -209,7 +210,7 @@ Launch = Callable[[Sequence[str], Path, Mapping[str, str], bytes], Child]
 def run_attempt(
     prompt: str,
     workdir: Path,
-    deadline: dt.datetime,
+    deadline: Deadline,
     *,
     recorder: Recorder,
     attempt_id: str,
@@ -226,6 +227,11 @@ def run_attempt(
     carried between Attempts, and the moment this Attempt is killed. Everything after the star is
     plumbing — where to write, what to call this Attempt, and which rungs are available.
 
+    The deadline is an object rather than a timestamp because the orchestrator may move it while a
+    child is already running: a Checkpoint buys the kill deadline and never a Step, since the
+    vendor's agent takes its next turn without asking (ADR-0005 as ADR-0014 amends it). It is read
+    on every pass of the loop below and computed nowhere here.
+
     `first_step` continues the Attempt's numbering rather than restarting it: recon opened this
     Attempt and its probes were its first Steps.
 
@@ -237,7 +243,7 @@ def run_attempt(
     root = Path(workdir).resolve()
     if Path(recorder.run_dir).resolve().is_relative_to(root):
         raise ValueError(f"the working directory {root} holds this Run's own record, which the model could rewrite")
-    watch = _Watch(
+    transcript = _Transcript(
         recorder=recorder,
         attempt_id=attempt_id,
         workdir=Path(workdir),
@@ -246,7 +252,7 @@ def run_attempt(
         launch=launch or _spawn,
         now=now or _utcnow,
     )
-    return watch.run(prompt, deadline, tuple(chain))
+    return transcript.run(prompt, deadline, tuple(chain))
 
 
 @dataclass
@@ -260,7 +266,7 @@ class _Flight:
 
 
 @dataclass
-class _Watch:
+class _Transcript:
     """One Attempt in flight: the Steps it has spent, the invocations it has made, and the one
     place a line of the vendor's stream becomes a record."""
 
@@ -277,7 +283,7 @@ class _Watch:
     _said: list[str] = field(default_factory=list)
     _broke: bool = False
 
-    def run(self, prompt: str, deadline: dt.datetime, chain: Sequence[Credential]) -> Iterator[Taken]:
+    def run(self, prompt: str, deadline: Deadline, chain: Sequence[Credential]) -> Iterator[Taken]:
         """Every rung in turn, until one of them ends the Attempt or the chain is spent."""
         remaining = list(chain)
         if not remaining:
@@ -295,7 +301,7 @@ class _Watch:
             yield self._handed(credential, remaining[0], cause, closed.shown)
 
     def _invoke(
-        self, prompt: str, deadline: dt.datetime, credential: Credential
+        self, prompt: str, deadline: Deadline, credential: Credential
     ) -> Generator[Taken, None, tuple[str, Taken]]:
         """One spawn of the CLI, watched to its end. Yields Steps; answers with how it ended.
 
@@ -321,7 +327,7 @@ class _Watch:
         cause = self._cause(cause, exit_code)
         return cause, self._shut(flight, credential, exit_code, _closing(cause, exit_code, errors), kind=CLOSE)
 
-    def _watch(self, child: Child, deadline: dt.datetime, credential: Credential) -> Generator[Taken, None, str]:
+    def _watch(self, child: Child, deadline: Deadline, credential: Credential) -> Generator[Taken, None, str]:
         """Read the CLI's stdout to its end, or to the deadline, whichever comes first.
 
         Lines are reassembled here rather than by whatever is below the seam, because a JSONL
@@ -330,7 +336,7 @@ class _Watch:
         """
         buffered = b""
         while True:
-            if (left := (deadline - self.now()).total_seconds()) <= 0:
+            if (left := deadline.left(self.now())) <= 0:
                 return self._cut_short(credential)
             block = child.read(left)
             if block is None:
