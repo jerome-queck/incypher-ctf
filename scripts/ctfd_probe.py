@@ -36,6 +36,9 @@ PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
 sys.path.insert(0, str(REPO_ROOT))
 
 from solver.board import Board, BoardFailure  # noqa: E402
+from solver.instance import INSTANCED_TYPE, Instances, Terms  # noqa: E402
+from solver.record import Recorder  # noqa: E402
+from solver.redaction import Redactor  # noqa: E402
 
 
 class ProbeFailure(BoardFailure):
@@ -246,6 +249,55 @@ def check_files_download_headlessly(board: Board, challenges: list[dict[str, Any
     raise Unproven("no challenge exposes a file yet — re-run once the board is populated")
 
 
+def check_instance_lifecycle(board: Board, challenges: list[dict[str, Any]]) -> str:
+    """Deploy an Instance, renew it, terminate it, and confirm the ledger is empty afterwards.
+
+    This is v1's gate criterion — *"≥1 Instance it deployed and terminated itself"* — run as a
+    pre-flight rather than discovered during a Run. Thirty-two of seventy-four Brunner Challenges
+    cannot be reconned without one, so a board where this path is broken is a board where two
+    Challenges in five are unreachable.
+
+    The renew here is immediate, which proves the call and not the policy: renewing *late* is what
+    `solver/instance.py` decides and `tests/test_instance_path.py` holds, because a renew sets
+    `until = now + timeout` and one taken early throws away whatever remained.
+    """
+    if not board.authenticated:
+        raise Unproven("deploying needs a token; the anonymous read path cannot prove this")
+    instanced = next((one for one in challenges if one.get("type") == INSTANCED_TYPE), None)
+    if instanced is None:
+        raise Unproven(f"no {INSTANCED_TYPE} challenge on this board yet — re-run once one appears")
+
+    terms = Terms.of(board.json("GET", f"/api/v1/challenges/{instanced['id']}"))
+    instances = Instances(board, _probe_recorder())
+    deployed = instances.deploy(terms, attempt_id="ctfd-probe")
+    if deployed.lease is None:
+        raise ProbeFailure(f"the deploy produced no Instance — {deployed.shape}: {deployed.shown}")
+    try:
+        renewed = instances.renew(deployed.lease, attempt_id="ctfd-probe")
+        if renewed.shape:
+            raise ProbeFailure(f"the renew answered {renewed.shape}: {renewed.shown}")
+    finally:
+        released = instances.terminate(terms.challenge_id, attempt_id="ctfd-probe")
+
+    still_held = [record.challenge_name for record in board.instances_held()]
+    if instanced["name"] in still_held:
+        raise ProbeFailure(
+            f"the ledger still lists {instanced['name']!r} after a terminate answered "
+            f"{released.shown!r} — chall-manager never evicts, so this is capacity lost for the run"
+        )
+    return (
+        f"deployed {instanced['name']!r} at {deployed.lease.connection_info!r} until "
+        f"{deployed.lease.until}, renewed, terminated, and the ledger holds {still_held or 'nothing'}"
+    )
+
+
+def _probe_recorder() -> Recorder:
+    """The Instance path records Steps like everything else, so the probe gives it somewhere to
+    write. `.cache/` is the repository's disposable scratch and is gitignored, which is what makes
+    a record left behind here readable afterwards and never committed."""
+    return Recorder(REPO_ROOT / ".cache" / "probe-state", "ctfd-probe", Redactor.for_declared_secrets(os.environ))
+
+
 def check_rate_limits_are_visible(board: Board) -> str:
     status, raw, _ = board.request("GET", "/api/v1/configs")
     if status == 401:
@@ -315,6 +367,7 @@ def main() -> int:
         outcomes.append(
             _report("files download headlessly", lambda: check_files_download_headlessly(board, challenges))
         )
+        outcomes.append(_report("instance lifecycle", lambda: check_instance_lifecycle(board, challenges)))
 
     outcomes.append(_report("board settings", lambda: check_rate_limits_are_visible(board)))
 
