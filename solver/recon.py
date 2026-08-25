@@ -40,6 +40,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from solver.credentials import CHILD_ENVIRONMENT
 from solver.record import NO_MODEL, Recorder
 
 # Every line the cascade writes about itself opens with this — the name of an in-process probe, a
@@ -96,11 +97,6 @@ BRANCHES: dict[str, tuple[tuple[str, ...], ...]] = {
 # grace is a process that will not exit rather than one still working — and a recon that waits on
 # one is the hang the caps exist to make impossible.
 REAP_GRACE_SECONDS = 1.0
-
-# The child gets a named environment rather than ours. These commands read challenge-supplied
-# bytes, and a tool that prints its own environment on a malformed input would put every declared
-# credential into an Observation — redacted, but only for the values redaction was told about.
-CHILD_ENVIRONMENT = ("PATH", "HOME", "TERM", "LANG")
 
 
 @dataclass(frozen=True)
@@ -310,6 +306,9 @@ def _run(argv: tuple[str, ...], budget: float, cap: int) -> tuple[int | None, by
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            # A named environment rather than ours: these commands read challenge-supplied bytes,
+            # and a tool that printed its own environment on a malformed input would put every
+            # declared credential into an Observation (`solver/credentials.py`).
             env={name: os.environ[name] for name in CHILD_ENVIRONMENT if name in os.environ},
         )
     except OSError as error:
