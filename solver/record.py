@@ -11,7 +11,9 @@ Three shapes follow from that and are the reason this module is not a logger:
 - **Steps are a `step-begin` / `step-end` pair.** A single record at completion makes a Step that
   hung or crashed mid-flight invisible, and at a crash the command in flight is the prime suspect.
 - **Observation bodies stay whole, in files beside the stream**, so a line is small and fixed-size
-  and a Run that produced gigabytes is still cheap to parse.
+  and a Run that produced gigabytes is still cheap to parse. **Claims get their own directory**
+  beside them, because Flag verification sweeps one of the two and a Claim swept as an Observation
+  is what would authorise a fabricated Flag.
 - **Redaction happens here**, before anything reaches disk. `/state` gets copied, zipped and pasted
   into issues, so treating it as clean because it is untracked is how the leak happens anyway.
 
@@ -44,6 +46,14 @@ SCHEMA_VERSION = 1
 # declared secret happened to be a substring of would be silently destroyed, and a destroyed Flag is
 # unrecoverable where an over-long one is merely ugly.
 NEVER_REDACTED = ("flag",)
+
+# The two body channels, and the whole reason there are two. An Observation is real output from a
+# real command; a Claim is anything the model *said*. Flag verification sweeps the first and never
+# the second, so a Flag the model asserted can never be swept back in as evidence that it observed
+# one (ADR-0014). They are separate directories rather than one directory with a field, because a
+# grep that has to read a field to know what it is holding is a grep that will one day forget to.
+OBSERVATIONS = "observations"
+CLAIMS = "claims"
 
 
 @dataclass(frozen=True)
@@ -121,8 +131,8 @@ class Recorder:
         self._observation_limit = observation_limit
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self._mono = mono
-        self._bodies = self.run_dir / "observations"
-        self._bodies.mkdir(parents=True, exist_ok=True)
+        for channel in (OBSERVATIONS, CLAIMS):
+            (self.run_dir / channel).mkdir(parents=True, exist_ok=True)
         self._seq = _resume_after_a_crash(self.stream_path)
 
     def run_open(self, *, board_profile: dict[str, Any]) -> None:
@@ -202,6 +212,25 @@ class Recorder:
             },
         )
 
+    def claim(self, *, attempt_id: str, text: bytes) -> str:
+        """Record something the model **said**, in the channel no check ever greps.
+
+        A Claim is not a Step and is never written as one: it earns no `step-end`, and the line
+        left behind carries a pointer, a length and a digest — never a word of the prose. That is
+        what makes the Observation log orchestrator-append-only in the only sense that matters. The
+        model still writes into the record, because a Run that lost the model's reasoning could not
+        be read afterwards; what it cannot do is write into the half that authorises a Flag.
+
+        Answers with the prose as the orchestrator will read it, so a caller that needs the approach
+        label or a candidate Flag takes it from here rather than from the file.
+        """
+        ref, digest, nbytes, shown = self._body(text, CLAIMS, ".txt")
+        self._write(
+            "claim",
+            {"attempt_id": attempt_id, "claim_ref": ref, "claim_digest": digest, "claim_bytes": nbytes},
+        )
+        return shown
+
     def step_begin(
         self, *, attempt_id: str, step_index: int, command_raw: str, command_normalised: str, tool: str
     ) -> Step:
@@ -256,15 +285,19 @@ class Recorder:
         The digest is taken over the redacted bytes, so it can never become an oracle for a secret
         the redaction just removed.
         """
+        ref, digest, nbytes, shown = self._body(output, OBSERVATIONS, ".out")
+        return Observation(digest=digest, nbytes=nbytes, ref=ref, shown=shown)
+
+    def _body(self, output: bytes, folder: str, suffix: str) -> tuple[str, str, int, str]:
+        """One body file, whole on disk under the redaction, described for the line pointing at it.
+
+        The number is the sequence the record about to be written will carry, so a body file and
+        its line share an address and neither channel needs a second counter.
+        """
         body = self._redactor.redact(output)
-        ref = f"observations/{self._seq + 1:06d}.out"
+        ref = f"{folder}/{self._seq + 1:06d}{suffix}"
         self._attempt_twice(lambda: (self.run_dir / ref).write_bytes(body))
-        return Observation(
-            digest=digest_of(body),
-            nbytes=len(body),
-            ref=ref,
-            shown=elide(body, self._observation_limit),
-        )
+        return ref, digest_of(body), len(body), elide(body, self._observation_limit)
 
     def _write(self, kind: str, fields: dict[str, Any]) -> None:
         self._seq += 1

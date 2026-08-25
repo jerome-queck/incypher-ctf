@@ -35,3 +35,18 @@ SECRETS = (
 # competition the Solver enters, so a record that redacted it would hide the one field a post-mortem
 # needs to tell "played badly" from "played the wrong board".
 NOT_SECRETS = ("CTFD_URL",)
+
+# The complement, and the reason it lives beside the two lists above rather than in either module
+# that spawns a child: **every** child gets exactly these four names and nothing else. The recon
+# cascade and the vendor's agent both run challenge-supplied code as root in this container, and an
+# allowlist written twice is an allowlist that will one day differ — in the direction where one of
+# them inherits a credential. A name is added here or it reaches no child at all.
+#
+# `CTFD_URL` is deliberately absent even though it is not a secret: it is the address of the Board,
+# and the model holding it is half of what "Codex never touches the Board" rules out (ADR-0014).
+#
+# What this does **not** cover is a credential on disk. Root walks through any file-permission fix,
+# so `$CODEX_HOME/auth.json` is readable by challenge code no matter what is in this tuple; that
+# hole is accepted for v1 and named in `docs/credentials.md`, and the boundary that closes it is
+# v2's uid separation.
+CHILD_ENVIRONMENT = ("PATH", "HOME", "TERM", "LANG")
