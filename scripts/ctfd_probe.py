@@ -27,7 +27,15 @@ import env_file
 PASS, SKIP, FAIL = "pass", "skip", "fail"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# One deliberately-wrong Flag, its wrapper, and a command that emits it — so the planted Observation
+# the submission check works from is one the replay can genuinely reproduce, exactly as a Challenge's
+# own command would be. The wrapper is passed in like any Board profile value; discovering it off a
+# live Board is [#74](https://github.com/jerome-queck/incypher-ctf/issues/74)'s.
 PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
+PROBE_WRAPPER = r"brunner\{[^}]{1,64}\}"
+PROBE_COMMAND = f"printf '%s\\n' '{PROBE_FLAG}'"
+PROBE_ATTEMPT = "probe-attempt"
 
 # `python3 scripts/ctfd_probe.py` puts `scripts/` on the import path and not the repository root,
 # so the package this probe consumes has to be pointed at. Importing the seam rather than keeping
@@ -35,9 +43,10 @@ PROBE_FLAG = "brunner{ctfd-probe-deliberately-wrong}"
 # then provably the same code rather than two things that agree today (ADR-0008).
 sys.path.insert(0, str(REPO_ROOT))
 
-from solver.board import Board, BoardFailure  # noqa: E402
+from solver.board import INCORRECT, Board, BoardFailure  # noqa: E402
+from solver.flag import Flags, Slots  # noqa: E402
 from solver.instance import INSTANCED_TYPE, Instances, Terms  # noqa: E402
-from solver.record import Recorder  # noqa: E402
+from solver.record import NO_MODEL, Recorder  # noqa: E402
 from solver.redaction import Redactor  # noqa: E402
 
 
@@ -213,27 +222,61 @@ def check_challenges_enumerate(board: Board) -> tuple[str, list[dict[str, Any]]]
     )
 
 
-def check_attempt_verdict_is_in_the_body(board: Board, challenge: dict[str, Any]) -> str:
-    """Submit one deliberately-wrong flag.
+def check_a_planted_flag_is_swept_and_graded(board: Board, challenges: list[dict[str, Any]]) -> str:
+    """Plant a Flag in a real Observation and walk it all the way to a verdict.
 
-    One wrong submission is not the "indiscriminate brute-forcing" the rules ban, but it is the
-    only way to learn that the verdict lives in data.status while the HTTP code stays 200.
+    One wrong submission is not the "indiscriminate brute-forcing" the rules ban, and it buys two
+    things at once: that the verdict lives in `data.status` while the HTTP code says whatever it
+    likes, and that the whole submission path — sweep, replay, guard, submit — is the path that will
+    run at 14:00 rather than one that agrees with it today.
+
+    The planted Observation is written the way the adapter writes one, so nothing here is a
+    rehearsal of the real thing: `solver/flag.py` reads it back out of the record itself.
+
+    It has to be aimed at a Challenge this team has **not** solved. A solved one answers any Flag,
+    right or wrong, with `already_solved` and the message *"Incorrect but you already solved this"* —
+    which proves that the verdict is in the body and proves nothing whatever about grading.
     """
     if not board.authenticated:
         raise Unproven("submitting needs a token; the anonymous read path cannot prove this")
-    status, raw, _ = board.request(
-        "POST",
-        "/api/v1/challenges/attempt",
-        {"challenge_id": challenge["id"], "submission": PROBE_FLAG},
+    unsolved = [challenge for challenge in challenges if not challenge.get("solved_by_me")]
+    if not unsolved:
+        raise Unproven(
+            "this team has solved every Challenge on the board, and a solved one grades "
+            "'already_solved' whatever it is sent — there is nothing left here to submit against"
+        )
+    challenge = unsolved[0]
+    recorder = _probe_recorder()
+    step = recorder.step_begin(
+        attempt_id=PROBE_ATTEMPT,
+        step_index=1,
+        command_raw=PROBE_COMMAND,
+        command_normalised=PROBE_COMMAND,
+        tool="shell",
     )
-    if status != 200:
-        raise ProbeFailure(f"attempt answered HTTP {status} — expected 200 carrying a verdict")
-    verdict = json.loads(raw)["data"]
-    if verdict.get("status") != "incorrect":
-        raise ProbeFailure(f"expected status 'incorrect' for a junk flag, got {verdict}")
+    step.end(exit_code=0, output=f"{PROBE_FLAG}\n".encode(), usage=NO_MODEL)
+
+    detail = board.json("GET", f"/api/v1/challenges/{challenge['id']}")
+    flags = Flags(board, recorder, flag_pattern=PROBE_WRAPPER)
+    candidates = flags.candidates(attempt_id=PROBE_ATTEMPT)
+    if not candidates:
+        raise ProbeFailure("the sweep found no candidate in an Observation that holds one")
+    outcome = flags.submit(
+        candidates,
+        attempt_id=PROBE_ATTEMPT,
+        challenge_id=challenge["id"],
+        slots=Slots(detail.get("max_attempts"), int(detail.get("attempts") or 0)),
+        workdir=REPO_ROOT,
+    )
+    if not outcome.graded:
+        raise ProbeFailure(f"nothing was submitted — the gate held every candidate: {outcome.held}")
+    answer = outcome.graded[0]
+    if answer.verdict.outcome != INCORRECT:
+        raise ProbeFailure(f"expected a deliberately-wrong flag to grade 'incorrect', got {answer.verdict}")
     return (
-        f"HTTP 200 with data.status={verdict['status']!r} against {challenge['name']!r} — "
-        "read the verdict from the body, never from the status code"
+        f"a {answer.candidate.strength} candidate swept out of the record and submitted against "
+        f"{challenge['name']!r}: HTTP {answer.verdict.http_status} carrying "
+        f"data.status={answer.verdict.outcome!r} — read the verdict from the body, never the status"
     )
 
 
@@ -361,10 +404,10 @@ def main() -> int:
     if challenges:
         outcomes.append(
             _report(
-                "attempt verdict",
+                "a planted flag is swept and graded",
                 _unproven("--no-attempt was passed, so submission semantics are unverified")
                 if arguments.no_attempt
-                else lambda: check_attempt_verdict_is_in_the_body(board, challenges[0]),
+                else lambda: check_a_planted_flag_is_swept_and_graded(board, challenges),
             )
         )
         outcomes.append(

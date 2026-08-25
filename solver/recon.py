@@ -31,17 +31,14 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import math
-import os
 import re
-import select
-import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from solver.credentials import CHILD_ENVIRONMENT
 from solver.record import NO_MODEL, Recorder
+from solver.shell import run
 
 # Every line the cascade writes about itself opens with this — the name of an in-process probe, a
 # kill, a cap, a spent budget — so a reader of a stream can tell what the Solver said from what the
@@ -92,11 +89,6 @@ BRANCHES: dict[str, tuple[tuple[str, ...], ...]] = {
     "audio": (EXIFTOOL,),
     "video": (EXIFTOOL,),
 }
-
-# After EOF on its stdout a child has said everything it is going to say, so anything past this
-# grace is a process that will not exit rather than one still working — and a recon that waits on
-# one is the hang the caps exist to make impossible.
-REAP_GRACE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -231,7 +223,7 @@ class _Cascade:
             subject,
             " ".join(argv),
             argv[0],
-            lambda budget: _run(argv, budget, self._limits.output_bytes),
+            lambda budget: run(argv, budget=budget, cap=self._limits.output_bytes, mark=MARK),
         )
 
     def _probe(
@@ -293,58 +285,6 @@ def _size_of(artefact: Path) -> int:
         return artefact.stat().st_size
     except OSError:
         return 0
-
-
-def _run(argv: tuple[str, ...], budget: float, cap: int) -> tuple[int | None, bytes]:
-    """One external tool, with its wall-clock and its output bounded as they are spent.
-
-    A tool that is not installed is the ordinary case rather than the exceptional one — this runs
-    on a laptop as readily as in the image — so it returns like any other failure.
-    """
-    try:
-        process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            # A named environment rather than ours: these commands read challenge-supplied bytes,
-            # and a tool that printed its own environment on a malformed input would put every
-            # declared credential into an Observation (`solver/credentials.py`).
-            env={name: os.environ[name] for name in CHILD_ENVIRONMENT if name in os.environ},
-        )
-    except OSError as error:
-        return None, f"{MARK} {argv[0]} did not run — {error}".encode()
-    body, note = _captured(process, budget, cap)
-    if not note:
-        try:
-            return process.wait(timeout=REAP_GRACE_SECONDS), body
-        except subprocess.TimeoutExpired:
-            note = f"\n{MARK} killed — it closed its output and did not exit".encode()
-    process.kill()
-    process.wait()
-    return None, body + note
-
-
-def _captured(process: subprocess.Popen[bytes], budget: float, cap: int) -> tuple[bytes, bytes]:
-    """Read what the child says until it stops, the cap is reached, or the budget is gone.
-
-    The cap is applied here and not to a finished buffer, which is the difference between a bound
-    and an intention: `strings` over a multi-gigabyte artefact will happily fill memory first.
-    """
-    deadline = time.monotonic() + budget
-    blocks: list[bytes] = []
-    taken = 0
-    with process.stdout as stream:
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0 or not select.select([stream], [], [], left)[0]:
-                return b"".join(blocks)[:cap], f"\n{MARK} killed after {budget:.1f}s".encode()
-            block = os.read(stream.fileno(), 65536)
-            if not block:
-                return b"".join(blocks), b""
-            blocks.append(block)
-            taken += len(block)
-            if taken >= cap:
-                return b"".join(blocks)[:cap], f"\n{MARK} output capped at {cap} bytes".encode()
 
 
 def _entropy(artefact: Path) -> tuple[int | None, bytes]:

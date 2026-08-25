@@ -17,7 +17,7 @@ from itertools import chain
 from pathlib import Path
 
 import pytest
-from solver import recon as recon_module
+from solver import shell as shell_module
 from solver.recon import BRANCHES, DISPATCH, OD, STRINGS, Limits, recon
 from solver.record import Recorder
 from solver.redaction import Redactor
@@ -177,7 +177,7 @@ def test_a_command_that_will_not_stop_is_killed_and_says_so(tmp_path, recorder, 
 def test_a_command_that_stops_talking_without_exiting_is_killed_too(tmp_path, recorder, monkeypatch):
     """The other way a command hangs: end-of-output is not end-of-process, and a cascade that
     waits for the second one has no cap at all."""
-    monkeypatch.setattr(recon_module, "REAP_GRACE_SECONDS", 0.2)
+    monkeypatch.setattr(shell_module, "REAP_GRACE_SECONDS", 0.2)
     monkeypatch.setitem(
         BRANCHES, "text/plain", (("python3", "-c", "import os, time; os.close(1); os.close(2); time.sleep(30)"),)
     )
