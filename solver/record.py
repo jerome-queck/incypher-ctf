@@ -179,6 +179,53 @@ class Recorder:
     def run_close(self, *, cause: str) -> None:
         self._write("run-close", {"cause": cause, "write_failures": self.write_failures})
 
+    def intake(
+        self,
+        *,
+        cycle: int,
+        challenges: list[dict[str, Any]],
+        scoreboard: list[dict[str, Any]],
+        mana: dict[str, Any] | None,
+        failed: str,
+    ) -> None:
+        """One Intake cycle, as a record of what the Board said rather than of what we concluded.
+
+        `challenges` carries each Challenge's `(solves, value)` pair, which is the whole reason this
+        is written every cycle: the scoring curve is fitted from the stream afterwards, so a later
+        version needs no new Solver code to have the data (ADR-0015). The same line carries what was
+        fetched and what was refused, because a Challenge whose attachment was over the cap is one
+        every later judgement is made without.
+
+        `failed` is the empty string on a sync that happened and a sentence on one that did not —
+        and a failed sync is a **record**, never an exception, because a Board that could not be
+        read is not a Board that emptied and a Run never ends on the Board looking finished.
+        """
+        self._write(
+            "intake",
+            {
+                "cycle": cycle,
+                "challenges": challenges,
+                "scoreboard": scoreboard,
+                "mana": mana,
+                "failed": failed,
+            },
+        )
+
+    def triage(self, *, tiers: list[dict[str, Any]]) -> None:
+        """The Tier each Challenge was given, **with the provenance that produced it**.
+
+        The provenance is the point of the record rather than a decoration on it: a Tier extracted
+        from a stated difficulty, one inferred from `solves` and one a model judged are three
+        different qualities of evidence, and an analysis that cannot tell them apart cannot say
+        whether the model's judgement was ever worth asking for — which is the one thing measured
+        near zero and the reason Triage extracts rather than predicts (ADR-0006).
+
+        There are no token counts on this line, and that is not an omission: a judge that spent any
+        is an invocation that wrote its own Steps, and the same tokens counted twice would be worse
+        than a line that leaves the counting to the records that observed it.
+        """
+        self._write("triage", {"tiers": tiers})
+
     def attempt_open(
         self,
         *,
