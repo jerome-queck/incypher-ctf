@@ -21,6 +21,40 @@ from collections.abc import Mapping
 from solver.credentials import SECRETS
 
 
+# A base64 fragment shorter than this matches ordinary text, and an Observation eaten by a false
+# positive is the failure nothing detects. Every declared secret is a credential, so its encodings
+# are far longer than this; the floor exists so that a hypothetical short one costs coverage of its
+# *encoded* forms rather than costing the whole stream. The value itself is always matched raw.
+MIN_ENCODED_FRAGMENT = 8
+
+# What the first characters of a base64 group say about the bytes under them, per starting offset.
+# At offset 1 the first two characters are shared with whatever came before; at offset 2, three are.
+_SHARED_WITH_WHAT_CAME_BEFORE = (0, 2, 3)
+
+
+def _base64_forms(raw: bytes) -> set[bytes]:
+    """The value as it appears **inside** a larger base64 blob, at each of the three alignments.
+
+    Base64 encodes three bytes at a time, so `b64encode(secret)` occurs in
+    `b64encode("user:" + secret)` only when the prefix length happens to divide by three — which is
+    exactly the Basic-auth header this module's docstring cites, silently unmatched. Encoding the
+    secret at each offset and dropping the characters that neighbouring bytes have a say in leaves
+    the part that is the secret's alone. Up to two characters at each end stay in the clear, which
+    is under two bytes of it and is the cost of matching the other forty.
+    """
+    forms = set()
+    for encode in (base64.b64encode, base64.urlsafe_b64encode):
+        for offset in range(3):
+            encoded = encode(b"\0" * offset + raw).rstrip(b"=")
+            head = _SHARED_WITH_WHAT_CAME_BEFORE[offset]
+            # A trailing partial group is finished by bytes that follow the secret, so its last
+            # character is theirs as much as ours.
+            tail = len(encoded) - (0 if (offset + len(raw)) % 3 == 0 else 1)
+            if len(fragment := encoded[head:tail]) >= MIN_ENCODED_FRAGMENT:
+                forms.add(fragment)
+    return forms
+
+
 def _forms(value: str) -> set[bytes]:
     """Every spelling of one secret that could reach an Observation.
 
@@ -30,11 +64,9 @@ def _forms(value: str) -> set[bytes]:
     raw = value.encode()
     return {
         raw,
-        base64.b64encode(raw),
-        base64.urlsafe_b64encode(raw),
         urllib.parse.quote(value, safe="").encode(),
         urllib.parse.quote_plus(value).encode(),
-    }
+    } | _base64_forms(raw)
 
 
 class Redactor:

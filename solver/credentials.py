@@ -5,6 +5,10 @@ image, and the image copies `solver/` and nothing else. A second copy beside the
 be a rule that exists in two places, which is a rule that will disagree — and the direction it
 would disagree in is a credential declared for the reporter and not for the redactor.
 
+Both tuples travel together even though only the first is read in the image. They are one
+classification rather than two lists — a name belongs to exactly one of them, and splitting them
+across files is what would let a name end up in both or in neither.
+
 [ADR-0010](../docs/adr/0010-the-subscription-is-the-credential-and-nothing-waits-for-a-human.md)
 requires a test asserting this set covers *"every secret variable in `.env.example`"*. Binding it
 to the template is `scripts/declared_secrets.py`, which reads a file that exists in the repository

@@ -65,8 +65,9 @@ class Usage:
 class Step:
     """A Step in flight — the handle a `step-begin` returns, and the only route to its `step-end`.
 
-    The pair cannot be mismatched because the end is reachable only through the begin, and the
-    duration is measured here rather than passed in, so no caller can report one it did not spend.
+    It carries the begin's clock and nothing else. The pair cannot be mismatched, because the end is
+    reachable only through the begin — and the duration comes off that clock rather than from a
+    caller, so no Step can report time it did not spend.
     """
 
     def __init__(self, recorder: Recorder, identity: dict[str, Any], began_mono: float) -> None:
@@ -82,26 +83,9 @@ class Step:
         usage: Usage,
         checkpoint: str | None = None,
     ) -> Observation:
-        """Close the Step: store its Observation whole, and write the line that points at it."""
-        observation = self._recorder._store(output)
-        self._recorder._write(
-            "step-end",
-            {
-                **self._identity,
-                "exit_code": exit_code,
-                "duration_ms": round((self._recorder._mono() - self._began_mono) * 1000),
-                "observation_digest": observation.digest,
-                "observation_bytes": observation.nbytes,
-                "observation_ref": observation.ref,
-                "checkpoint": checkpoint,
-                "model": usage.model,
-                "tokens_in": usage.tokens_in,
-                "tokens_out": usage.tokens_out,
-                "cache_read": usage.cache_read,
-                "cache_write": usage.cache_write,
-            },
-        )
-        return observation
+        """Everything here is a fact about what happened. The duration is not one a caller can
+        report, so it is measured from the clock the begin took."""
+        return self._recorder._close_step(self._identity, self._began_mono, exit_code, output, usage, checkpoint)
 
 
 class Recorder:
@@ -232,6 +216,35 @@ class Recorder:
         self._write("step-begin", identity)
         return Step(self, identity, self._mono())
 
+    def _close_step(
+        self,
+        identity: dict[str, Any],
+        began_mono: float,
+        exit_code: int | None,
+        output: bytes,
+        usage: Usage,
+        checkpoint: str | None,
+    ) -> Observation:
+        observation = self._store(output)
+        self._write(
+            "step-end",
+            {
+                **identity,
+                "exit_code": exit_code,
+                "duration_ms": round((self._mono() - began_mono) * 1000),
+                "observation_digest": observation.digest,
+                "observation_bytes": observation.nbytes,
+                "observation_ref": observation.ref,
+                "checkpoint": checkpoint,
+                "model": usage.model,
+                "tokens_in": usage.tokens_in,
+                "tokens_out": usage.tokens_out,
+                "cache_read": usage.cache_read,
+                "cache_write": usage.cache_write,
+            },
+        )
+        return observation
+
     def _store(self, output: bytes) -> Observation:
         """Redact, keep the body whole on disk, and describe it for the line that will point at it.
 
@@ -264,18 +277,7 @@ class Recorder:
             self._redactor,
         )
         line = json.dumps(record) + "\n"
-        self._attempt_twice(lambda: self._append(line))
-
-    def _append(self, line: str) -> None:
-        """One record, appended under an exclusive lock and flushed before the lock is released.
-
-        The lock is what makes a record atomic against any other writer of this file; the flush is
-        what makes a killed container lose at most the line it was writing.
-        """
-        with self.stream_path.open("a", encoding="utf-8") as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-            stream.write(line)
-            stream.flush()
+        self._attempt_twice(lambda: _locked_append(self.stream_path, line))
 
     def _attempt_twice(self, write: Callable[[], Any]) -> None:
         """Retried once, then counted — never fatal and never silent.
@@ -290,6 +292,15 @@ class Recorder:
             except OSError:
                 if last:
                     self.write_failures += 1
+
+
+def _locked_append(path: Path, text: str) -> None:
+    """The lock is what makes a record atomic against any other writer of this file; the flush is
+    what makes a killed container lose at most the line it was writing."""
+    with path.open("a", encoding="utf-8") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        stream.write(text)
+        stream.flush()
 
 
 def _redacted(value: Any, redactor: Redactor) -> Any:
@@ -319,13 +330,17 @@ def _resume_after_a_crash(stream: Path) -> int:
         return 0
     written = stream.read_bytes()
     if written and not written.endswith(b"\n"):
-        with stream.open("a", encoding="utf-8") as opened:
-            fcntl.flock(opened.fileno(), fcntl.LOCK_EX)
-            opened.write("\n")
-    seqs = []
-    for line in written.decode(errors="replace").splitlines():
-        try:
-            seqs.append(int(json.loads(line)["seq"]))
-        except (ValueError, KeyError, TypeError):
-            continue
-    return max(seqs, default=0)
+        _locked_append(stream, "\n")
+    return max((seq for line in written.decode(errors="replace").splitlines() if (seq := _seq_in(line))), default=0)
+
+
+def _seq_in(line: str) -> int | None:
+    """This module's one reader, holding the third stability rule: access by name, with a default.
+
+    A line that cannot answer is the crash's truncated one, or a record written by a schema this
+    reader has never met. Neither is a reason to stop reading the rest.
+    """
+    try:
+        return int(json.loads(line).get("seq"))
+    except (ValueError, TypeError, AttributeError):
+        return None

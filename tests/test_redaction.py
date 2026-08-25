@@ -42,6 +42,29 @@ def test_the_encoded_forms_a_verbose_http_call_emits_are_covered(encode):
     assert TOKEN not in redactor.redact(f"POST /x -d {encode(TOKEN)}").decode()
 
 
+@pytest.mark.parametrize("prefix", ["", "a", "ab", "user:", "solver:"], ids=lambda p: f"after {p!r}")
+@pytest.mark.parametrize("suffix", ["", "\n", ":extra"], ids=lambda s: f"before {s!r}")
+def test_a_secret_inside_a_larger_base64_blob_is_still_covered(prefix, suffix):
+    """The bug this test exists for. Base64 encodes three bytes at a time, so `b64encode(token)`
+    appears inside `b64encode("user:" + token)` only when the prefix length divides by three — and
+    a Basic-auth header, the case this module's docstring cites, is one where it does not.
+    """
+    redactor = Redactor({"CTFD_API_TOKEN": TOKEN})
+    blob = base64.b64encode(f"{prefix}{TOKEN}{suffix}".encode()).decode()
+
+    survived = redactor.redact(blob).decode().replace("[redacted:CTFD_API_TOKEN]", "")
+
+    neighbours = _encoded(prefix) + _encoded(suffix)
+    assert len(survived) <= len(neighbours) + 4, (
+        f"what may survive is the neighbours' own encoding and up to two characters at each "
+        f"boundary, and {survived!r} is more than that"
+    )
+
+
+def _encoded(text: str) -> str:
+    return base64.b64encode(text.encode()).decode().rstrip("=")
+
+
 def test_an_empty_value_redacts_nothing():
     """`docs/credentials.md` names the trap: an empty value is not an unset one, and `--env-file`
     exports it. A redactor that took `""` as a value would replace the gap between every character

@@ -16,6 +16,9 @@ from solver.record import Recorder, Usage
 from solver.redaction import Redactor
 
 PLANTED = "sk-ant-oat01-" + "p" * 32  # gitleaks:allow - planted by this test, opens nothing
+# The alignment that a naive encoder misses: base64 works three bytes at a time, so the token's own
+# encoding does not appear inside this one. A leak here would be a whole credential in a header.
+BASIC = base64.b64encode(f"solver:{PLANTED}".encode()).decode()
 USAGE = Usage(model="claude-opus-5", tokens_in=10, tokens_out=1)
 
 
@@ -46,6 +49,7 @@ def a_run(state, redactor, *, flag: str = "brunner{ordinary}") -> Recorder:
         exit_code=0,
         output=(
             f"> Authorization: Token {PLANTED}\n"
+            f"> Authorization: Basic {BASIC}\n"
             f"> X-Copy: {base64.b64encode(PLANTED.encode()).decode()}\n"
             f"> ?key={urllib.parse.quote(PLANTED, safe='')}\n"
         ).encode(),
@@ -71,9 +75,13 @@ def test_a_planted_secret_reaches_neither_the_stream_nor_an_observation_body(tmp
 
     written = [path for path in tmp_path.rglob("*") if path.is_file()]
 
+    encoded_runs = {BASIC[at : at + 16] for at in range(len(BASIC) - 15)}
+
     assert written, "the sweep must have something to sweep"
     for path in written:
-        assert PLANTED.encode() not in path.read_bytes(), f"the planted credential survived into {path.name}"
+        held = path.read_bytes().decode(errors="replace")
+        assert PLANTED not in held, f"the planted credential survived into {path.name}"
+        assert not [run for run in encoded_runs if run in held], f"a usable run of it survived into {path.name}"
 
 
 def test_the_flag_field_is_the_one_thing_redaction_never_touches(tmp_path):
