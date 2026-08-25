@@ -168,6 +168,13 @@ both hold to it.
   seam lives here the moment two callers would otherwise each keep their own copy of a rule:
   `Board` is here because the pre-flight check and the competition run have to be the same code,
   not two things that agree today.
+- **`Dockerfile` — at the repository root, with the package list inline** and no `image/`
+  directory, for the reason
+  [ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md) gives: one
+  fewer top-level area, and a list is readable where it is used. A tool the Solver needs at run
+  time is a line in that list and never a runtime install — the venue network at 14:00 is not a
+  dependency we get to have. Where two packages ship the same tool, the `Dockerfile` installs one
+  and says which, so nothing depends on whichever binary resolves first.
 - **`docs/competitions/` — one file per event.** Our reading of the event, beside a verbatim
   `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed.
 - **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
