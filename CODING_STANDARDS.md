@@ -156,15 +156,24 @@ fit this rule trades away regenerating it, and buys a tidier `ls`.
 
 Anything that has to run in the Solver container imports from the standard library and nothing
 else. The image ships with nothing installed and the competition run is unattended, so a missing
-dependency is not a thing anyone is there to fix. `scripts/ctfd_probe.py` states the constraint in
-its module docstring and holds to it.
+dependency is not a thing anyone is there to fix. `solver/__init__.py` states the constraint for
+the whole package, and `scripts/ctfd_probe.py` states it again in its own module docstring —
+both hold to it.
 
 ### Where a new file goes
 
+- **`solver/` — the Solver's own code, a plain package at the repository root** and not
+  `src/solver/`, for the reason
+  [ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md) gives. A
+  seam lives here the moment two callers would otherwise each keep their own copy of a rule:
+  `Board` is here because the pre-flight check and the competition run have to be the same code,
+  not two things that agree today.
 - **`docs/competitions/` — one file per event.** Our reading of the event, beside a verbatim
   `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed.
 - **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
   credential, or a network the runner does not have, which is what keeps them out of `ci.yml`.
+  They consume `solver/` and never re-implement it; a rule that exists in both places is a rule
+  that will disagree.
 
 ## 7. Evolution — what is rigid, what moves
 

@@ -1,5 +1,6 @@
-# What `ci.yml`'s Python job enforces. There is no package here — the Solver ships as a container
-# rather than a distribution — so this file carries tool settings and nothing else.
+# What `ci.yml`'s Python job enforces. Nothing here is ever installed — `solver/` is a plain
+# package the container copies in, not a distribution — so this file carries tool settings and
+# nothing else.
 
 [tool.ruff]
 # Every tool cache lives under `.cache/`, so the repository root grows one disposable
@@ -21,6 +22,8 @@ select = ["E4", "E7", "E9", "F"]
 [tool.pytest.ini_options]
 cache_dir = ".cache/pytest"
 testpaths = ["tests"]
-# `scripts/` holds runnable scripts rather than an installed package, so the import path is
-# declared once here instead of being rebuilt inside every test module.
-pythonpath = ["scripts"]
+# Neither `solver/` nor `scripts/` is an installed distribution — the Solver ships as a container
+# (ADR-0008) — so the import path is declared once here instead of being rebuilt inside every test
+# module. The repository root is what makes `import solver` work; `scripts/` is what makes the
+# hand-run checks importable beside it.
+pythonpath = [".", "scripts"]

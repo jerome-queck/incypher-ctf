@@ -7,15 +7,17 @@ exception must not cost: the file still arrives, the token does not travel with 
 redirect is still caught.
 """
 
-import ctfd_probe
+import urllib.error
+
 import pytest
+from solver.board import MAX_FILE_REDIRECTS, Board, BoardFailure
 
 STORAGE = "https://nbg1.your-objectstorage.com/bucket/challenge.zip?X-Amz-Signature=abc"
 
 
 def board_following(*answers):
     """A board whose transport replays a scripted sequence of answers, one per request."""
-    board = ctfd_probe.Board("https://board.example/", "not-a-real-token")
+    board = Board("https://board.example/", "not-a-real-token")
     remaining = list(answers)
 
     def answer(_method, path, *_args, **_kwargs):
@@ -41,13 +43,13 @@ def test_a_file_on_object_storage_is_fetched_and_its_host_reported():
 
 def test_the_board_token_is_not_forwarded_to_the_storage_host():
     """The presigned URL carries its own credentials. Ours would be a gift to a stranger."""
-    board = ctfd_probe.Board("https://board.example", "a-real-looking-token")
+    board = Board("https://board.example", "a-real-looking-token")
     sent = []
 
     class Recorder:
         def open(self, request, timeout=None):
             sent.append(request)
-            raise ctfd_probe.urllib.error.HTTPError(request.full_url, 200, "ok", {}, None)
+            raise urllib.error.HTTPError(request.full_url, 200, "ok", {}, None)
 
     board._opener = Recorder()
 
@@ -60,14 +62,14 @@ def test_the_board_token_is_not_forwarded_to_the_storage_host():
 
 def test_a_redirect_chain_that_never_lands_is_reported_rather_than_chased():
     hop = (302, b"", "https://redirector.example/again")
-    board = board_following(*[hop] * ctfd_probe.MAX_FILE_REDIRECTS)
+    board = board_following(*[hop] * MAX_FILE_REDIRECTS)
 
-    with pytest.raises(ctfd_probe.ProbeFailure, match="still redirecting"):
+    with pytest.raises(BoardFailure, match="still redirecting"):
         board.download("files/abcdef/challenge.zip")
 
 
 def test_following_redirects_does_not_let_a_login_screen_through():
     board = board_following((302, b"", "/login?next=%2Ffiles"))
 
-    with pytest.raises(ctfd_probe.ProbeFailure, match="login screen"):
+    with pytest.raises(BoardFailure, match="login screen"):
         board.download("files/abcdef/challenge.zip")
