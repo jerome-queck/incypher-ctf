@@ -113,3 +113,25 @@ jobs:
           else
             echo "No Python under tests/ yet — nothing to run."
           fi
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # **This job proves amd64. We compete on arm64** — the run-day image is built on the Mac
+      # that runs it, so a Kali package present for one architecture and missing for the other
+      # goes green here and fails there. Nobody should read this tick as the architecture we play
+      # having been proven. ADR-0008 argues why that gap is placed rather than closed, and where
+      # it gets caught: every gate Run is from a locally built image, and the `Dockerfile`'s
+      # closing assertion runs in that build too.
+      #
+      # No QEMU cross-build, no push, and no registry authentication. What this proves is that the
+      # image builds, which needs no destination and no secret — and what it catches is the
+      # package list drifting from what ADR-0005's recon cascade assumes is installed.
+      #
+      # Ten minutes is §5's bound rather than a fitted one: an uncached `--no-cache --pull` build
+      # of this file measured 18 s.
+      - name: docker build
+        run: docker build .
