@@ -41,8 +41,13 @@ RUN apt-get update \
       # `strings`, which the recon floor runs over every artefact including the unidentifiable.
       binutils \
       binwalk3 \
-      # The sandbox `codex` runs challenge-supplied code in. Absent, it falls back to a copy it
-      # bundles, and the thing under test stops being the thing we shipped.
+      # The sandbox `codex` *would* run challenge-supplied code in, and cannot here: bubblewrap
+      # needs a mount namespace Docker will not grant an unprivileged container, and only
+      # `--privileged` lifts enough of the confinement to let it — measured every way on 26 August
+      # 2026, down to `bwrap: Failed to make / slave`. So v1 runs the CLI at `danger-full-access`
+      # and the container is the only boundary, which is what ADR-0008 already says it is
+      # (`solver/codex.py`, at `Invocation.sandbox`). The package stays because the decision that
+      # put it here is unchanged and v2's uid separation is what brings it back into use.
       bubblewrap \
       bzip2 \
       # The one whose absence is invisible: without it `/etc/ssl/certs` does not exist, `curl`
@@ -90,23 +95,34 @@ RUN gem install --no-document zsteg
 # Pinned to a release **and to its bytes**. A GitHub release asset can be replaced under its own
 # tag, and the window between the gate image and the run-day image is the one nobody is watching —
 # the same argument the base image's digest pin makes at the top of this file.
+# **Two binaries, not one.** From 0.147.0 the CLI routes its shell tool through a separate *code
+# mode host*, and without it every command the model tries fails before it runs — "Code mode will
+# fail closed" is the CLI's own wording and it means the tool refuses. Measured on a live Run against
+# BrunnerCTF on 26 August 2026: `codex` alone installed cleanly, answered `--version`, reached the
+# model, and then could not execute one shell command all Attempt. Half a CLI looks exactly like a
+# whole one until something asks it to work.
 ARG CODEX_VERSION=0.147.0
 ARG CODEX_SHA256_ARM64=eb677c80f666b1ab8b4b1d083b66e8d614b1281d960bb6f9fd8ca98f58b38b90
 ARG CODEX_SHA256_AMD64=0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36
+ARG CODE_MODE_HOST_SHA256_ARM64=dfd4ff98ea4db30ed078af9c31b6f86e3da4836d0573aa87e225e5a5b54d3c7c
+ARG CODE_MODE_HOST_SHA256_AMD64=0146adfaac8363ec9fcdb5895f7624db5b2e8617a283887938b7fb97a1dd4356
 ARG TARGETARCH
 RUN set -eu; \
     case "$TARGETARCH" in \
-      arm64) triple=aarch64-unknown-linux-musl; digest="$CODEX_SHA256_ARM64" ;; \
-      amd64) triple=x86_64-unknown-linux-musl;  digest="$CODEX_SHA256_AMD64" ;; \
+      arm64) triple=aarch64-unknown-linux-musl; codex="$CODEX_SHA256_ARM64"; host="$CODE_MODE_HOST_SHA256_ARM64" ;; \
+      amd64) triple=x86_64-unknown-linux-musl;  codex="$CODEX_SHA256_AMD64"; host="$CODE_MODE_HOST_SHA256_AMD64" ;; \
       *) echo "no codex build is mapped for TARGETARCH='$TARGETARCH'" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL --retry 5 -o /tmp/codex.tar.gz \
-      "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${triple}.tar.gz"; \
-    printf '%s  %s\n' "$digest" /tmp/codex.tar.gz | sha256sum -c -; \
-    tar -xzf /tmp/codex.tar.gz -C /tmp; \
-    mv "/tmp/codex-${triple}" /usr/local/bin/codex; \
-    chmod 0755 /usr/local/bin/codex; \
-    rm /tmp/codex.tar.gz
+    for part in "codex:$codex" "codex-code-mode-host:$host"; do \
+      name="${part%%:*}"; digest="${part#*:}"; \
+      curl -fsSL --retry 5 -o /tmp/part.tar.gz \
+        "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/${name}-${triple}.tar.gz"; \
+      printf '%s  %s\n' "$digest" /tmp/part.tar.gz | sha256sum -c -; \
+      tar -xzf /tmp/part.tar.gz -C /tmp; \
+      mv "/tmp/${name}-${triple}" "/usr/local/bin/${name}"; \
+      chmod 0755 "/usr/local/bin/${name}"; \
+      rm /tmp/part.tar.gz; \
+    done
 
 # The single writable path (ADR-0008), host-mounted at run time. Deliberately not a `VOLUME`: that
 # hands a container started without `-v` an anonymous volume that dies with it, which is exactly
@@ -123,6 +139,11 @@ RUN mkdir /state
 # the two ways this line can be wrong are a binary that does not run and a binary that is not the
 # one we pinned — and the second is invisible without it.
 #
+# The code mode host is asserted to **answer**, not merely to exist, for the reason the rest of this
+# list is exercised on real input. What no build can prove is the thing that actually failed — that
+# the model can run a command through it, which needs a login the image must never contain. That is
+# `scripts/codex_probe.py`, run by hand before a Run.
+#
 # It is a cached layer, so it re-runs when the lines above it change rather than on every `docker
 # build` — which is what matters, because what it guards against is a package list that stopped
 # meaning what it says.
@@ -135,6 +156,7 @@ RUN set -eu; \
     test "$(python3 -c 'print("flag{probe}")')" = 'flag{probe}'; \
     if timeout 1 sleep 5; then echo 'timeout did not stop a command' >&2; exit 1; fi; \
     codex --version | grep -qF "$CODEX_VERSION"; \
+    codex-code-mode-host --version >/dev/null 2>&1 || codex-code-mode-host --help >/dev/null 2>&1; \
     rm "$probe"
 
 # Every gate Run is from a built image with **no source mount** (ADR-0008), so this is what a gate
