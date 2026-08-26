@@ -243,12 +243,19 @@ class Recorder:
         attempt_sequence: int,
         instance_until: str | None,
         order_ranks: dict[str, int],
+        exploring: bool = False,
     ) -> None:
         """Open an Attempt, including where every unsolved Challenge stood when it was picked.
 
         `attempt_sequence` is this Attempt's number *for that Challenge*, and `order_ranks` is
         Order's rank for everything still unsolved — without the second, a Run that passed over
         sixty Challenges and one that only ever had fourteen read identically.
+
+        `exploring` says the reserved exploration share chose this pick rather than Order's top
+        (ADR-0017). It is the whole measurement of whether the share earns its quarter of the Run,
+        and it cannot be derived from the rank: an exploration turn that landed on Order's top is
+        still one. It defaults because a reader defaults what is missing, which is the rule that
+        lets this schema gain a field without invalidating a stream written before it.
         """
         self._write(
             "attempt-open",
@@ -264,6 +271,7 @@ class Recorder:
                 "attempt_sequence": attempt_sequence,
                 "instance_until": instance_until,
                 "order_ranks": order_ranks,
+                "exploring": exploring,
             },
         )
 

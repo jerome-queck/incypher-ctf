@@ -142,6 +142,7 @@ def test_the_field_set_of_every_record_is_pinned(recorder):
             "attempt_sequence",
             "instance_until",
             "order_ranks",
+            "exploring",
         },
         "step-begin": step,
         "step-end": step

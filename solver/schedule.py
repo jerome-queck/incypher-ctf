@@ -57,6 +57,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from solver.codex import Invocation
 from solver.intake import Sighting, Snapshot
 from solver.record import CRASHED, CUT_SELF_REPORTED_IMPOSSIBLE, Recorder
 from solver.triage import FLOOR, Judge, triage, unasked
@@ -137,10 +138,15 @@ class Dials:
     # Challenge is on three solves has still told us nothing about the rest of it.
     explore_at_most_solves: int = 0
 
-    # Pinned, and here so that v3 tunes a number rather than reshaping the scheduler. v1 varies
-    # neither: ADR-0014 gives it one brain per Run, switching on exhaustion alone.
+    # How many Attempts may be held at once — read by `acquire`, and pinned at one so that v3
+    # tunes this number rather than reshaping the scheduler. What v3 still has to settle is what a
+    # second concurrent hold means for the ranking; the cap is what is settled here.
     concurrency: int = 1
-    reasoning_effort: str = "medium"
+    # The strength every Attempt is worked at. Taken from `codex.Invocation` rather than retyped,
+    # so there is one default rather than two that drift apart — the value is a fact about how we
+    # spend a window, which is why it is a dial, and the adapter is what actually spends it. v1
+    # varies it never: ADR-0014 gives a Run one brain, switching on exhaustion alone.
+    reasoning_effort: str = Invocation.reasoning_effort
 
 
 @dataclass(frozen=True)
@@ -294,7 +300,7 @@ class Scheduler:
         self._spent: dict[int | str, _Spent] = {}
         self._first_seen: dict[int | str, tuple[dt.datetime, int]] = {}
         self._taken = 0
-        self._held: Pick | None = None
+        self._held: dict[int | str, Pick] = {}
 
     def acquire(self, snapshot: Snapshot, *, leased: Collection[int | str] = ()) -> Pick | None:
         """The next Challenge and its budget, or `None` where the clock can no longer buy an Attempt.
@@ -304,9 +310,12 @@ class Scheduler:
         Solver is allowed to reach, and an empty eligible set means the next Intake is what to wait
         for rather than that the Run is over (`CONTEXT.md`, *Run*).
         """
-        if self._held is not None:
-            held = self._held.challenge.challenge_id
-            raise ValueError(f"{MARK} v1 holds one Attempt at a time — release {held!r} before acquiring another")
+        if len(self._held) >= self.dials.concurrency:
+            holding = ", ".join(repr(one) for one in self._held)
+            raise ValueError(
+                f"{MARK} this Run holds {self.dials.concurrency} Attempt(s) at a time and is "
+                f"holding {holding} — release one before acquiring another"
+            )
         now = self._now()
         affordable = self.window.left(now) - self.dials.tail_seconds
         if affordable < self.dials.floor_seconds:
@@ -314,11 +323,17 @@ class Scheduler:
         ranked = self.order(snapshot, leased=leased)
         if not ranked:
             return None
-        chosen = self._chosen(ranked)
+        # What is already being worked is not picked again. A no-op while `concurrency` is one,
+        # and the difference between a second hold and a second Attempt at the same Challenge for
+        # any v3 that raises it.
+        available = [one for one in ranked if one.challenge_id not in self._held]
+        if not available:
+            return None
+        chosen, exploring = self._chosen(available)
         found = next(one for one in snapshot.unsolved if one.challenge_id == chosen.challenge_id)
         budget = int(min(chosen.budget_s, affordable))
         self._taken += 1
-        self._held = Pick(
+        self._held[chosen.challenge_id] = Pick(
             challenge=found,
             budget_s=budget,
             deadline=now + dt.timedelta(seconds=budget),
@@ -326,9 +341,9 @@ class Scheduler:
             attempt_sequence=self._spent.get(chosen.challenge_id, _Spent()).attempts + 1,
             order_ranks={str(one.challenge_id): one.rank for one in ranked},
             working_set=tuple(one.challenge_id for one in ranked if one.committed),
-            exploring=chosen is not ranked[0],
+            exploring=exploring,
         )
-        return self._held
+        return self._held[chosen.challenge_id]
 
     def release(self, outcome: Ended) -> None:
         """Give the Attempt back, and count what it cost.
@@ -337,7 +352,7 @@ class Scheduler:
         unrecorded is an Attempt that bought its Challenge a free place at the top of Order, which
         is the livelock `spend_norm` exists to make impossible.
         """
-        self._held = None
+        self._held.pop(outcome.challenge_id, None)
         spent = self._spent.setdefault(outcome.challenge_id, _Spent())
         spent.attempts += 1
         spent.seconds += max(0.0, outcome.seconds)
@@ -352,13 +367,17 @@ class Scheduler:
         Board's own `position` and then on id, and both are stable for the length of a Run. Any
         Challenge with no Tier yet is triaged here, which is what stops a Challenge released
         mid-Run from reaching the ranking with a null Tier.
+
+        *Pure* is ADR-0015's sense — **no order is stored**, so there is nothing to splice or
+        repair — rather than a claim to touch no state. Two things a first sight of a Challenge
+        does write: its Tier, which never changes again, and the solve sample velocity is measured
+        from. Both make this **idempotent** and not free of effect: the second call over the same
+        Snapshot writes nothing and answers identically, which is the property a replay needs.
         """
         eligible = [one for one in snapshot.unsolved if not _undeployable(one)]
         if not eligible:
             return ()
         self._triage_arrivals(eligible)
-        for one in eligible:
-            self._first_seen.setdefault(one.challenge_id, (snapshot.at, one.solves))
         tractability = self._tractability(eligible, snapshot)
         value = _scaled({one.challenge_id: float(one.value) for one in eligible})
         scored = [
@@ -386,18 +405,24 @@ class Scheduler:
             for place, one in enumerate(scored, start=1)
         )
 
-    def _chosen(self, ranked: Sequence[Ranked]) -> Ranked:
-        """Order's top, except on the reserved exploration turn (ADR-0017).
+    def _chosen(self, ranked: Sequence[Ranked]) -> tuple[Ranked, bool]:
+        """Order's top, except on the reserved exploration turn — and whether this *was* one.
 
         The exploration pick is taken from the whole of Order rather than from the working set —
         *"regardless of rank"* is the mechanism, and a share restricted to the top K would be no
         share at all on the Board it is there to protect us from. Where nothing qualifies the turn
-        falls through to Order's top rather than being spent on nothing.
+        falls through to Order's top rather than being spent on nothing (ADR-0017).
+
+        The flag is returned rather than inferred from *"is this Order's top"*, because an
+        exploration turn that lands on Order's top is still an exploration turn — and a Run where
+        the two coincided every time is exactly the measurement that would say the share is
+        redundant.
         """
         if self._taken % self.dials.explore_every != self.dials.explore_every - 1:
-            return ranked[0]
+            return ranked[0], False
         unsolved_by_anyone = (one for one in ranked if one.solves <= self.dials.explore_at_most_solves)
-        return next(unsolved_by_anyone, ranked[0])
+        explored = next(unsolved_by_anyone, None)
+        return (explored, True) if explored else (ranked[0], False)
 
     def _triage_arrivals(self, eligible: Sequence[Sighting]) -> None:
         """Give a Tier to everything that has none, and never revisit one that has.
@@ -428,11 +453,18 @@ class Scheduler:
         put the term to sleep. Where the Board is moving, a Challenge with a single sample falls
         back to its own count — which is what stops a Challenge released at 13:00 from being ranked
         as though the field had passed it by.
+
+        The first sample is taken here rather than kept by the caller, because *when we first saw
+        this Challenge and on how many solves* is a fact only this term ever reads. The baseline is
+        therefore **the first Snapshot this Run ranked that carried the Challenge** — which is the
+        first Intake cycle that found it, since Order is recomputed at every Attempt boundary and
+        Intake runs on a cycle underneath. An offline replay reads the same baseline off the intake
+        records, and would drift from a Run that somehow ranked nothing for a cycle.
         """
         counts = _scaled({one.challenge_id: float(one.solves) for one in eligible})
         speeds = {}
         for one in eligible:
-            first_at, first_solves = self._first_seen.get(one.challenge_id, (snapshot.at, one.solves))
+            first_at, first_solves = self._first_seen.setdefault(one.challenge_id, (snapshot.at, one.solves))
             elapsed = (snapshot.at - first_at).total_seconds()
             if elapsed > 0:
                 speeds[one.challenge_id] = max(0.0, (one.solves - first_solves) / elapsed)

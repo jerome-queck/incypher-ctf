@@ -161,13 +161,9 @@ class Sighting:
     challenge_type: str
     value: int
     solves: int
-    # Where the Board itself put this Challenge in the list, and **Order's last tie-break**. CTFd
-    # sends the field in the LIST payload, so it costs no request — and it is read defensively for
-    # a measured reason rather than a cautious one: Brunner sends `position` for all 74 Challenges
-    # and every one of them is `0`. That is precisely why the rule is position *then* id — a Board
-    # with no ordering of its own leaves the whole set tied and the id carries it, so the ranking
-    # stays total and stable across a Run either way
-    # ([ADR-0015](../docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
+    # Order's last tie-break, and read defensively for a measured reason: CTFd sends the field in
+    # the LIST payload, and Brunner sends it as `0` for all 74 Challenges. That is why the rule is
+    # position *then* id (ADR-0015) — a Board with no ordering of its own ties the whole set.
     position: int
     description: str
     attempts: int
@@ -195,8 +191,9 @@ class Sighting:
         """One Challenge out of the Board's two payloads, with nothing decided that was not read.
 
         Which half a field comes from is the point. `solves`, `value`, `position` and
-        `solved_by_me` are in the list, and the first two move every cycle; the description, `attempts`, `max_attempts` and the deploy terms
-        are detail-only, and are what the per-Challenge GET is paid for. `category` and `type` come
+        `solved_by_me` are in the list, and the first two move every cycle; the description,
+        `attempts`, `max_attempts` and the deploy terms are detail-only, and are what the
+        per-Challenge GET is paid for. `category` and `type` come
         through as the open strings they are.
 
         **A detail GET that failed does not cost the Challenge**: every detail-side field is taken

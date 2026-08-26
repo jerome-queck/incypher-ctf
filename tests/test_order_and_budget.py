@@ -122,8 +122,27 @@ def test_v1_holds_exactly_one_attempt_at_a_time(scheduler):
     board = seen(sighting(1), sighting(2))
     scheduler.acquire(board)
 
-    with pytest.raises(ValueError, match="one Attempt at a time"):
+    with pytest.raises(ValueError, match="holds 1 Attempt"):
         scheduler.acquire(board)
+
+
+def test_how_many_are_held_at_once_is_the_dial_and_not_the_shape_of_the_code(recorder, clock):
+    """*"v3 tunes a number rather than reshaping the scheduler"* is only true if the number is the
+    thing `acquire` reads. What a second concurrent hold means for the ranking is still v3's to
+    settle; the cap is what is settled here."""
+    holding_two = Scheduler(
+        Window.opened(recorder.run_dir, lasting=COMPETITION, now=OPENED),
+        recorder,
+        dials=Dials(concurrency=2),
+        now=clock,
+    )
+    board = seen(sighting(1), sighting(2))
+
+    first, second = holding_two.acquire(board), holding_two.acquire(board)
+
+    assert (first.challenge.challenge_id, second.challenge.challenge_id) == (1, 2)
+    with pytest.raises(ValueError, match="holds 2 Attempt"):
+        holding_two.acquire(board)
 
 
 def test_a_released_challenge_is_eligible_again_immediately(scheduler):
@@ -420,6 +439,17 @@ def test_one_attempt_in_four_goes_to_a_challenge_nobody_has_solved(scheduler):
     reached = [worked(scheduler, board, seconds=1.0) for _ in range(4)]
 
     assert [one.challenge.challenge_id for one in reached] == [1, 1, 1, 2]
+    assert [one.exploring for one in reached] == [False, False, False, True]
+
+
+def test_an_exploration_turn_that_lands_on_orders_top_is_still_an_exploration_turn(scheduler):
+    """The flag says which mechanism chose the pick, not whether the pick differed. A Run where the
+    two coincided every time is exactly the measurement that would say the share is redundant, and
+    inferring the flag from the rank would report that Run as having never explored."""
+    board = seen(sighting(1, solves=0))
+
+    reached = [worked(scheduler, board, seconds=1.0) for _ in range(4)]
+
     assert [one.exploring for one in reached] == [False, False, False, True]
 
 

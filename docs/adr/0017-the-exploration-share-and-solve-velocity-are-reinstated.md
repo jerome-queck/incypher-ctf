@@ -69,7 +69,12 @@ snapshot of a running total contains it.
 
 Intake already stores what this needs. ADR-0015 has every cycle record each Challenge's
 `(solves, value)` pair — for fitting the scoring curve — so velocity is a subtraction over data the
-stream already carries, and an offline replay recomputes it exactly.
+stream already carries. The baseline is stated rather than left implied, because it is what a
+replay has to agree with: **the first Snapshot a Run ranked that carried the Challenge**, which is
+the first Intake cycle that found it, since Order recomputes at every Attempt boundary and Intake
+runs on a cycle underneath. A Run that somehow ranked nothing for a whole cycle would drift from
+its own replay by one sample; nothing in v1 does that, and naming the baseline is what makes it
+checkable if something later does.
 
 Two fallbacks, and each answers a way this could be worse than the count:
 
