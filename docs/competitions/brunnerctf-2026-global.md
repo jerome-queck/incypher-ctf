@@ -81,6 +81,24 @@ Checked 21 Aug 2026 at 20:10 SGT, ten minutes after the window opened, with a re
 Still open: the CTFd version, `incorrect_submissions_per_min`, and `max_attempts` — `/api/v1/configs`
 is admin-only, so assume CTFd's default of 10 wrong submissions per minute.
 
+### The Instance terms are *not exercised* here
+
+Checked 26 Aug 2026 against the live board. **No chall-manager field reaches us on this board at
+all**: a detail GET carries no `shared`, `timeout`, `destroy_on_flag` or `mana_cost` key, and the
+only `type` values across all 74 Challenges are `dynamic` and `flightops`. The Solver records all
+four every cycle and every one of the 74 rows reads the default — `null`, `false`, `false`, `0` —
+which is the correct answer for a board without the plugin and **not** evidence that the recording
+works.
+
+So the chall-manager arm of that record is **not exercised**, through no fault of the Solver, and it
+is proven on the first board we enter that runs one — the same resolution and the same tell
+[#74](https://github.com/jerome-queck/incypher-ctf/issues/74) uses for the gate's Instance clause.
+`position` is the same shape and worth noting beside it: CTFd sends the field, and Brunner sends `0`
+for all 74, so Order's tie-break falls through to the id on this board every time.
+
+The other half of the check *is* exercised, and passed: the fields are present on every row of every
+cycle, so a board that does populate them will be read rather than silently dropped.
+
 ## Before playing
 
 ```bash

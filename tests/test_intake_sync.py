@@ -449,7 +449,14 @@ def test_a_chall_manager_board_and_a_board_without_the_plugin_are_told_apart_in_
     """Every Instance term is a `ctfd-chall-manager` field, and Brunner runs no chall-manager — its
     detail payloads carry no `timeout`, `shared` or `mana_cost` key at all. So the only Board in
     reach that can populate these is the scored one, unattended, once: a field not written down at
-    14:00 is not recoverable at 16:01."""
+    14:00 is not recoverable at 16:01.
+
+    What the defaults cannot say is deliberate. `destroy_on_flag: false` and `mana_cost: 0` read the
+    same whether the plugin said so or was never installed, and that distinction is not this line's
+    to invent — `type` already says whether a Challenge is instanced at all, and whether the Board
+    runs a chall-manager is the Board profile's, at run-open
+    ([#74](https://github.com/jerome-queck/incypher-ctf/issues/74)).
+    """
     wire = Wire(
         listed=[listing(1, type="dynamic_iac"), listing(2)],
         detail={
