@@ -148,11 +148,12 @@ class _Held:
     turns: int = 0
     checkpoints: int = 0
     steps: int = 0
-    # The Attempt's Steps as the stall call counts them: the opening — a deploy and the recon
-    # cascade — plus every Step the model has spent since, across every turn. Deliberately *not*
-    # `Steps.spent`, which also counts a Flag sweep, a replay and a submission: those are the
-    # orchestrator's own and happen after the model's turn, so counting them toward ADR-0005's
-    # step cliff closes an Attempt for work the model never did.
+    # What the **model** has spent across this Attempt's turns, and nothing else. Deliberately not
+    # `Steps.spent`, which counts a deploy, the recon cascade, a Flag sweep, a replay and a
+    # submission — every one of them the orchestrator's own. Measured against the live Board on
+    # 26 August 2026: counting them charged a file-bearing Challenge 9 Steps of ADR-0005's cliff
+    # before the model had run anything, so the same cliff bought 10 Steps of solving on one
+    # Challenge and 18 on another for no reason connected to stalling.
     counted: int = 0
     cause: str = ""
     flag: str = ""
@@ -305,7 +306,6 @@ class Run:
         self._in_flight = held.deadline
         try:
             held.recon_block = self._recon(held, challenge)
-            held.counted = self._steps.spent
             while not self._turn(held, challenge):
                 self._renew(held)
         except Exception as broken:

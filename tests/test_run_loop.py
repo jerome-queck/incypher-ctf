@@ -59,7 +59,7 @@ class Clock:
 class Wire:
     """A CTFd with a handful of Challenges and one Flag each, remembering what it was sent."""
 
-    def __init__(self, *, count: int = 6, mana=None, ledger=None):
+    def __init__(self, *, count: int = 6, mana=None, ledger=None, ships_files: bool = False):
         self.listed = [
             {"id": one, "name": f"challenge-{one}", "type": "standard", "value": 100, "solves": one, "position": one}
             for one in range(1, count + 1)
@@ -67,6 +67,9 @@ class Wire:
         self.flags = {one["id"]: f"brunner{{flag-for-{one['id']}}}" for one in self.listed}
         self.mana = mana
         self.ledger = ledger
+        # An attachment costs the recon cascade several Steps before the model has run anything,
+        # which is the whole shape the step cliff must not be charged for.
+        self.ships_files = ships_files
         self.submitted: list[tuple[int, str]] = []
 
     def transport(self, request):
@@ -77,11 +80,14 @@ class Wire:
             return self._graded(json.loads(request.data))
         if path.startswith("/api/v1/challenges/"):
             found = next(one for one in self.listed if str(one["id"]) == path.rsplit("/", 1)[1])
-            return self._answer({**found, "description": self.described(found), "max_attempts": 0})
+            files = [f"files/aa{found['id']}/clue-{found['id']}.txt?token=signed"] if self.ships_files else []
+            return self._answer({**found, "description": self.described(found), "max_attempts": 0, "files": files})
         if path == "/api/v1/challenges":
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
+        if path.startswith("/files/"):
+            return (200, b"nothing to see, but a real artefact all the same\n", "")
         if path.endswith("/mana"):
             return (404, b'{"success": false}', "") if self.mana is None else self._answer(self.mana)
         return (404, b'{"success": false}', "")
@@ -502,3 +508,29 @@ def test_what_the_orchestrator_spends_after_a_turn_is_not_the_models_next_step_c
     assert len(counted) > 1, "no run of turns to compare"
     assert len(set(counted)) == 1, f"the count grew while the model did nothing: {counted}"
     assert "cut:step-cliff" not in {one["cause"] for one in records(recorder, "attempt-close")}
+
+
+def test_the_step_cliff_is_charged_for_the_models_steps_and_not_for_reconning_a_file(tmp_path):
+    """Measured against the live Board on 26 August 2026: a Challenge shipping files gave the model
+    10 Steps before ADR-0005's 25-Step cliff and one shipping none gave it 18. Same cliff, same
+    budget — the difference was entirely what recon had spent opening the Attempt. What an Attempt
+    costs in wall-clock is the `Deadline`'s question; the cliff's is only ever *is the model going
+    anywhere*, so the Attempt's opening is not charged to it."""
+    clock = Clock()
+    ran = stream(commands=(("ls -la", "total 0\n", 0), ("cat clue-1.txt", "nothing\n", 0)), says=["APPROACH: looked"])
+    wire = Wire(count=1, ships_files=True)
+    agent = Agent(clock, wire=wire, scripted={1: ran}, seconds=120.0)
+    run, recorder = solver(tmp_path, wire, agent, clock, lasting=1400.0)
+
+    run.work()
+
+    opened = records(recorder, "attempt-open")
+    assert opened, "no Attempt ran"
+    reconned = [
+        one
+        for one in records(recorder, "step-begin")
+        if one["attempt_id"] == opened[0]["attempt_id"] and one["tool"] not in ("shell", "codex")
+    ]
+    assert len(reconned) > 2, "recon spent nothing, so this proves nothing about what it is charged"
+    # The carried line is what the next turn is told, and it is the count the cliff reads.
+    assert re.search(r"\b2 steps\b", agent.prompts[-1]), agent.prompts[-1].split("Earlier Attempts")[-1][:200]

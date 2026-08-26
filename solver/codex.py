@@ -129,6 +129,13 @@ READ_BLOCK_BYTES = 65536
 # sandbox, where there a single tool is closing a pipe.
 REAP_GRACE_SECONDS = 2.0
 
+# The longest a single read waits before the deadline is looked at again. The deadline is an object
+# precisely so the orchestrator can move it while a child is running — a Checkpoint lengthens it, a
+# stall or a signal shortens it — and a read that blocked for the whole remaining budget could not
+# hear either. Measured: `docker stop`'s ten-second grace expired with a turn in flight and PID 1
+# was killed with the reserved tail unrun.
+WATCH_SLICE_SECONDS = 1.0
+
 
 @dataclass(frozen=True)
 class Credential:
@@ -425,12 +432,25 @@ class _Transcript:
         a test of a parser nobody ships.
         """
         buffered = b""
+        waited = 0.0
         while True:
             if (left := deadline.left(self.now())) <= 0:
                 return self._cut_short(credential)
-            block = child.read(left)
+            # Read in slices, so a deadline the orchestrator moved — lengthened by a Checkpoint,
+            # shortened by a stall or by a signal — reaches a child that is already blocked. `read`
+            # answering `None` on a slice is the slice ending rather than the Attempt.
+            #
+            # The silence is counted as well as the clock, and that is not belt-and-braces: a caller
+            # whose clock does not advance would otherwise loop here forever, and every test of this
+            # module holds one still. Either bound ends the Attempt.
+            slice_seconds = min(left, WATCH_SLICE_SECONDS)
+            block = child.read(slice_seconds)
             if block is None:
-                return self._cut_short(credential)
+                waited += slice_seconds
+                if waited >= left:
+                    return self._cut_short(credential)
+                continue
+            waited = 0.0
             if not block:
                 yield from self._line(buffered, credential)
                 return ""
