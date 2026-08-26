@@ -30,7 +30,7 @@ from pathlib import Path
 from solver import codex, prompt, recon
 from solver.board import BoardFailure
 from solver.carry import Boundary, label
-from solver.codex import CLAIM, COMMAND, STOPPED, Credential, Invocation
+from solver.codex import ADAPTER, CLAIM, COMMAND, STOPPED, Credential, Invocation
 from solver.flag import Candidate, Flags, Outcome, Slots
 from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
@@ -148,6 +148,12 @@ class _Held:
     turns: int = 0
     checkpoints: int = 0
     steps: int = 0
+    # The Attempt's Steps as the stall call counts them: the opening — a deploy and the recon
+    # cascade — plus every Step the model has spent since, across every turn. Deliberately *not*
+    # `Steps.spent`, which also counts a Flag sweep, a replay and a submission: those are the
+    # orchestrator's own and happen after the model's turn, so counting them toward ADR-0005's
+    # step cliff closes an Attempt for work the model never did.
+    counted: int = 0
     cause: str = ""
     flag: str = ""
     approach: str = ""
@@ -299,6 +305,7 @@ class Run:
         self._in_flight = held.deadline
         try:
             held.recon_block = self._recon(held, challenge)
+            held.counted = self._steps.spent
             while not self._turn(held, challenge):
                 self._renew(held)
         except Exception as broken:
@@ -327,7 +334,7 @@ class Run:
         trajectory and a turn that re-orients itself is not the same trajectory, while the workdir
         and the five carried things are the Challenge's and outlive both.
         """
-        watch = Watch(deadline=held.deadline, steps=self._steps.spent)
+        watch = Watch(deadline=held.deadline, steps=held.counted)
         said: list[str] = []
         # What the *model* observed, counted apart from `watch.steps`. The Watch is seeded with the
         # Attempt's Steps so far because recon **is** the opening of an Attempt and its probes are
@@ -356,7 +363,12 @@ class Run:
             now=self._now,
         ):
             self._steps.reached(taken.step_index)
-            if taken.kind == COMMAND:
+            if taken.kind == COMMAND and taken.tool != ADAPTER:
+                # The **model's** Steps and never the invocation's own, which is what `Watch` asks
+                # for: a spawn is the same command line every rung, and a failure the CLI reported
+                # about itself is not the Challenge being worked. Handing those over counted them
+                # toward the step cliff, so an Attempt that never reached the model at all was
+                # closed `cut:step-cliff` — blaming the Challenge for our own broken end.
                 observed += 1
                 watch.observed(taken.command, exit_code=taken.exit_code, digest=taken.digest)
             elif taken.kind == CLAIM:
@@ -368,6 +380,7 @@ class Run:
                 # iterator instead would leave a process behind holding the working directory open.
                 held.deadline.shorten(self._now())
         held.turns += 1
+        held.counted = watch.steps
         held.checkpoints += len(watch.checkpoints)
         held.approach = label(named) if (named := _approach(said)) else held.approach
         # The breaker is told about every turn, not only the ones no counter ended — a turn that

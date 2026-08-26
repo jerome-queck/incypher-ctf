@@ -66,6 +66,12 @@ from solver.stall import Deadline
 # same reason: none of these is a command anyone could replay in a shell.
 MARK = "[codex]"
 
+# The tool name the adapter puts on its **own** Steps — the spawn, a failure the CLI reported about
+# itself, a switch to the next rung. Named rather than repeated, because the stall call has to be
+# able to tell them from the model working the Challenge: one spawn per rung is the same command
+# line every time, and a chain switch is not the model looping (`solver/stall.py`).
+ADAPTER = "codex"
+
 # What a `Taken` is. Four kinds, closed, and the same four whatever vendor is behind them.
 # `COMMAND` is the only one the stall counters may read, because it is the only one that is an
 # Observation; `CLAIM` is the model talking and is evidence of nothing.
@@ -437,7 +443,7 @@ class _Transcript:
             # Not a record we can classify, so it goes where an unclassified thing is safe: the
             # channel no check greps. The alternative — presuming it is output — is the one that
             # ends with a model's sentence swept as though a command had produced it.
-            yield self._claimed(credential, "codex", line)
+            yield self._claimed(credential, ADAPTER, line)
             return
         yield from self._event(event, credential)
 
@@ -541,7 +547,7 @@ class _Transcript:
         command: str,
         told: str,
         *,
-        tool: str = "codex",
+        tool: str = ADAPTER,
         kind: str = COMMAND,
         credential: Credential | None = None,
     ) -> Taken:

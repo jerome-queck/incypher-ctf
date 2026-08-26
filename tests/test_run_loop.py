@@ -8,6 +8,7 @@ is every rule that would be invisible in a live Run because it never fired.
 
 import datetime as dt
 import json
+import re
 
 from solver.board import Board
 from solver.codex import Credential, Child
@@ -76,7 +77,7 @@ class Wire:
             return self._graded(json.loads(request.data))
         if path.startswith("/api/v1/challenges/"):
             found = next(one for one in self.listed if str(one["id"]) == path.rsplit("/", 1)[1])
-            return self._answer({**found, "description": f"Find the flag in {found['name']}.", "max_attempts": 0})
+            return self._answer({**found, "description": self.described(found), "max_attempts": 0})
         if path == "/api/v1/challenges":
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):
@@ -84,6 +85,11 @@ class Wire:
         if path.endswith("/mana"):
             return (404, b'{"success": false}', "") if self.mana is None else self._answer(self.mana)
         return (404, b'{"success": false}', "")
+
+    def described(self, found):
+        """Brunner's own shape: every Challenge's prose ends in a flag-format section, and some of
+        them show an example — which recon reads, the sweep finds, and the gate spends a slot on."""
+        return f"Find the flag in {found['name']}. Flag format: brunner{{like_this}}"
 
     def _graded(self, sent):
         """CTFd's own shape: the verdict is in the body at HTTP 200, and a correct Flag moves
@@ -101,7 +107,7 @@ class Wire:
         return (200, json.dumps({"success": True, "data": data}).encode(), "")
 
 
-def stream(*, commands=(), says=()):
+def stream(*, commands=(), says=(), reported=(), failed=""):
     """One `codex exec` JSONL transcript, in the shape the real CLI writes it.
 
     Built as objects rather than as text, because what is under test here is the loop above the
@@ -343,7 +349,7 @@ def test_a_correct_flag_is_submitted_and_closes_the_attempt_as_a_flag(tmp_path):
 
     ending = run.work()
 
-    assert wire.submitted and wire.submitted[0] == (2, wire.flags[2])
+    assert (2, wire.flags[2]) in wire.submitted
     assert ending.flags == (wire.flags[2],)
     assert FLAG in {one["cause"] for one in records(recorder, "attempt-close")}
 
@@ -399,9 +405,7 @@ def test_a_candidate_is_put_to_the_submission_gate_once_and_never_twice(tmp_path
 
     sent = wire.submitted
     assert sent, "nothing was submitted at all, so this proves nothing"
-    assert len(sent) == len({challenge_id for challenge_id, _text in sent}), (
-        f"a candidate went to the gate twice: {sent}"
-    )
+    assert len(sent) == len(set(sent)), f"a candidate went to the gate twice: {sent}"
 
 
 def test_recon_opens_onto_the_boards_own_files_and_never_onto_the_models_output(tmp_path):
@@ -456,3 +460,45 @@ def test_a_crash_inside_an_attempt_still_closes_it_in_the_record(tmp_path):
     assert closed[-1]["cause"] == "crashed"
     assert ending.cause == "crashed"
     assert "the adapter went out from under us" in ending.detail
+
+
+def test_the_invocations_own_steps_are_not_the_model_working_the_challenge(tmp_path):
+    """Measured against the live Board: a container with no Codex login spends four Steps a turn on
+    the CLI reporting its own failure, so three turns reached the 25-Step cliff and every Attempt
+    closed `cut:step-cliff` — blaming the Challenge for our own broken end. The stall call is handed
+    the model's Steps and never the invocation's own, so what this records now is `crashed`."""
+    clock = Clock()
+    wire = Wire(count=1)
+    unauthenticated = stream(
+        reported=["Code Mode is unavailable", "stream error: 401 Unauthorized"],
+        failed="We're having trouble connecting",
+    )
+    run, recorder = solver(
+        tmp_path, wire, Agent(clock, wire=wire, scripted={1: unauthenticated}), clock, lasting=2400.0
+    )
+
+    run.work()
+
+    causes = {one["cause"] for one in records(recorder, "attempt-close")}
+    assert "crashed" in causes
+    assert "cut:step-cliff" not in causes
+
+
+def test_what_the_orchestrator_spends_after_a_turn_is_not_the_models_next_step_count(tmp_path):
+    """The stall call counts an Attempt's opening and the model's own Steps, and nothing the
+    orchestrator spent afterwards. A Flag sweep, a replay and a submission happen *after* the
+    model's turn, so counting them toward ADR-0005's step cliff closes an Attempt for work the
+    model never did — which is what a live Run against Brunner recorded as `cut:step-cliff` on a
+    container that never reached the model at all."""
+    clock = Clock()
+    wire = Wire(count=1)
+    unauthenticated = stream(reported=["stream error: 401 Unauthorized"], failed="trouble connecting")
+    agent = Agent(clock, wire=wire, scripted={1: unauthenticated}, seconds=60.0)
+    run, recorder = solver(tmp_path, wire, agent, clock, lasting=1200.0)
+
+    run.work()
+
+    counted = re.findall(r"(\d+) steps", agent.prompts[-1])
+    assert len(counted) > 1, "no run of turns to compare"
+    assert len(set(counted)) == 1, f"the count grew while the model did nothing: {counted}"
+    assert "cut:step-cliff" not in {one["cause"] for one in records(recorder, "attempt-close")}
