@@ -163,7 +163,7 @@ class Invocation:
     #
     # This one, because `--privileged` spends the container boundary to buy a smaller one inside it,
     # and ADR-0008 is already explicit that the container boundary *is* the isolation here. v1
-    # accepts what that costs and names it rather than hiding it: challenge code runs as root with
+    # accepts what that costs and names it rather than hiding it (ADR-0018): challenge code runs as root with
     # nothing between it and `/state`, so *the Observation log is orchestrator-append-only* is a
     # claim about the model's cooperation rather than a fact about the filesystem. `run_attempt`
     # still refuses to put the record inside the working directory, which holds the accidental case
