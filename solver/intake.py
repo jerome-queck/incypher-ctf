@@ -161,6 +161,14 @@ class Sighting:
     challenge_type: str
     value: int
     solves: int
+    # Where the Board itself put this Challenge in the list, and **Order's last tie-break**. CTFd
+    # sends the field in the LIST payload, so it costs no request — and it is read defensively for
+    # a measured reason rather than a cautious one: Brunner sends `position` for all 74 Challenges
+    # and every one of them is `0`. That is precisely why the rule is position *then* id — a Board
+    # with no ordering of its own leaves the whole set tied and the id carries it, so the ranking
+    # stays total and stable across a Run either way
+    # ([ADR-0015](../docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
+    position: int
     description: str
     attempts: int
     max_attempts: int | None
@@ -186,8 +194,8 @@ class Sighting:
     ) -> Sighting:
         """One Challenge out of the Board's two payloads, with nothing decided that was not read.
 
-        Which half a field comes from is the point. `solves`, `value` and `solved_by_me` are in the
-        list and move every cycle; the description, `attempts`, `max_attempts` and the deploy terms
+        Which half a field comes from is the point. `solves`, `value`, `position` and
+        `solved_by_me` are in the list, and the first two move every cycle; the description, `attempts`, `max_attempts` and the deploy terms
         are detail-only, and are what the per-Challenge GET is paid for. `category` and `type` come
         through as the open strings they are.
 
@@ -206,6 +214,7 @@ class Sighting:
             challenge_type=str(listed.get("type", "")),
             value=int(listed.get("value") or 0),
             solves=int(listed.get("solves") or 0),
+            position=int(listed.get("position") or 0),
             description=description,
             attempts=carried.attempts if carried else int(detail.get("attempts") or 0),
             max_attempts=carried.max_attempts if carried else detail.get("max_attempts"),

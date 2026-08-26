@@ -185,7 +185,14 @@ Solver is strongest to bank Flags early, Tier spends longest where it is weakest
 merges them silently picks one goal and loses the other. That opposition is the pair's *design
 intent*; the term it turns on is the same deferred strength signal Tier's entry describes, so in v1
 Order is what remains and all of it is measured: tractability, payoff, progress, a live Lease, and a
-monotone penalty on what has already been spent.
+monotone penalty on what has already been spent. **Order is not the only thing that chooses the
+pick**: roughly one Attempt in four is a **reserved exploration share**, spent on the best Challenge
+nobody has solved regardless of where it ranks, because tractability weights high-solve Challenges
+up and would otherwise leave the unsolved set starved by construction. Tractability itself is a
+Challenge's **solve velocity** wherever two samples exist and its solve count before that — a
+cumulative count is uniformly zero on a fresh Board and credits a Challenge for a rush that finished
+before we arrived
+([ADR-0017](docs/adr/0017-the-exploration-share-and-solve-velocity-are-reinstated.md)).
 _Avoid_: priority, queue position, queue (there isn't one), tier (the other half of the pair, and
 deliberately a different word)
 
