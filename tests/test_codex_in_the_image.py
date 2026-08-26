@@ -28,11 +28,26 @@ def instructions() -> str:
     )
 
 
+def installed() -> list[str]:
+    """Every binary the install loop puts on `PATH`, read off the loop rather than off a literal —
+    the CLI arrived in two halves once already and a third is a list entry."""
+    listed = re.search(r"for part in ([^;]+); do", instructions())
+    return re.findall(r'"([a-z0-9-]+):', listed.group(1)) if listed else []
+
+
 def test_the_executable_the_adapter_spawns_is_the_one_the_image_installs():
     """The adapter names it as config and the image puts it on `PATH`. Two names that drifted apart
     would be an image that builds green and a Run with no agent in it."""
     assert Invocation.executable == "codex"
-    assert f"/usr/local/bin/{Invocation.executable}" in instructions()
+    assert Invocation.executable in installed()
+    assert '"/usr/local/bin/${name}"' in instructions()
+
+
+def test_the_tool_host_ships_beside_the_cli():
+    """From 0.147.0 the shell tool routes through a separate host binary, and without it every
+    command the model tries fails before it runs while `codex --version` answers perfectly. Half a
+    CLI is the shape this list exists to make impossible."""
+    assert "codex-code-mode-host" in installed()
 
 
 def test_the_version_is_pinned_rather_than_floating():
@@ -45,14 +60,15 @@ def test_the_version_is_pinned_rather_than_floating():
     assert "@latest" not in instructions()
 
 
-def test_both_architectures_are_mapped_to_their_own_bytes():
+def test_every_binary_is_mapped_to_its_own_bytes_on_every_architecture():
     """A per-architecture download is the trap: a URL naming one of them builds green on the runner
-    and 404s on the machine that competes. Distinct digests, because one digest covering two
-    downloads is a digest checking nothing."""
-    digests = re.findall(r"ARG CODEX_SHA256_[A-Z0-9]+=([0-9a-f]{64})", instructions())
+    and 404s on the machine that competes. One digest per binary per architecture, all distinct,
+    because a digest covering two downloads is a digest checking nothing."""
+    digests = re.findall(r"ARG [A-Z0-9_]*SHA256_[A-Z0-9]+=([0-9a-f]{64})", instructions())
+    wanted = len(installed()) * len(ARCHITECTURES)
 
-    assert len(digests) == len(ARCHITECTURES)
-    assert len(set(digests)) == len(ARCHITECTURES)
+    assert len(digests) == wanted, f"{len(installed())} binaries x {len(ARCHITECTURES)} arches wants {wanted} digests"
+    assert len(set(digests)) == wanted
     for architecture in ARCHITECTURES:
         assert re.search(rf"\b{architecture}\)\s", instructions()), f"{architecture} is not a case arm"
 
