@@ -497,6 +497,14 @@ def _as_record(sighting: Sighting) -> dict[str, Any]:
         # on the detail GET — so without it a reader sees a Challenge on this line, absent from
         # the pick's rank vector, and has no way to tell *never ours to deploy* from a defect.
         "shared": sighting.terms.shared,
+        # What an Instance of this Challenge costs and how it behaves, from the same detail GET and
+        # written down for the same reason: every one is a `ctfd-chall-manager` field, so the only
+        # Board in reach that can populate them is the scored one, unattended, once. `timeout` is
+        # renewability (`instance.Terms.renewable`), so without it a Run where nothing was ever
+        # renewable reads exactly like a Run whose renewal never fired — opposite faults.
+        "timeout": sighting.terms.timeout,
+        "destroy_on_flag": sighting.terms.destroy_on_flag,
+        "mana_cost": sighting.terms.mana_cost,
         "changed": sighting.changed,
         "stale": sighting.stale,
         "files": [

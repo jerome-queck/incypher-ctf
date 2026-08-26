@@ -414,6 +414,84 @@ def test_the_record_carries_orders_tie_break_because_the_board_is_gone_by_replay
     assert [one["position"] for one in records(recorder)[-1]["challenges"]] == [7, 0]
 
 
+def test_the_field_set_of_a_challenge_on_the_intake_line_is_pinned(recorder):
+    """#16's stability rules are that a field's meaning never changes, a retired name is never
+    reused, and a reader defaults what is missing. Adding a field is free under them and renaming
+    or dropping one is not, so the set is pinned: this row is what every eval query reads, and a
+    silent rename breaks a query written against a Run nobody can re-run.
+    """
+    wire = Wire(listed=[listing(1)], detail={"1": detail(1)})
+
+    intake_over(wire, recorder).sync()
+
+    assert set(records(recorder)[-1]["challenges"][0]) == {
+        "challenge_id",
+        "name",
+        "category",
+        "type",
+        "value",
+        "solves",
+        "position",
+        "attempts",
+        "max_attempts",
+        "solved",
+        "shared",
+        "timeout",
+        "destroy_on_flag",
+        "mana_cost",
+        "changed",
+        "stale",
+        "files",
+    }
+
+
+def test_a_chall_manager_board_and_a_board_without_the_plugin_are_told_apart_in_the_record(recorder):
+    """Every Instance term is a `ctfd-chall-manager` field, and Brunner runs no chall-manager — its
+    detail payloads carry no `timeout`, `shared` or `mana_cost` key at all. So the only Board in
+    reach that can populate these is the scored one, unattended, once: a field not written down at
+    14:00 is not recoverable at 16:01.
+
+    What the defaults cannot say is deliberate. `destroy_on_flag: false` and `mana_cost: 0` read the
+    same whether the plugin said so or was never installed, and that distinction is not this line's
+    to invent — `type` already says whether a Challenge is instanced at all, and whether the Board
+    runs a chall-manager is the Board profile's, at run-open
+    ([#74](https://github.com/jerome-queck/incypher-ctf/issues/74)).
+    """
+    wire = Wire(
+        listed=[listing(1, type="dynamic_iac"), listing(2)],
+        detail={
+            "1": detail(1, timeout=3600, destroy_on_flag=True, mana_cost=2),
+            "2": detail(2),
+        },
+    )
+
+    intake_over(wire, recorder).sync()
+
+    instanced, plain = records(recorder)[-1]["challenges"]
+
+    assert (instanced["timeout"], instanced["destroy_on_flag"], instanced["mana_cost"]) == (3600, True, 2)
+    assert (plain["timeout"], plain["destroy_on_flag"], plain["mana_cost"]) == (None, False, 0)
+
+
+def test_an_instance_nothing_could_have_renewed_is_not_a_renewal_that_never_fired(recorder):
+    """`check_source_can_patch_instance` is exactly `if not challenge.timeout: return False`, so a
+    Board that sets no timeout answers every PATCH with a 403. A Run whose every Instance expired
+    for that reason and one whose renewal logic never ran are opposite faults — one is the Board and
+    one is us — and `cut:instance-expired` alone cannot tell them apart.
+
+    A **missing** `timeout` and `timeout: 0` deliberately read the same here: the platform does not
+    distinguish them, so a record that did would be inventing a difference.
+    """
+    wire = Wire(
+        listed=[listing(1, type="dynamic_iac"), listing(2, type="dynamic_iac"), listing(3, type="dynamic_iac")],
+        detail={"1": detail(1, timeout=1800), "2": detail(2, timeout=0), "3": detail(3)},
+    )
+
+    intake_over(wire, recorder).sync()
+
+    assert [one["timeout"] for one in records(recorder)[-1]["challenges"]] == [1800, None, None]
+
+
 def test_the_record_carries_what_makes_a_challenge_ineligible_rather_than_only_the_ranking(recorder):
     """`shared` arrives only on the detail GET and decides, with `type`, whether a Challenge is
     deployable by us at all. Without it on this line a reader sees an unsolved Challenge that the
