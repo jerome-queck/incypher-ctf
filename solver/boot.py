@@ -54,10 +54,10 @@ CODEX_HOME_METERED = "CODEX_HOME_METERED"
 CTFD_URL = "CTFD_URL"
 CTFD_API_TOKEN = "CTFD_API_TOKEN"
 
-# The two that must be there for a Run to mean anything: the Board's address, and the token that
-# reads it. Everything else in `SECRETS` is optional and is checked for emptiness rather than for
-# presence — a Board that answers an unauthenticated read is still refused here, because a Run that
-# cannot submit is not a Run.
+# The two that must be there whatever Board this is: its address, and the token that reads it. A
+# Board that answers an unauthenticated read is still refused here, because a Run that cannot submit
+# is not a Run. Everything else in `SECRETS` is checked for **emptiness** rather than for presence,
+# and is demanded only where that Board's own rules demand it — `Setup.must_hold`, from the profile.
 REQUIRED = (CTFD_URL, CTFD_API_TOKEN)
 
 # A `run_id` becomes a path under `/state/runs`, so a name that is not one component is refused
