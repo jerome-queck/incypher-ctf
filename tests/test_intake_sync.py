@@ -402,6 +402,25 @@ def test_category_and_type_are_read_as_the_open_strings_they_are(recorder):
     assert (sighted.category, sighted.challenge_type) == ("(Practice) forensics", "flightops")
 
 
+def test_the_record_carries_what_makes_a_challenge_ineligible_rather_than_only_the_ranking(recorder):
+    """`shared` arrives only on the detail GET and decides, with `type`, whether a Challenge is
+    deployable by us at all. Without it on this line a reader sees an unsolved Challenge that the
+    pick's rank vector never mentions and cannot tell *never ours to deploy* from a defect — which
+    is the one thing `order_ranks` was recorded to make answerable
+    (`solver/schedule.py`, [ADR-0015]).
+    """
+    wire = Wire(
+        listed=[listing(1, type="dynamic_iac"), listing(2)],
+        detail={"1": detail(1, shared=True), "2": detail(2)},
+    )
+
+    intake_over(wire, recorder).sync()
+
+    written = records(recorder)[-1]["challenges"]
+
+    assert [(one["type"], one["shared"]) for one in written] == [("dynamic_iac", True), ("standard", False)]
+
+
 def test_a_board_supplied_filename_cannot_reach_out_of_the_run_directory(recorder):
     """The Board names the file and we write it under `/state`, which makes the name an input:
     `../../codex/auth.json` is a traversal into the one live credential on disk."""

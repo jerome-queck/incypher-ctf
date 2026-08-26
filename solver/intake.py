@@ -487,6 +487,11 @@ def _as_record(sighting: Sighting) -> dict[str, Any]:
         "attempts": sighting.attempts,
         "max_attempts": sighting.max_attempts,
         "solved": sighting.solved,
+        # The other half of "undeployable by us", beside `type`. Recorded because it is the one
+        # thing that takes an unsolved Challenge out of Order's eligible set, and it arrives only
+        # on the detail GET — so without it a reader sees a Challenge on this line, absent from
+        # the pick's rank vector, and has no way to tell *never ours to deploy* from a defect.
+        "shared": sighting.terms.shared,
         "changed": sighting.changed,
         "stale": sighting.stale,
         "files": [
