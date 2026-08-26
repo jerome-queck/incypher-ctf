@@ -10,6 +10,17 @@
 > payload, so on such a Board those terms are not stale — they were never sent, and Order would
 > rank an empty set while reporting success.
 
+> **Two terms reinstated by
+> [ADR-0017](0017-the-exploration-share-and-solve-velocity-are-reinstated.md)**, found by the audit
+> of [spec #63](https://github.com/jerome-queck/incypher-ctf/issues/63) against
+> [#15](https://github.com/jerome-queck/incypher-ctf/issues/15). Everything below stands; two of
+> #15's ordering decisions were dropped here silently rather than rejected, and are back. **A
+> reserved exploration share** — roughly one Attempt in four to a Challenge nobody has solved,
+> regardless of rank, because `+ w_solves × solves_norm` applies the opposite pressure and leaves a
+> zero-solve Challenge systematically last. And **solve velocity in preference to solve count** as
+> the `w_solves` input once two samples exist, which dissolves the cold start a cumulative count
+> has at t=0.
+
 [#47](https://github.com/jerome-queck/incypher-ctf/issues/47) was chartered to settle where a cut
 Challenge lands and what recomputes the sequence. It inherited its own framing from
 [ADR-0009](0009-store-what-was-observed-derive-every-judgement.md) and

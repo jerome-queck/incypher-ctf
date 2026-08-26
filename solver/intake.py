@@ -161,6 +161,10 @@ class Sighting:
     challenge_type: str
     value: int
     solves: int
+    # Order's last tie-break, and read defensively for a measured reason: CTFd sends the field in
+    # the LIST payload, and Brunner sends it as `0` for all 74 Challenges. That is why the rule is
+    # position *then* id (ADR-0015) — a Board with no ordering of its own ties the whole set.
+    position: int
     description: str
     attempts: int
     max_attempts: int | None
@@ -186,9 +190,10 @@ class Sighting:
     ) -> Sighting:
         """One Challenge out of the Board's two payloads, with nothing decided that was not read.
 
-        Which half a field comes from is the point. `solves`, `value` and `solved_by_me` are in the
-        list and move every cycle; the description, `attempts`, `max_attempts` and the deploy terms
-        are detail-only, and are what the per-Challenge GET is paid for. `category` and `type` come
+        Which half a field comes from is the point. `solves`, `value`, `position` and
+        `solved_by_me` are in the list, and the first two move every cycle; the description,
+        `attempts`, `max_attempts` and the deploy terms are detail-only, and are what the
+        per-Challenge GET is paid for. `category` and `type` come
         through as the open strings they are.
 
         **A detail GET that failed does not cost the Challenge**: every detail-side field is taken
@@ -206,6 +211,7 @@ class Sighting:
             challenge_type=str(listed.get("type", "")),
             value=int(listed.get("value") or 0),
             solves=int(listed.get("solves") or 0),
+            position=int(listed.get("position") or 0),
             description=description,
             attempts=carried.attempts if carried else int(detail.get("attempts") or 0),
             max_attempts=carried.max_attempts if carried else detail.get("max_attempts"),
@@ -478,9 +484,19 @@ def _as_record(sighting: Sighting) -> dict[str, Any]:
         "type": sighting.challenge_type,
         "value": sighting.value,
         "solves": sighting.solves,
+        # Order's last tie-break, and the one input to the ranking that is neither derivable nor
+        # re-fetchable afterwards — the Board is gone by the time anyone replays this. Without it
+        # a shadow-mode replay cannot resolve a tie at all, which is the whole of ADR-0015's
+        # *"a non-deterministic Order cannot be replayed"*.
+        "position": sighting.position,
         "attempts": sighting.attempts,
         "max_attempts": sighting.max_attempts,
         "solved": sighting.solved,
+        # The other half of "undeployable by us", beside `type`. Recorded because it is the one
+        # thing that takes an unsolved Challenge out of Order's eligible set, and it arrives only
+        # on the detail GET — so without it a reader sees a Challenge on this line, absent from
+        # the pick's rank vector, and has no way to tell *never ours to deploy* from a defect.
+        "shared": sighting.terms.shared,
         "changed": sighting.changed,
         "stale": sighting.stale,
         "files": [

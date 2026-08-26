@@ -33,6 +33,7 @@ def sighting(challenge_id=1, *, description="", solves=0, files=(), category="fo
         challenge_type=fields.pop("challenge_type", "standard"),
         value=fields.pop("value", 500),
         solves=solves,
+        position=fields.pop("position", 0),
         description=description,
         attempts=0,
         max_attempts=None,
