@@ -27,7 +27,14 @@ import eval_refusals
 import eval_thresholds
 import eval_tier
 import stream
-from solver.record import CUT_NOVELTY, CUT_SELF_REPORTED_IMPOSSIBLE, FLAG, Recorder, Usage
+from solver.record import (
+    CUT_INSTANCE_EXPIRED,
+    CUT_NOVELTY,
+    CUT_SELF_REPORTED_IMPOSSIBLE,
+    FLAG,
+    Recorder,
+    Usage,
+)
 from solver.redaction import Redactor
 from solver.stall import Thresholds
 
@@ -344,3 +351,31 @@ def test_a_sweep_that_left_something_held_is_named_as_the_leak(tmp_path, capsys)
     assert code == 0
     assert "LEFT HELD" in said
     assert "left something held" in said
+
+
+def test_the_replay_can_reach_an_expired_instance(tmp_path):
+    """The replay carries both of an Attempt's clocks, not just the budget. `instance_until` is the
+    Board's own deadline off the open line, and without it `cut:instance-expired` would be a cause
+    of the closed vocabulary that no threshold could ever produce — a silent hole in question 2."""
+    written = Written(tmp_path, run_id="leased").opened()
+    attempt = written.attempt(
+        "1-1",
+        challenge_id=1,
+        budget_s=6000,
+        challenge_type="dynamic",
+        # Inside the Attempt rather than beyond it: the Lease runs out while the model is working.
+        instance_until="2026-09-22T02:30:03+00:00",
+    )
+    run = attempt.turn(("ls", b"a"), ("cat b", b"b"), ("cat c", b"c")).over(CUT_INSTANCE_EXPIRED).closed()
+
+    replayed = eval_thresholds.replay(run.attempts[0], Thresholds())
+
+    assert replayed.cause == CUT_INSTANCE_EXPIRED
+
+
+def test_a_ratio_over_no_checkpoint_at_all_is_blank_rather_than_zero():
+    """Steps-to-last-Checkpoint is undefined where there was no Checkpoint, and `0.00` would file an
+    Attempt that never moved the environment in the same column as one that moved it immediately and
+    then went quiet. Those are opposite findings — the same reason the token rate blanks."""
+    assert eval_context._ratio((), 12) == ""
+    assert eval_context._ratio((6,), 12) == "0.50"

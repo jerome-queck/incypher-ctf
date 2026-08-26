@@ -43,9 +43,16 @@ from solver.stall import Thresholds  # noqa: E402
 
 
 def _ratio(marks: Sequence[int], spent: int) -> str:
-    if not spent:
+    """Where the last Checkpoint fell, as a share of the Steps spent — blank where there was none.
+
+    Blank rather than `0.00`, for the reason the token rate below is blank rather than zero: an
+    Attempt that never moved the environment has no *steps-to-last-Checkpoint*, and printing a
+    floor value would put it in the same column as one that found something immediately and then
+    went quiet. Those are opposite findings.
+    """
+    if not spent or not marks:
         return ""
-    return f"{(max(marks) if marks else 0) / spent:.2f}"
+    return f"{max(marks) / spent:.2f}"
 
 
 def _rate(checkpoints: int, tokens: int) -> str:
@@ -81,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     _ratio(marks, spent),
                     tokens or "",
                     _rate(len(marks), tokens),
-                    attempt.cause or "(never closed)",
+                    attempt.cause or stream.NEVER_CLOSED,
                 ]
             )
 

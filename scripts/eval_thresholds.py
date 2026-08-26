@@ -19,11 +19,14 @@ model Steps spent so far, one `Deadline` for the whole Attempt, and only the **m
 to it — never the spawn, the recon cascade, the deploy or a Flag submission. A replay against a
 re-written counter would measure a rule that never ran.
 
-Two approximations, named rather than hidden:
+Three things about the clocks, named rather than hidden:
 
 - **The budget leg is reconstructed** from `budget_s` and the Attempt's first Step, because the
   scheduler computed the real deadline just before that Step and never wrote it down. It is out by
   the length of one deploy.
+- **The Instance leg is the Board's, not ours.** `instance_until` is read off the Attempt's open
+  line, so it is exact where the budget leg is reconstructed — but an Attempt whose Lease carried no
+  stated deadline records `null`, and there the Instance clock is simply absent rather than wrong.
 - **The circuit breaker is not replayed.** It is a judgement about the Solver rather than a
   threshold about the Challenge (`solver/stall.py`), and an Attempt it closed is reported here under
   whatever the counters reached.
@@ -39,7 +42,7 @@ import argparse
 import datetime as dt
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -97,7 +100,13 @@ def replay(attempt: stream.Attempt, thresholds: Thresholds, *, said: Sequence[tu
     if began is None:
         return Replayed(attempt.attempt_id, "", 0, 0, 0.0, ())
 
-    deadline = Deadline(budget=began + dt.timedelta(seconds=attempt.budget_s or 0))
+    deadline = Deadline(
+        budget=began + dt.timedelta(seconds=attempt.budget_s or 0),
+        # The Board's own deadline for this Attempt's Instance, off the open line. Without it the
+        # replay has only one clock and `cut:instance-expired` could never fire under any threshold
+        # — a whole cause of the closed vocabulary silently unreachable.
+        instance=stream.at(str(attempt.instance_until or "")),
+    )
     spoken = dict(said)
     spent, marks = 0, []
 
@@ -134,15 +143,13 @@ class Verdict:
     steps_saved: int = 0
     seconds_saved: float = 0.0
     flags_lost: int = 0
-    by_cause: dict[str, int] | None = None
+    by_cause: dict[str, int] = field(default_factory=dict)
 
     def took(self, attempt: stream.Attempt, replayed: Replayed) -> None:
-        by_cause = self.by_cause if self.by_cause is not None else {}
-        self.by_cause = by_cause
         if not replayed.cut:
             return
         self.cut += 1
-        by_cause[replayed.cause] = by_cause.get(replayed.cause, 0) + 1
+        self.by_cause[replayed.cause] = self.by_cause.get(replayed.cause, 0) + 1
         self.steps_saved += max(0, len(attempt.model_steps) - replayed.steps)
         self.seconds_saved += max(0.0, attempt.seconds - replayed.seconds)
         won = flag_at(attempt)
@@ -205,7 +212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     verdict.steps_saved,
                     f"{verdict.seconds_saved / 60:.1f}",
                     verdict.flags_lost or "",
-                    ", ".join(f"{cause} {count}" for cause, count in sorted((verdict.by_cause or {}).items())),
+                    ", ".join(f"{cause} {count}" for cause, count in sorted(verdict.by_cause.items())),
                 ]
                 for verdict in verdicts
             ],
@@ -223,7 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     len(attempt.model_steps),
                     replayed.steps,
                     replayed.cause or "—",
-                    attempt.cause or "(never closed)",
+                    attempt.cause or stream.NEVER_CLOSED,
                     ", ".join(str(mark) for mark in replayed.checkpoints) or "none",
                 ]
                 for _, attempt in attempts

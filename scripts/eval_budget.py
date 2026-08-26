@@ -105,7 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for attempt in attempts:
         per_attempt.took(f"{attempt.attempt_id} {attempt.opened.get('challenge_name', '')}".strip(), attempt)
         per_category.took(attempt.category, attempt)
-        per_cause.took(attempt.cause or "(never closed)", attempt)
+        per_cause.took(attempt.cause or stream.NEVER_CLOSED, attempt)
         whole.took(attempt)
 
     for what, grouped in (("attempt", per_attempt), ("category", per_category), ("cause", per_cause)):

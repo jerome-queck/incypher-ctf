@@ -185,18 +185,28 @@ both hold to it.
 - **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
   credential, or a network the runner does not have, which is what keeps them out of `ci.yml`.
   They consume `solver/` and never re-implement it; a rule that exists in both places is a rule
-  that will disagree. The eval queries live here too, `eval_*.py`, one per question
+  that will disagree. The eval queries live here too, `eval_*.py` — one per
+  question for the seven ADR-0009 names
   ([ADR-0009](docs/adr/0009-store-what-was-observed-derive-every-judgement.md) — *eval is seven
-  questions, not a harness*), and they consume `solver/` for the same reason: a replay against a
-  re-written counter measures a rule that never ran.
+  questions, not a harness*), plus `eval_refusals.py`, which answers none of the seven and carries
+  the refusal and premature-quit derivation
+  [ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md) asks
+  for instead of two record fields. They consume `solver/` like every other script here: a replay
+  against a re-written counter measures a rule that never ran.
 - **`runs/` — the Step stream of every Run that reached an Attempt**, one file per Run, written
   only by `scripts/promote_run.py` and never by the Solver, which has no git binary
   ([ADR-0009](docs/adr/0009-store-what-was-observed-derive-every-judgement.md)). It is **data, not
-  code**: excluded from lint in `pyproject.toml` and held to none of the conventions above.
-  Excluded from the conformance scan for the same reason — it earns a `MAP.md` row like every
-  other top-level area, and nothing else here reaches inside it. **It is not excluded from the
-  secret scan**, which is the one check that has to see it, and the promotion that writes it
-  re-runs that scan first because nothing human stands between the file and the push.
+  code**: excluded from lint in `pyproject.toml` and held to none of the conventions above. It
+  needs no conformance exclusion, because `conformance/check-conformance.sh` reads top-level names
+  and the manifest and never looks inside a directory — so `runs/` owes it a `MAP.md` row like
+  every other area and nothing more.
+
+  **It is deliberately not excluded from the secret scan** — but know what that buys. Nearly every
+  gitleaks rule is anchored on a quote character, and JSON escapes every quote, so a credential the
+  scanner flags instantly in a plain file is invisible inside a JSONL string value. The real
+  control is therefore `scripts/promote_run.py`, which scans a **decoded** copy of the stream
+  before anything is written, and refuses on a hit — because nothing human stands between that file
+  and the push.
 
 ## 7. Evolution — what is rigid, what moves
 

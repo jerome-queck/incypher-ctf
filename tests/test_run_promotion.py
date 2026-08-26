@@ -31,6 +31,11 @@ PLANTED = "ctfd_" + "9f3c" * 16  # gitleaks:allow - a fixture credential, worthl
 CLEAN = "#!/bin/sh\nexit 0\n"
 FINDS_SOMETHING = "#!/bin/sh\nprintf 'RuleID: generic-api-key\\n'\nexit 1\n"
 
+# A stand-in for the rules gitleaks actually ships: anchored on a quote character, which is exactly
+# the shape JSON escaping defeats. `$2` is the directory the scanner was pointed at.
+QUOTE_ANCHORED = '#!/bin/sh\ngrep -rq \'SEKRIT = "\' "$2" && exit 1\nexit 0\n'
+IN_A_QUOTED_ASSIGNMENT = 'SEKRIT = "hT8sPq2Lx9VbN4mZaR7kJdW1cYeUoI3fGnQpXsAv"'  # gitleaks:allow - fixture
+
 
 @pytest.fixture
 def scanner(tmp_path):
@@ -232,3 +237,43 @@ def test_a_dry_run_scans_and_moves_nothing(tmp_path, scanner, capsys):
     assert promote(state, into, scanner(), "--dry-run") == 0
     assert "scanned clean" in capsys.readouterr().out
     assert not into.exists()
+
+
+def test_the_scanner_is_given_a_decoded_view_because_json_hides_a_secret_from_it(tmp_path, scanner, capsys):
+    """The finding that made this necessary, pinned so it cannot come back.
+
+    Nearly every gitleaks rule is anchored on a quote character, and JSON writes a quote as `\\"` —
+    so a secret the scanner flags instantly in a plain file is invisible inside a JSONL string
+    value. Measured against the real binary: the same AWS-shaped key is found in a `.txt` and missed
+    in a `.jsonl` carrying the identical bytes. Without the decoded companion, `runs/` being *"not
+    excluded from the secret scan"* would buy almost nothing.
+    """
+    state, into = tmp_path / "state", tmp_path / "runs"
+    source = a_run(state)
+    with source.open("a") as growing:
+        growing.write(json.dumps({"seq": 99, "record": "step-begin", "command_raw": IN_A_QUOTED_ASSIGNMENT}) + "\n")
+
+    # The escaping is the whole point: the committed bytes never carry the un-escaped shape.
+    assert 'SEKRIT = "' not in source.read_text()
+
+    assert promote(state, into, scanner(QUOTE_ANCHORED)) == 1
+    assert not into.exists()
+
+
+def test_the_decoded_companion_is_scanned_and_never_promoted(tmp_path, scanner):
+    """It exists for the scanner and for nothing else. `runs/` holds the stream as written, so a
+    second rendering of the same Run landing beside it would be a projection arriving by the back
+    door — the one thing promotion is defined not to write."""
+    state, into = tmp_path / "state", tmp_path / "runs"
+    a_run(state)
+
+    assert promote(state, into, scanner()) == 0
+    assert sorted(path.name for path in into.iterdir()) == ["gate-1.jsonl"]
+
+
+def test_a_truncated_last_line_still_reaches_the_scanner(tmp_path):
+    """A crashed Run's last line is truncated by design, and it can carry a credential exactly as
+    well as a whole one. It is scanned as the text it is rather than skipped for not parsing."""
+    half = b'{"seq": 9, "record": "claim", "command_raw": "half a line with a sec'
+
+    assert b"half a line with a sec" in promote_run.decoded(half)

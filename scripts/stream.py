@@ -28,7 +28,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,11 @@ from solver.record import CLAIMS, FLAG, OBSERVATIONS  # noqa: E402
 # Where a promoted stream lands, and what every query reads when it is given no path of its own.
 # The live copy under `/state` is one argument away and carries the bodies with it.
 PROMOTED = "runs"
+
+# What a query prints where `Attempt.cause` is empty. Empty is the honest value — the stream never
+# said — and this is what that reads as in a table, held here so four queries cannot spell it three
+# ways and split one finding into three rows.
+NEVER_CLOSED = "(never closed)"
 
 # The names `solver/record.py` writes into the `record` field. Held here rather than imported: see
 # the module docstring — a reader owns its own vocabulary so that the writer stays free to grow one.
@@ -62,7 +67,12 @@ CLAIMED = "claim"
 MODEL_TOOLS = frozenset(TOOLS.values())
 
 
-def _at(moment: str) -> dt.datetime | None:
+def at(moment: str) -> dt.datetime | None:
+    """One timestamp, or `None` where the field is missing or unreadable.
+
+    Public because a query needs it too, and a second copy of four lines is still a second reader —
+    which is the one thing this module exists to stop (`CODING_STANDARDS.md` §6).
+    """
     try:
         return dt.datetime.fromisoformat(moment)
     except (TypeError, ValueError):
@@ -196,10 +206,6 @@ class Attempt:
         return [step for step in self.steps if step.by_the_model]
 
     @property
-    def spawns(self) -> list[Step]:
-        return [step for step in self.steps if step.spawn]
-
-    @property
     def turns(self) -> list[Turn]:
         """This Attempt cut into turns, at the spawns that bracket them.
 
@@ -248,8 +254,8 @@ class Attempt:
         line is written after it (`solver/run.py`), so the open would under-report by exactly the
         one operation most able to hang.
         """
-        began = self.steps[0].ts if self.steps else _at(str(self.opened.get("ts", "")))
-        ended = _at(str((self.closed or {}).get("ts", "")))
+        began = self.steps[0].ts if self.steps else at(str(self.opened.get("ts", "")))
+        ended = at(str((self.closed or {}).get("ts", "")))
         if began is None or ended is None:
             return 0.0
         return (ended - began).total_seconds()
@@ -270,7 +276,7 @@ class Run:
 
     @property
     def opened(self) -> dt.datetime | None:
-        return _at(str(next(iter(self.of(RUN_OPEN)), {}).get("ts", "")))
+        return at(str(next(iter(self.of(RUN_OPEN)), {}).get("ts", "")))
 
     @property
     def closed(self) -> dict[str, Any] | None:
@@ -280,7 +286,7 @@ class Run:
     def last_written(self) -> dt.datetime | None:
         """When this stream was last added to — how a Run still being written is told from one that
         stopped being written some time ago."""
-        return max((moment for record in self.records if (moment := _at(str(record.get("ts", ""))))), default=None)
+        return max((moment for record in self.records if (moment := at(str(record.get("ts", ""))))), default=None)
 
     @property
     def worked(self) -> bool:
@@ -328,7 +334,7 @@ class Run:
 def _step(record: dict[str, Any], *, ended: bool) -> Step:
     return Step(
         seq=int(record.get("seq", 0)),
-        ts=_at(str(record.get("ts", ""))),
+        ts=at(str(record.get("ts", ""))),
         attempt_id=str(record.get("attempt_id", "")),
         step_index=int(record.get("step_index", 0)),
         command_raw=str(record.get("command_raw", "")),
@@ -424,11 +430,6 @@ def load(paths: Sequence[str]) -> list[Run]:
     """Every stream a caller named, read — Runs that reached no Attempt included, because a query
     reporting nothing over a Run that never worked one is a different answer from a missing file."""
     return [read(path) for path in locate(paths)]
-
-
-def worked(runs: Iterable[Run]) -> Iterator[Attempt]:
-    for run in runs:
-        yield from run.attempts
 
 
 def table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> str:

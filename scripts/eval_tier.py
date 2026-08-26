@@ -30,9 +30,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import stream  # noqa: E402
-from solver.record import CAUSES, FLAG  # noqa: E402
-
-NEVER_CLOSED = "(never closed)"
+from solver.record import CAUSES  # noqa: E402
 
 
 def _provenance(runs: Sequence[stream.Run]) -> dict[str, str]:
@@ -75,19 +73,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     by_tier: dict[tuple[str, str], int] = {}
     by_provenance: dict[tuple[str, str], int] = {}
     for attempt in attempts:
-        cause = attempt.cause or NEVER_CLOSED
+        cause = attempt.cause or stream.NEVER_CLOSED
         tier = "(untiered)" if attempt.tier is None else f"tier {attempt.tier}"
         origin = how.get(str(attempt.opened.get("challenge_id")), "(untriaged)")
         by_tier[tier, cause] = by_tier.get((tier, cause), 0) + 1
         by_provenance[origin, cause] = by_provenance.get((origin, cause), 0) + 1
 
-    # The closed vocabulary first and in its declared order, so a Run where nothing crashed still
-    # shows a `crashed` column and a reader can see the zero rather than infer it from an absence.
-    causes = [*CAUSES, NEVER_CLOSED]
-    causes = [cause for cause in causes if any(key[1] == cause for key in by_tier)] or [FLAG]
+    # Only the causes that actually fired get a column — nine of them would make a table nobody
+    # reads across. What is lost by filtering is named instead, on the line below the matrix: a
+    # reader who does not already know the closed vocabulary cannot tell a cause that never fired
+    # from one nobody records, and that is the same silence `scripts/credentials_held.py` breaks by
+    # printing its absent names.
+    declared = [*CAUSES, stream.NEVER_CLOSED]
+    causes = [cause for cause in declared if any(key[1] == cause for key in by_tier)]
+    never = [cause for cause in declared if cause not in causes]
 
     print(f"\nTier against the cause it ended with ({len(attempts)} attempts):\n")
     print(_matrix(by_tier, sorted({key[0] for key in by_tier}), causes, "tier"))
+    if never:
+        print(f"\n  never fired here, and so has no column: {', '.join(never)}")
 
     print("\nthe same, against how that Tier was arrived at:\n")
     print(_matrix(by_provenance, sorted({key[0] for key in by_provenance}), causes, "provenance"))

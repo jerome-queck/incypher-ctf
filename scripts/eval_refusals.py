@@ -5,9 +5,10 @@
 [ADR-0014](../docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)
 settles where these two live: *"the Step carries the response text, the model and the credential
 slot; 'refused' and 'quit early' are derived offline and joined to Category. Nothing is added to the
-closed Cut vocabulary."* This is that derivation. It is **not an eighth eval question** — the seven
-are the `eval_*` scripts beside it, and none of them is this — it is the query ADR-0014 promised in
-place of two fields nobody could ever prune.
+closed Cut vocabulary."* This is that derivation. It is **not an eighth eval question**: the seven
+ADR-0009 names each have a script of their own beside this one, and this answers none of them — it
+is the query ADR-0014 promised in place of two fields nobody could ever prune. It carries the same
+`eval_` prefix because it is the same kind of thing, read the same way, over the same stream.
 
 **This is not `CONTEXT.md`'s Refusal.** That word is taken: a Refusal is the *Solver* declining to
 start, before anything is spent. What is measured here is the **model** declining to work a
@@ -81,12 +82,15 @@ class Conduct:
     quit_early: int = 0
     prose: int = 0
 
-    def took(self, attempt_id: str, turn: stream.Turn, *, refused: bool, early: bool) -> None:
+    def took(self, attempt_id: str, turn: stream.Turn, *, said: Sequence[str], refused: bool, early: bool) -> None:
+        """One turn. `said` is counted rather than kept, because how much prose was reachable is
+        what decides whether the refused column is a measurement or a blank."""
         self.seen.add(attempt_id)
         self.turns += 1
         self.barren += 1 if turn.barren else 0
         self.refused += 1 if refused else 0
         self.quit_early += 1 if early else 0
+        self.prose += len(said)
 
     def row(self, name: str) -> list[object]:
         return [
@@ -137,8 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     by_model.setdefault(turn.model or "(unnamed)", Conduct()),
                     whole,
                 ):
-                    group.took(attempt.attempt_id, turn, refused=refused, early=early)
-                    group.prose += len(said)
+                    group.took(attempt.attempt_id, turn, said=said, refused=refused, early=early)
 
     if not whole.turns:
         print("\nno turn in these streams — the model was never invoked")

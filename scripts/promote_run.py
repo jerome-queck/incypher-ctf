@@ -31,10 +31,15 @@ Four rules, and each of them is here because of what it costs to get wrong:
 The re-scan has two legs and both must pass. The first is the **declared secret set** — every value
 this machine actually holds, in the same encoded forms `solver/redaction.py` redacts, so a
 credential the recorder somehow missed is caught by the same rule twice. The second is **gitleaks**,
-pinned by `conformance/install-gitleaks.sh`, which is what CI will run over the commit: catching it
-here rather than there is the whole point. An absent scanner is a usage error and never a pass, for
-the reason `check-secrets.sh` gives — a check that quietly exits 0 because its tool is missing is
-the silent green this repository keeps building controls against.
+pinned by `conformance/install-gitleaks.sh`, which catches the credentials nobody declared. An
+absent scanner is a usage error and never a pass, for the reason `check-secrets.sh` gives — a check
+that quietly exits 0 because its tool is missing is the silent green this repository keeps building
+controls against.
+
+**The scanner is handed a decoded copy, and that is load-bearing rather than tidy.** Its rules are
+anchored on quote characters and JSON escapes every quote, so a secret it flags instantly in a plain
+file is invisible inside a JSONL string. `decoded()` below carries the measurement and what it means
+for the scan CI runs over the committed file.
 
 **Nothing moves if anything hits.** A batch is refused whole rather than cherry-picked: a hit means
 a live credential is on this disk, and the next action is to rotate it rather than to promote the
@@ -55,6 +60,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import json
 import shutil
 import subprocess
 import sys
@@ -85,6 +91,10 @@ CACHED_SCANNER = REPO_ROOT / ".cache" / "scanners" / "gitleaks"
 STALE_AFTER_SECONDS = 900.0
 
 SKIP, REFUSE, TAKE = "skip", "REFUSE", "ok"
+
+# The companion staged beside each stream for the scanner's benefit and never promoted. See
+# `decoded()` for why a scan of the JSONL alone is not the scan anybody thinks it is.
+DECODED = "decoded.txt"
 
 BURNED = """
 A declared credential is in a stream that was about to be committed.
@@ -192,6 +202,40 @@ def judge(source: Path, *, stale_after: float, now: dt.datetime, already: Path) 
     return Judgement(TAKE, said, data=data)
 
 
+def _strings(value: object, into: list[str]) -> None:
+    for item in value.values() if isinstance(value, dict) else value if isinstance(value, list) else ():
+        _strings(item, into)
+    if isinstance(value, str):
+        into.append(value)
+
+
+def decoded(data: bytes) -> bytes:
+    """Every string in the stream, unescaped, one per line — the view a scanner can actually read.
+
+    **This is not belt and braces; without it the gitleaks leg is very nearly inert.** Most of its
+    rules are anchored on quote characters — `key = "…"` — and JSON writes a quote as `\"`, so a
+    credential that gitleaks flags instantly in a plain file is invisible the moment it is a JSON
+    string value. Measured, not assumed: the same AWS-shaped secret is found in a `.txt` and missed
+    in a `.jsonl` carrying the identical bytes.
+
+    That has a consequence worth stating plainly, because it reaches past this script: `runs/` is
+    deliberately **not** excluded from `conformance/check-secrets.sh`, but that scan reads the
+    committed JSONL and is blinded the same way. So this decoded pass is the only place the
+    scanner's rules genuinely see a promoted stream, which is one more reason the guard belongs here
+    rather than after the push.
+
+    A line that will not parse is scanned as the text it is: the last line of a crashed Run is a
+    truncated one by design, and it is exactly as capable of carrying a credential as a whole one.
+    """
+    found: list[str] = []
+    for line in data.decode("utf-8", "replace").splitlines():
+        try:
+            _strings(json.loads(line), found)
+        except ValueError:
+            found.append(line)
+    return ("\n".join(found) + "\n").encode()
+
+
 def scanner(named: str | None) -> Path | None:
     """The pinned secret scanner, wherever this machine keeps it."""
     if named:
@@ -272,6 +316,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 continue
             landing = Path(scratch) / f"{run_id}.jsonl"
             landing.write_bytes(judged.data)
+            # Scanned beside it and never promoted — `staged` holds only what gets committed.
+            (Path(scratch) / f"{run_id}.{DECODED}").write_bytes(decoded(judged.data))
             staged.append((run_id, landing))
             print(f"{TAKE:6} {run_id}: {judged.said}")
 
