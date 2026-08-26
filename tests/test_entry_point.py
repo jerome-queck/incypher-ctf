@@ -52,12 +52,12 @@ def wired(monkeypatch, wire):
 
 
 def test_an_empty_environment_refuses_with_a_sentence_and_never_a_traceback(capsys, tmp_path, boards):
-    assert main({}, state=tmp_path / "state", boards=boards) == REFUSED
+    assert main({}, run_state=tmp_path / "state", boards=boards) == REFUSED
     assert "CTFD_URL" in capsys.readouterr().err
 
 
 def test_a_board_nothing_holds_rules_for_refuses_before_a_single_request(capsys, tmp_path, logged_in, boards):
-    code = main(env(CTFD_URL="https://danmark.brunnerctf.dk"), state=tmp_path / "state", boards=boards)
+    code = main(env(CTFD_URL="https://danmark.brunnerctf.dk"), run_state=tmp_path / "state", boards=boards)
 
     assert code == REFUSED
     assert "no Board profile" in capsys.readouterr().err
@@ -66,7 +66,7 @@ def test_a_board_nothing_holds_rules_for_refuses_before_a_single_request(capsys,
 def test_a_board_that_fails_the_read_contract_control_refuses_the_run(capsys, monkeypatch, tmp_path, logged_in, boards):
     wired(monkeypatch, Wire(control=CONTROL_AGREEABLE))
 
-    code = main(env(), state=tmp_path / "state", boards=boards)
+    code = main(env(), run_state=tmp_path / "state", boards=boards)
 
     assert code == REFUSED
     assert "not composed by CTFd" in capsys.readouterr().err
@@ -95,7 +95,7 @@ def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_re
 
     monkeypatch.setattr(entry, "Board", lambda url, token: Board(url, token, falls_over_after_the_profile))
 
-    code = main(env(TEAM_KEY="never-print-me"), state=state, boards=boards)
+    code = main(env(TEAM_KEY="never-print-me"), run_state=state, boards=boards)
 
     assert code == REFUSED
     assert "did not believe the Board" in capsys.readouterr().err
@@ -121,8 +121,19 @@ def test_the_read_contract_is_refused_before_a_recorder_is_ever_made(monkeypatch
     state = tmp_path / "state"
     wired(monkeypatch, Wire(listed=[], control=CONTROL_AGREEABLE))
 
-    assert main(env(), state=state, boards=boards) == REFUSED
+    assert main(env(), run_state=state, boards=boards) == REFUSED
     assert not (state / "runs").exists()
+
+
+def test_a_state_mount_that_is_not_there_refuses_rather_than_raising(capsys, monkeypatch, tmp_path, logged_in, boards):
+    """The mount is the one thing outside the image a Run depends on, and Colima mounts `$HOME` and
+    nothing else — a `-v` from outside it hands the container an empty directory in silence."""
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("")
+    wired(monkeypatch, Wire(listed=[{"id": 1, "name": "alpha", "type": "standard"}], ledger=None, mana=None))
+
+    assert main(env(), run_state=blocked / "state", boards=boards) == REFUSED
+    assert "not usable as this Run's state" in capsys.readouterr().err
 
 
 def test_the_exit_codes_are_the_three_a_reader_has_to_tell_apart():

@@ -19,7 +19,6 @@ from solver.record import CUT_BUDGET, FLAG, Recorder
 from solver.redaction import Redactor
 from solver.run import WINDOW_CLOSED, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
-from solver.stall import Thresholds
 
 BOARD = "https://board.example"
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
@@ -227,7 +226,6 @@ def solver(tmp_path, wire, agent, clock, *, lasting=3600.0, dials=DIALS, cycle_s
         instances=instances,
         steps=steps,
         chain=(Credential(slot="codex-subscription", model="gpt-5", home=tmp_path / "codex"),),
-        thresholds=Thresholds(),
         workdirs=tmp_path / "work",
         launch=agent,
         idle_seconds=30.0,
@@ -423,3 +421,38 @@ def test_recon_opens_onto_the_boards_own_files_and_never_onto_the_models_output(
 
     assert len(records(recorder, "attempt-open")) > 1, "only one Attempt ran, so nothing was re-reconned"
     assert not [one for one in records(recorder, "step-begin") if litter in one["command_raw"]]
+
+
+def test_an_attempt_that_observes_nothing_again_and_again_is_crashed_rather_than_cut(tmp_path):
+    """A Solver broken at its own end, told apart from a Challenge that is merely hard. A Cut would
+    say the Challenge stopped this Attempt, and a dead adapter is not something the Challenge did —
+    and `crashed` is what hard-demotes the Challenge rather than merely costing it a place."""
+    clock = Clock()
+    wire = Wire(count=1)
+    silent = stream()
+    run, recorder = solver(tmp_path, wire, Agent(clock, wire=wire, scripted={1: silent}), clock, lasting=2400.0)
+
+    run.work()
+
+    assert "crashed" in {one["cause"] for one in records(recorder, "attempt-close")}
+
+
+def test_a_crash_inside_an_attempt_still_closes_it_in_the_record(tmp_path):
+    """A stream holding an `attempt-open` with no terminator is a Run the eval cannot read at all,
+    and #16's schema is meant stable from v1. So the Attempt is closed whatever happened to it, and
+    the crash is recorded twice — on the Attempt, and again at Run close."""
+    clock = Clock()
+    wire = Wire(count=2)
+
+    def explodes(argv, workdir, environment, prompt):
+        raise RuntimeError("the adapter went out from under us")
+
+    run, recorder = solver(tmp_path, wire, explodes, clock)
+    ending = run.work()
+
+    opened = records(recorder, "attempt-open")
+    closed = records(recorder, "attempt-close")
+    assert opened and len(opened) == len(closed)
+    assert closed[-1]["cause"] == "crashed"
+    assert ending.cause == "crashed"
+    assert "the adapter went out from under us" in ending.detail

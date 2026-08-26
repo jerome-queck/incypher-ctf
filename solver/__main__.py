@@ -35,8 +35,10 @@ from solver.redaction import Redactor
 from solver.run import Ending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 
-# ADR-0008's one writable path, host-mounted, holding what a Run produces and nothing it depends on.
-STATE = Path("/state")
+# Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
+# and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
+# different thing and survives nothing (`CONTEXT.md`, *Run state*).
+RUN_STATE = Path("/state")
 
 # What a Run exits with, because a supervisor at v2 and a human at 16:05 read the same number.
 CLEAN = 0
@@ -49,23 +51,24 @@ REFUSED = 2
 REFUSED_AT_BOOT = "refused-at-boot"
 
 
-def main(environ: Mapping[str, str], *, state: Path = STATE, boards: Path = profile.BOARDS) -> int:
+def main(environ: Mapping[str, str], *, run_state: Path = RUN_STATE, boards: Path = profile.BOARDS) -> int:
     """Boot, run, and answer with the exit code. The only function in this repository that prints."""
     try:
-        ending = _run(environ, state=state, boards=boards)
+        ending = _run(environ, run_state=run_state, boards=boards)
     except Refusal as refused:
         print(refused, file=sys.stderr, flush=True)
         return REFUSED
     print(
         f"{ending.cause}: {ending.attempts} attempt(s), {len(ending.flags)} flag(s)"
         + (f", still held: {', '.join(ending.left_held)}" if ending.left_held else "")
+        + (f", not swept: {ending.unswept}" if ending.unswept else "")
         + (f" — {ending.detail}" if ending.detail else ""),
         flush=True,
     )
     return CLEAN if ending.clean else BROKEN
 
 
-def _run(environ: Mapping[str, str], *, state: Path, boards: Path) -> Ending:
+def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending:
     """Every refusal, then the Run — in the order that puts each check before the thing it guards.
 
     The order is the design. Credentials come first because they cost no network call; the tracked
@@ -73,27 +76,35 @@ def _run(environ: Mapping[str, str], *, state: Path, boards: Path) -> Ending:
     the read contract comes before anything is believed off the wire; and the first Intake comes last
     because it is the most expensive and the only one that needs a Recorder to write to.
     """
-    settings = boot.settings(environ)
-    rules = profile.rules_for(settings.url, boards)
-    board = Board(settings.url, settings.token)
+    held = boot.setup(environ)
+    rules = profile.rules_for(held.url, boards)
+    board = Board(held.url, held.token)
     # The same Board addressed by nobody. Whether an unauthenticated read is answered is a profile
     # field, and asking it needs a second address rather than a flag — the token is applied by the
     # seam and not by its caller.
-    discovered = profile.discovered(board, Board(settings.url, ""), rules)
+    held.must_hold(rules.requires)
+    discovered = profile.discovered(board, Board(held.url, ""), rules)
 
-    recorder = Recorder(state, settings.run_id, Redactor.for_declared_secrets(environ))
     now = dt.datetime.now(dt.timezone.utc)
-    window = Window.opened(
-        recorder.run_dir,
-        lasting=boot.lasting(rules.closes_at, rules.window_seconds, settings.run_seconds, now),
-        now=now,
-    )
+    try:
+        recorder = Recorder(run_state, held.run_id, Redactor.for_declared_secrets(environ))
+        window = Window.opened(
+            recorder.run_dir,
+            lasting=boot.lasting(rules.closes_at, rules.window_seconds, held.run_seconds, now),
+            now=now,
+        )
+    except (OSError, ValueError) as unusable:
+        # The mount is the one thing outside the image a Run depends on, and Colima mounts `$HOME`
+        # and nothing else — a `-v` from outside it hands the container an empty directory in
+        # silence. A window already there that cannot be read is refused for the same reason it is
+        # never replaced: writing a fresh one over it is the silent extension the stamp prevents.
+        raise Refusal(f"{boot.MARK} {run_state} is not usable as this Run's state — {unusable}") from None
     dials = Dials()
     recorder.run_open(
         board_profile={
             **discovered.recorded(),
             "run": {
-                **settings.recorded(),
+                **held.recorded(),
                 "restarted": window.restarted,
                 "opened_at": window.opened_at.isoformat(),
                 "ends_at": window.ends_at.isoformat(),
@@ -128,7 +139,7 @@ def _run(environ: Mapping[str, str], *, state: Path, boards: Path) -> Ending:
         ),
         instances=instances,
         steps=steps,
-        chain=settings.chain,
+        chain=held.chain,
         invocation=Invocation(reasoning_effort=dials.reasoning_effort, web_search=rules.web_search),
     )
     _on_signal(run)

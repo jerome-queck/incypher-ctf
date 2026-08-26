@@ -201,7 +201,7 @@ clear_env() {
   printf '  %s✓ removed%s %s from %s\n' "$GREEN" "$RESET" "$1" "$ENV_FILE"
 }
 
-TOTAL_STAGES=6
+TOTAL_STAGES=7
 
 banner "Point the Solver at a CTF board"
 
@@ -253,6 +253,18 @@ write_env CTFD_API_TOKEN "$CTFD_API_TOKEN"
 pause
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
+stage "Name this Run"
+say "The Solver refuses to mint this for itself, and a restart is the reason: the Run's"
+say "absolute deadline is stamped under /state/runs/<RUN_ID>, and it is consulted only"
+say "when there is no window there already. A fresh id on every boot would hand a"
+say "restarted Solver a fresh window, silently, with nobody there to see it."
+note "One path component. Reuse it to rejoin a Run; change it to start a new one."
+ask RUN_ID "A name for this Run (e.g. brunner-practice-1):"
+[ -n "$RUN_ID" ] || warn "no name entered — the Solver will refuse to start without one"
+write_env RUN_ID "$RUN_ID"
+pause
+
+# ── 6 ─────────────────────────────────────────────────────────────────────
 stage "How the Solver pays for inference"
 say "Practice runs go on the subscription: no per-token cost, but a quota that hard-stops"
 say "until it resets. Competition day goes on a metered key: it costs money and never"
@@ -286,7 +298,7 @@ else
 fi
 pause
 
-# ── 6 ─────────────────────────────────────────────────────────────────────
+# ── 7 ─────────────────────────────────────────────────────────────────────
 stage "Prove it works"
 say "Two checks, both against the live board."
 say ""

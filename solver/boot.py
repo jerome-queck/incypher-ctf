@@ -16,7 +16,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,13 +30,14 @@ MARK = "[boot]"
 # this module opened is a credential this module could log.
 AUTH = "auth.json"
 
-# The chain, in ADR-0010's order — subscription first, metered last — as two directories rather than
-# two keys. The CLI authenticates by file, so a rung *is* a `CODEX_HOME` that has been logged in;
-# a metered rung that nobody logged in simply is not in the chain, which is what makes
-# "the metered credential lives only in the scored Board's overlay" enforceable by absence.
+# The chain, in ADR-0010's order — subscription first, metered last — as directories rather than
+# keys, because the CLI authenticates by file (ADR-0011): a rung *is* a `CODEX_HOME` that has been
+# logged in. The metered one is named by a **variable** and the subscription by a constant, and that
+# asymmetry is the control: `CODEX_HOME_METERED` belongs in the scored Board's overlay beside the
+# metered API keys, so a practice Run pointed at another Board cannot reach for metered billing at
+# all — no flag to set and no mode to remember (ADR-0010, `docs/credentials.md`).
 SUBSCRIPTION = "codex-subscription"
 METERED = "codex-metered"
-METERED_HOME = Path("/state/codex-metered")
 
 # ADR-0014 gives a Run one brain and switches on exhaustion alone, so this is one value for every
 # rung rather than one per rung. `gpt-5-codex` is rejected on the subscription we hold, which is
@@ -49,6 +50,7 @@ DEFAULT_MODEL = "gpt-5"
 RUN_ID = "RUN_ID"
 RUN_SECONDS = "RUN_SECONDS"
 CODEX_MODEL = "CODEX_MODEL"
+CODEX_HOME_METERED = "CODEX_HOME_METERED"
 CTFD_URL = "CTFD_URL"
 CTFD_API_TOKEN = "CTFD_API_TOKEN"
 
@@ -78,8 +80,13 @@ class Refusal(Exception):
 
 
 @dataclass(frozen=True)
-class Settings:
+class Setup:
     """What one Run was pointed at, read once from the environment and never re-read.
+
+    Named for what it is: **setup** is the repository's word for preparing a Run, and preparing one
+    is explicitly not Intervention however manual it is (`CONTEXT.md`, *Intervention*). Not
+    *settings* — that word is reserved away from the Board profile, and half the fields here are the
+    Board's.
 
     Carries no credential value except the Board token, which is the one secret this process itself
     spends — the inference credentials are directories on disk, and the rest are names whose
@@ -99,6 +106,21 @@ class Settings:
     # and one that could not have is the same record only if the holding is written down.
     holdings: dict[str, str]
 
+    def must_hold(self, needed: Sequence[str]) -> None:
+        """Refuse where this Board's rules name a credential this environment does not hold.
+
+        Which credentials a Run needs is not the same question on every Board — the team key gates
+        IN-CYPHER's raw-TCP Challenges and Brunner has never heard of it — so *what* is required is a
+        Board profile value and *whether we hold it* is this. Without the pairing, a Run on the Board
+        that needs one starts anyway and discovers it three hours in, with nobody there.
+        """
+        short = sorted(name for name in needed if self.holdings.get(name, ABSENT) != SET)
+        if short:
+            raise Refusal(
+                f"{MARK} this Board's rules require {', '.join(short)}, and this environment does not "
+                f"hold {'them' if len(short) > 1 else 'it'}"
+            )
+
     def recorded(self) -> dict[str, object]:
         return {
             "run_id": self.run_id,
@@ -109,11 +131,13 @@ class Settings:
         }
 
 
-def settings(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None) -> Settings:
+def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None) -> Setup:
     """Read the environment once, and refuse the Run rather than start it short a credential.
 
-    `homes` is the chain's directories, injected so a test can stand one somewhere real; in the
-    container they are the two constants above and nobody passes anything.
+    The order of the refusals below is the design: everything the environment alone decides is read
+    out first, so the refusal a human meets is one they can fix from the file already in front of
+    them, and only then is the disk looked at. `homes` is the chain's directories, injected so a
+    test can stand one somewhere real; in the container `_homes` builds them and nobody passes any.
     """
     holdings = holdings_of(environ)
     if empties := sorted(name for name, held in holdings.items() if held == EMPTY):
@@ -124,20 +148,18 @@ def settings(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = N
         )
     if missing := [name for name in REQUIRED if not environ.get(name, "").strip()]:
         raise Refusal(
-            f"{MARK} {', '.join(missing)} {'are' if len(missing) > 1 else 'is'} not set, and a Run "
-            f"cannot be pointed at a Board without it"
+            f"{MARK} unset: {', '.join(missing)}. A Run cannot be pointed at a Board without both a "
+            f"URL and a token, and an unauthenticated read would be a Run that cannot submit"
         )
-    chain = _chain(
-        environ.get(CODEX_MODEL, "").strip() or DEFAULT_MODEL,
-        homes or {SUBSCRIPTION: CODEX_HOME, METERED: METERED_HOME},
-    )
-    return Settings(
+    run_id, run_seconds = _run_id(environ), _run_seconds(environ)
+    chain = _chain(environ.get(CODEX_MODEL, "").strip() or DEFAULT_MODEL, homes or _homes(environ))
+    return Setup(
         url=environ[CTFD_URL].strip().rstrip("/"),
         token=environ[CTFD_API_TOKEN].strip(),
-        run_id=_run_id(environ),
+        run_id=run_id,
         model=chain[0].model,
         chain=chain,
-        run_seconds=_run_seconds(environ),
+        run_seconds=run_seconds,
         holdings=holdings,
     )
 
@@ -195,6 +217,18 @@ def _run_seconds(environ: Mapping[str, str]) -> float | None:
     return seconds
 
 
+def _homes(environ: Mapping[str, str]) -> dict[str, Path]:
+    """The chain's directories, in ADR-0010's order and holding only the rungs this Run is offered.
+
+    The metered rung is here only where the environment named one, which is what makes *absence is
+    the control* a mechanism rather than a habit.
+    """
+    homes = {SUBSCRIPTION: CODEX_HOME}
+    if metered := environ.get(CODEX_HOME_METERED, "").strip():
+        homes[METERED] = Path(metered)
+    return homes
+
+
 def _chain(model: str, homes: Mapping[str, Path]) -> tuple[Credential, ...]:
     """The credential chain, in ADR-0010's order, holding only the rungs that are logged in.
 
@@ -209,7 +243,7 @@ def _chain(model: str, homes: Mapping[str, Path]) -> tuple[Credential, ...]:
     if not rungs:
         listed = ", ".join(str(home / AUTH) for home in homes.values())
         raise Refusal(
-            f"{MARK} no inference credential is logged in — none of {listed} exists. Run "
+            f"{MARK} no inference credential is logged in: nothing at {listed}. Run "
             f"`codex login --device-auth` inside the container before the Run starts (ADR-0011)"
         )
     return rungs
@@ -218,21 +252,22 @@ def _chain(model: str, homes: Mapping[str, Path]) -> tuple[Credential, ...]:
 def lasting(closes_at: dt.datetime | None, window_seconds: float, run_seconds: float | None, now: dt.datetime) -> float:
     """How long this Run's window is, as the smallest of the three things that bound it.
 
-    The event's own duration is the default; a `closes_at` the Board's rules state is a ceiling the
-    duration cannot cross; and `RUN_SECONDS` may **shorten** it and may never lengthen it, so a
-    practice Run can be half an hour and no environment variable can buy a Run past the event it is
-    playing. A window with nothing left in it is a refusal rather than a Run that opens and
-    immediately runs its own tail.
+    The event's own duration is the default; `RUN_SECONDS` may **shorten** it and may never lengthen
+    it, so a practice Run can be half an hour and no environment variable can buy a Run past the
+    event it is playing; and a close the Board's rules state is a ceiling neither can cross.
+
+    The close is the only one of the three that can have run out already, because it is the only one
+    that is a moment rather than a length — a profile that states no window is refused when it is
+    read, and `RUN_SECONDS` is refused at zero. So it is the only bound this can refuse on, and the
+    sentence names it rather than guessing.
     """
-    bounds = [window_seconds]
-    if closes_at is not None:
-        bounds.append((closes_at - now).total_seconds())
-    if run_seconds is not None:
-        bounds.append(run_seconds)
-    left = min(bounds)
-    if left <= 0:
+    left = window_seconds if run_seconds is None else min(window_seconds, run_seconds)
+    if closes_at is None:
+        return left
+    until_close = (closes_at - now).total_seconds()
+    if until_close <= 0:
         raise Refusal(
-            f"{MARK} the window this Board's rules state closed at {closes_at} and it is now {now} — "
-            f"there is no window left to open"
+            f"{MARK} the close this Board's rules state, {closes_at.isoformat()}, passed at "
+            f"{now.isoformat()} — there is no window left to open"
         )
-    return left
+    return min(left, until_close)

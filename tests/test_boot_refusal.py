@@ -10,7 +10,7 @@ import datetime as dt
 
 import pytest
 from solver import boot
-from solver.boot import ABSENT, EMPTY, SET, Refusal, holdings_of, lasting, settings
+from solver.boot import ABSENT, EMPTY, SET, Refusal, holdings_of, lasting, setup
 from solver.credentials import NOT_SECRETS, SECRETS
 
 BOARD = "https://board.example"
@@ -33,7 +33,7 @@ def env(**overrides):
 
 
 def test_the_environment_is_read_once_and_yields_everything_a_run_is_pointed_at(homes):
-    read = settings(env(), homes=homes)
+    read = setup(env(), homes=homes)
 
     assert read.url == BOARD
     assert read.token == "token"
@@ -44,7 +44,7 @@ def test_the_environment_is_read_once_and_yields_everything_a_run_is_pointed_at(
 @pytest.mark.parametrize("name", ["CTFD_URL", "CTFD_API_TOKEN"])
 def test_a_missing_credential_refuses_the_run_rather_than_beginning_the_loop(name, homes):
     with pytest.raises(Refusal, match=name):
-        settings(env(**{name: ""}), homes=homes)
+        setup(env(**{name: ""}), homes=homes)
 
 
 @pytest.mark.parametrize("name", ["TEAM_KEY", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])
@@ -54,16 +54,46 @@ def test_an_empty_value_is_not_an_unset_one(name, homes):
     through to a 401 an hour in — and `docker run --env-file` exports it, so the file still looks
     right. None of these three is required, which is the point: absent is fine and empty is not."""
     with pytest.raises(Refusal, match="empty value"):
-        settings(env(**{name: ""}), homes=homes)
+        setup(env(**{name: ""}), homes=homes)
 
 
 def test_absence_is_the_control_and_costs_nothing(homes):
     """The metered credential lives only in the scored Board's overlay, so a practice Run does not
     hold it at all — and structurally cannot spend money. Its absence must therefore be ordinary."""
-    read = settings(env(), homes=homes)
+    read = setup(env(), homes=homes)
 
     assert read.holdings["OPENAI_API_KEY"] == ABSENT
     assert read.holdings["CTFD_API_TOKEN"] == SET
+
+
+def test_a_metered_rung_nobody_named_is_no_rung_at_all(tmp_path):
+    """*Absence is the control*, as a mechanism rather than a habit. The metered `CODEX_HOME` is
+    named by a variable that belongs in the scored Board's overlay, so a practice Run pointed at
+    another Board cannot reach for metered billing however the disk is arranged — the login can be
+    sitting right there and it is still not in the chain."""
+    subscription, metered = tmp_path / "codex", tmp_path / "metered"
+    for home in (subscription, metered):
+        home.mkdir()
+        (home / boot.AUTH).write_text("{}")
+
+    unnamed = setup(env(), homes={boot.SUBSCRIPTION: subscription})
+    named = setup(env(CODEX_HOME_METERED=str(metered)), homes={boot.SUBSCRIPTION: subscription, boot.METERED: metered})
+
+    assert [rung.slot for rung in unnamed.chain] == [boot.SUBSCRIPTION]
+    assert [rung.slot for rung in named.chain] == [boot.SUBSCRIPTION, boot.METERED]
+
+
+def test_a_credential_this_boards_rules_require_and_we_do_not_hold_refuses(homes):
+    """Which credentials a Run needs is not the same question on every Board: the team key gates
+    IN-CYPHER's raw-TCP Challenges and Brunner has never heard of it. Without the pairing, a Run on
+    the Board that needs one starts anyway and finds out three hours in."""
+    read = setup(env(), homes=homes)
+
+    read.must_hold(())
+    with pytest.raises(Refusal, match="TEAM_KEY"):
+        read.must_hold(("TEAM_KEY",))
+
+    setup(env(TEAM_KEY="held"), homes=homes).must_hold(("TEAM_KEY",))
 
 
 def test_the_boot_check_reads_the_same_declared_set_the_redactor_reads():
@@ -87,7 +117,7 @@ def test_a_run_id_is_never_minted_here(homes):
     with nobody there to see it. It comes from something that survives a boot or the Run does not
     start."""
     with pytest.raises(Refusal, match="RUN_ID"):
-        settings(env(RUN_ID=""), homes=homes)
+        setup(env(RUN_ID=""), homes=homes)
 
 
 @pytest.mark.parametrize("run_id", ["../elsewhere", "runs/one", "a\\b"])
@@ -95,14 +125,14 @@ def test_a_run_id_that_is_not_one_path_component_is_refused(run_id, homes):
     """It becomes a directory under `/state/runs`, and `..` would put a Run's window somewhere no
     restart would look for it — which is the same silent extension by another route."""
     with pytest.raises(Refusal, match="one path component"):
-        settings(env(RUN_ID=run_id), homes=homes)
+        setup(env(RUN_ID=run_id), homes=homes)
 
 
 def test_a_chain_with_no_rung_logged_in_refuses(tmp_path):
     """ADR-0011 puts the `codex login` minutes before the Run with a human present. Forgetting it is
     a Run that spends its whole window discovering it has no brain, so it is loud here instead."""
     with pytest.raises(Refusal, match="no inference credential"):
-        settings(env(), homes={boot.SUBSCRIPTION: tmp_path / "nothing"})
+        setup(env(), homes={boot.SUBSCRIPTION: tmp_path / "nothing"})
 
 
 def test_the_chain_is_subscription_first_and_metered_last(homes):
@@ -110,7 +140,7 @@ def test_the_chain_is_subscription_first_and_metered_last(homes):
     reach for it is Intervention, which is the penalised act."""
     (homes[boot.METERED] / boot.AUTH).write_text("{}")
 
-    read = settings(env(), homes=homes)
+    read = setup(env(), homes=homes)
 
     assert [rung.slot for rung in read.chain] == [boot.SUBSCRIPTION, boot.METERED]
 
@@ -120,7 +150,7 @@ def test_one_brain_per_run(homes):
     model a subscription serves is account state, so it is config rather than a constant."""
     (homes[boot.METERED] / boot.AUTH).write_text("{}")
 
-    read = settings(env(CODEX_MODEL="gpt-5-mini"), homes=homes)
+    read = setup(env(CODEX_MODEL="gpt-5-mini"), homes=homes)
 
     assert {rung.model for rung in read.chain} == {"gpt-5-mini"}
 
@@ -138,17 +168,19 @@ def test_the_close_a_boards_rules_state_is_a_ceiling_the_duration_cannot_cross()
     assert lasting(closes, 5.5 * 3600, None, NOON) == 2 * 3600
 
 
-def test_a_window_with_nothing_left_in_it_refuses():
+def test_a_window_with_nothing_left_in_it_refuses_and_names_the_bound_that_bit():
     """Opening one would be a Run that immediately runs its own tail and exits, which reads in the
-    record as a Run that had nothing to do rather than as one that was started too late."""
-    with pytest.raises(Refusal, match="no window left"):
+    record as a Run that had nothing to do rather than as one that was started too late. Which of
+    the three bounds closed it is the whole value of the sentence — a refusal that always blamed the
+    same one would send a human to look at the wrong file."""
+    with pytest.raises(Refusal, match="the close this Board's rules state"):
         lasting(NOON - dt.timedelta(minutes=1), 5.5 * 3600, None, NOON)
 
 
-def test_settings_never_carry_a_credential_value_into_the_record(homes):
+def test_the_setup_never_carries_a_credential_value_into_the_record(homes):
     """`recorded()` is written at run-open, so it says what is *held* and never what is held. A
     record that leaked the key it was proving we had would be the worst possible trade."""
-    recorded = settings(env(TEAM_KEY="never-print-me"), homes=homes).recorded()
+    recorded = setup(env(TEAM_KEY="never-print-me"), homes=homes).recorded()
 
     assert "never-print-me" not in repr(recorded)
     assert recorded["credentials_held"]["TEAM_KEY"] == SET

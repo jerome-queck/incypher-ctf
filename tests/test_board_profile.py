@@ -12,7 +12,7 @@ import pytest
 from solver import profile
 from solver.board import Board
 from solver.boot import Refusal
-from solver.profile import ABSENT, PRESENT, UNREADABLE, Rules, discovered, rules_for
+from solver.profile import ABSENT, INSTALLED, UNREADABLE, Rules, discovered, rules_for, tracked
 
 BOARD = "https://board.example"
 TRACKED = "docs/competitions"
@@ -94,7 +94,7 @@ def instanced(**overrides):
 def test_every_tracked_profile_in_the_repository_reads():
     """The files are baked into the image, so one that does not read is a container that refuses to
     start with a human already gone home."""
-    events = {rules.event for rules in profile._tracked(TRACKED)}
+    events = {rules.event for rules in tracked(TRACKED)}
 
     assert {"brunnerctf-2026-global", "incypher-2026-hackathon"} <= events
 
@@ -128,6 +128,46 @@ def test_web_search_is_a_profile_value_defaulting_on():
     assert Rules(event="e", url="u", flag_wrapper="f", window_seconds=1).web_search is True
 
 
+def test_the_board_that_needs_a_team_key_says_so_and_the_one_that_does_not_says_nothing():
+    """The tracked profile is where *which* credentials a Board demands lives, because it is a rules
+    fact with nothing behind it in the API — IN-CYPHER's team key gates its raw-TCP Challenges, and
+    Brunner has never heard of the word."""
+    assert rules_for("https://hackathon.in-cypher.com", TRACKED).requires == ("TEAM_KEY",)
+    assert rules_for("https://global.brunnerctf.dk", TRACKED).requires == ()
+
+
+def test_a_required_credential_nothing_declares_is_refused(tmp_path):
+    """The boot check reads its holdings from the declared set, so a profile asking for a variable
+    nobody declared is asking for something absent by construction."""
+    (tmp_path / "x.board.json").write_text(
+        json.dumps(
+            {
+                "event": "x",
+                "url": BOARD,
+                "flag_wrapper": "f",
+                "window_seconds": 1,
+                "prohibitions": [],
+                "requires": ["SOME_KEY_NOBODY_DECLARED"],
+            }
+        )
+    )
+
+    with pytest.raises(Refusal, match="does not declare"):
+        rules_for(BOARD, tmp_path)
+
+
+def test_a_board_that_does_not_answer_at_boot_refuses_rather_than_raising_at_nobody(monkeypatch):
+    """At boot there is a human present and a sentence is worth more to them than a stack. Mid-Run
+    the same fault is Intake's and is answered the opposite way, because by then there is a snapshot
+    worth keeping and nobody to read a sentence."""
+
+    def unplugged(_request):
+        raise OSError("Name or service not known")
+
+    with pytest.raises(Refusal, match="could not be read at boot"):
+        discovered(Board(BOARD, "token", unplugged), Board(BOARD, "", unplugged), RULES)
+
+
 def test_a_mistyped_key_is_refused_rather_than_silently_defaulted(tmp_path):
     """The dangerous reading is the permissive one: `prohibition` for `prohibitions` leaves a
     Board's rules out of every Attempt prompt while the file still looks right, and on Brunner one
@@ -146,6 +186,17 @@ def test_a_mistyped_key_is_refused_rather_than_silently_defaulted(tmp_path):
     )
 
     with pytest.raises(Refusal, match="prohibition"):
+        rules_for(BOARD, tmp_path)
+
+
+def test_a_window_that_buys_no_attempt_is_refused_where_it_is_read(tmp_path):
+    """So the close a Board's rules state is the one bound that can ever have run out, and the
+    refusal at boot can name it rather than guessing between three."""
+    (tmp_path / "x.board.json").write_text(
+        json.dumps({"event": "x", "url": BOARD, "flag_wrapper": "f", "window_seconds": 0, "prohibitions": []})
+    )
+
+    with pytest.raises(Refusal, match="buys no Attempt"):
         rules_for(BOARD, tmp_path)
 
 
@@ -236,7 +287,7 @@ def test_deploying_what_we_could_not_sweep_refuses_the_run():
 def test_a_readable_ledger_beside_instanced_challenges_is_the_path_being_open():
     found = discovered(*Wire(listed=[instanced()]).boards(), RULES)
 
-    assert found.chall_manager == PRESENT
+    assert found.chall_manager == INSTALLED
     assert found.instanced_challenges == 1
     assert found.instances_reachable is True
 
@@ -285,7 +336,7 @@ def test_the_whole_profile_as_discovered_is_writable_at_run_open():
     Board wrongly*, and those want completely different fixes (ADR-0008)."""
     recorded = discovered(*Wire(listed=[instanced()]).boards(), RULES).recorded()
 
-    assert json.loads(json.dumps(recorded))["chall_manager"] == PRESENT
+    assert json.loads(json.dumps(recorded))["chall_manager"] == INSTALLED
     assert set(recorded) >= {
         "event",
         "url",

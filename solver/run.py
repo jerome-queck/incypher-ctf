@@ -1,4 +1,4 @@
-"""The Run itself — the loop between boot and the tail, and the four jobs the tail does.
+"""One unattended outing at one Board — every Attempt it takes, and the tail it ends on.
 
 Two rules shape everything here and both are `CONTEXT.md`'s (*Run*). **A Run ends when the window
 closes or when it crashes, never because the Board looks finished** — Challenges drop mid-event, so
@@ -38,7 +38,7 @@ from solver.profile import Profile
 from solver.prompt import APPROACH
 from solver.record import CUT_BUDGET, FLAG, Recorder
 from solver.schedule import Ended, Pick, Scheduler
-from solver.stall import Breaker, Deadline, Thresholds, Watch
+from solver.stall import Breaker, Deadline, Watch
 
 MARK = "[run]"
 
@@ -60,6 +60,11 @@ TAIL = "run-tail"
 # How long the loop waits when Order has nothing eligible **right now**. Short, because what is
 # being waited for is the next Intake and a Challenge released at 13:00 is worth noticing; cheap,
 # because `Intake.due` is a memory read and `sync` holds its own clock.
+#
+# Not a `schedule.Dials` value, though every other uncalibrated v1 number is one: `Dials` is what
+# the *scheduler* turns, and a replayed Run re-ranks a stored stream at other weights. This turns
+# nothing that is ranked — it is how often a loop with nothing to do asks again, bounded by
+# `Intake.cycle_seconds` above it and by `out_of_time()` below.
 IDLE_SECONDS = 15.0
 
 
@@ -114,13 +119,18 @@ class Ending:
     attempts: int = 0
     flags: tuple[str, ...] = ()
     left_held: tuple[str, ...] = ()
+    # Why the leak sweep could not run, where it could not. Its own field rather than an empty
+    # `left_held`, because a sweep that never reached the Board and one that found nothing held are
+    # otherwise byte-identical — and the second is a clean Run while the first is capacity nobody
+    # can account for.
+    unswept: str = ""
     # The sentence behind a crash. Empty on every other ending, because a Run that ended on its
     # clock has nothing to explain.
     detail: str = ""
 
     @property
     def clean(self) -> bool:
-        return self.cause != CRASHED and not self.left_held
+        return self.cause != CRASHED and not self.left_held and not self.unswept
 
 
 @dataclass
@@ -165,9 +175,6 @@ class Run:
         steps: Steps,
         chain: tuple[Credential, ...],
         invocation: Invocation = Invocation(),
-        thresholds: Thresholds = Thresholds(),
-        recon_limits: recon.Limits = recon.Limits(),
-        breaker: Breaker | None = None,
         workdirs: Path = WORKDIRS,
         launch: codex.Launch | None = None,
         idle_seconds: float = IDLE_SECONDS,
@@ -183,9 +190,7 @@ class Run:
         self._steps = steps
         self._chain = chain
         self._invocation = invocation
-        self._thresholds = thresholds
-        self._recon_limits = recon_limits
-        self._breaker = breaker or Breaker()
+        self._breaker = Breaker()
         self._workdirs = Path(workdirs)
         self._launch = launch
         self._idle_seconds = idle_seconds
@@ -273,6 +278,10 @@ class Run:
             artefacts=artefacts,
         )
         self._steps.restart()
+        # Before the open, and it has to be: `attempt_open` records the Instance this Attempt was
+        # given, and there is no Instance to record until the deploy has answered. So the deploy is
+        # Step 1 of an Attempt whose `attempt-open` line comes after it — that line describes the
+        # Attempt rather than starting it, and a reader of the stream reconciles on `attempt_id`.
         self._deploy(held)
         self._recorder.attempt_open(
             attempt_id=held.attempt_id,
@@ -288,10 +297,17 @@ class Run:
             order_ranks=pick.order_ranks,
             exploring=pick.exploring,
         )
-        held.recon_block = self._recon(held, challenge)
         self._in_flight = held.deadline
-        while not self._turn(held, challenge):
-            self._renew(held)
+        try:
+            held.recon_block = self._recon(held, challenge)
+            while not self._turn(held, challenge):
+                self._renew(held)
+        except Exception as broken:
+            # The Attempt is closed whatever happened to it. A stream holding an `attempt-open` with
+            # no terminator is a Run the eval cannot read at all, and #16's schema is meant stable
+            # from v1 — so the crash is recorded here, on the Attempt, and again at Run close.
+            held.cause = CRASHED
+            self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
         self._in_flight = None
         self._attempts += 1
         self._recorder.attempt_close(
@@ -312,8 +328,13 @@ class Run:
         trajectory and a turn that re-orients itself is not the same trajectory, while the workdir
         and the five carried things are the Challenge's and outlive both.
         """
-        watch = Watch(deadline=held.deadline, thresholds=self._thresholds, steps=self._steps.spent)
+        watch = Watch(deadline=held.deadline, steps=self._steps.spent)
         said: list[str] = []
+        # What the *model* observed, counted apart from `watch.steps`. The Watch is seeded with the
+        # Attempt's Steps so far because recon **is** the opening of an Attempt and its probes are
+        # its first Steps — which means `watch.steps` is never zero, and the circuit breaker's whole
+        # question is *did this spend no Steps at all*. Recon answers that question for the recon.
+        observed = 0
         text = prompt.compose(
             challenge=challenge,
             rules=self.profile.rules,
@@ -337,6 +358,7 @@ class Run:
         ):
             self._steps.reached(taken.step_index)
             if taken.kind == COMMAND:
+                observed += 1
                 watch.observed(taken.command, exit_code=taken.exit_code, digest=taken.digest)
             elif taken.kind == CLAIM:
                 said.append(taken.shown)
@@ -348,8 +370,13 @@ class Run:
                 held.deadline.shorten(self._now())
         held.turns += 1
         held.checkpoints += len(watch.checkpoints)
-        held.approach = label(_approach(said)) if _approach(said) else held.approach
-        cause = watch.cause(self._now()) or self._breaker.closed(str(challenge.challenge_id), steps=watch.steps)
+        held.approach = label(named) if (named := _approach(said)) else held.approach
+        # The breaker is told about every turn, not only the ones no counter ended — a turn that
+        # spent the whole budget and observed nothing is the dead-adapter shape it exists for. Its
+        # verdict wins over a Cut, because a Cut would say the Challenge stopped this Attempt and a
+        # Solver broken at its own end is not something the Challenge did.
+        broken = self._breaker.closed(str(challenge.challenge_id), steps=observed)
+        cause = broken or watch.cause(self._now())
         if self._submit(held, challenge, said).solved:
             cause = FLAG
         held.boundary.closed(watch, approach=held.approach, cause=cause or STOPPED)
@@ -429,7 +456,6 @@ class Run:
             flag_pattern=self.profile.rules.flag_wrapper,
             recorder=self._recorder,
             attempt_id=held.attempt_id,
-            limits=self._recon_limits,
             first_step=self._steps.next_index(),
         )
         self._steps.reached(self._steps.spent + len(found.probes))
@@ -476,22 +502,27 @@ class Run:
         took to crash."""
         return max(0.0, (self._now() - held.began).total_seconds())
 
-    def _sweep(self, *, attempt_id: str, keeping: str | None) -> tuple[str, ...]:
-        """The leak sweep, at every Attempt boundary and again at Run close.
+    def _sweep(self, *, attempt_id: str, keeping: str | None) -> tuple[tuple[str, ...], str]:
+        """The leak sweep, at every Attempt boundary and again at Run close — and why it could not
+        run, where it could not.
 
         Asked of the Board rather than of a private copy, because a private copy goes stale in
         exactly the situation it would exist for. Skipped entirely where the Board runs no
         chall-manager: the ledger is a plugin page, and asking a Board without one is a fault rather
-        than an empty answer.
+        than an empty answer — that skip is the one case that is genuinely nothing to report.
+
+        A sweep that could not reach the Board answers with the fault rather than with an empty
+        hand. Swallowing it would make a Run that never looked indistinguishable from one that
+        looked and found nothing, and only one of those is clean.
         """
         if not self.profile.instances_reachable:
-            return ()
+            return (), ""
         known = {one.name: one.challenge_id for one in self._intake.snapshot.challenges}
         try:
             swept = self._instances.sweep(attempt_id=attempt_id, keeping=keeping, known=known)
-        except (BoardFailure, OSError):
-            return ()
-        return swept.still_held + swept.unresolved
+        except (BoardFailure, OSError) as unreadable:
+            return (), f"the Instance ledger could not be read, so nothing was reclaimed — {unreadable}"
+        return swept.still_held + swept.unresolved, ""
 
     def _solves_now(self, challenge: Sighting) -> int:
         current = next(
@@ -510,7 +541,7 @@ class Run:
         """
         self._steps.restart()
         self._last_call()
-        left_held = self._reclaim()
+        left_held, unswept = self._reclaim()
         cause = self._stopping or WINDOW_CLOSED
         self._recorder.run_close(cause=f"{cause} — {self._crashed}" if self._crashed else cause)
         return Ending(
@@ -518,6 +549,7 @@ class Run:
             attempts=self._attempts,
             flags=tuple(self._won),
             left_held=left_held,
+            unswept=unswept,
             detail=self._crashed,
         )
 
@@ -538,7 +570,7 @@ class Run:
                 self._won.append(outcome.flag)
         self._pending.clear()
 
-    def _reclaim(self) -> tuple[str, ...]:
+    def _reclaim(self) -> tuple[tuple[str, ...], str]:
         """Destroy every Instance, and answer with whatever the Board would not let go of.
 
         Reported rather than swallowed: a terminate the plugin refused and a ledger row nothing on

@@ -26,6 +26,7 @@ from typing import Any
 from solver.board import INSTANCE_LEDGER, Board, BoardFailure, Mana
 from solver.boot import MARK as BOOT
 from solver.boot import Refusal
+from solver.credentials import NOT_SECRETS, SECRETS
 from solver.instance import INSTANCED_TYPE
 from solver.intake import SETTLED_MANA
 
@@ -44,10 +45,11 @@ CTFD_DEFAULT_INCORRECT_PER_MIN = 10
 STATED = "stated"
 ASSUMED = "assumed"
 
-# What the plugin's own ledger answered, as a name. Present is a ledger we can read and therefore a
-# leak sweep that works; absent is a Board without the plugin, which is not a fault; and unreadable
-# is the third state ADR-0008 requires be told apart from the second.
-PRESENT = "present"
+# Whether `ctfd-chall-manager` is installed, in ADR-0008's own three words. Installed is a ledger we
+# can read and therefore a leak sweep that works; absent is a Board without the plugin, which is no
+# kind of fault; and unreadable is the third state — *"discovery has to distinguish absent from
+# failed, and where it cannot, it fails the run rather than guessing"*.
+INSTALLED = "installed"
 ABSENT = "absent"
 UNREADABLE = "unreadable"
 
@@ -55,7 +57,7 @@ UNREADABLE = "unreadable"
 # reader is a mistyped key silently taking its default — which is a prohibition that never reached a
 # prompt, on a Board whose rules make one of them an immediate ban.
 REQUIRED_KEYS = frozenset({"event", "url", "flag_wrapper", "window_seconds", "prohibitions"})
-OPTIONAL_KEYS = frozenset({"closes_at", "web_search"})
+OPTIONAL_KEYS = frozenset({"closes_at", "web_search", "requires"})
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,10 @@ class Rules:
     window_seconds: float
     prohibitions: tuple[str, ...] = ()
     closes_at: dt.datetime | None = None
+    # Declared names this Board's Run cannot start without. The team key gates IN-CYPHER's raw-TCP
+    # Challenges and Brunner has never heard of it, so *which* credentials a Run needs is a fact
+    # about the Board and belongs here rather than in one list the boot check hardcodes.
+    requires: tuple[str, ...] = ()
     # ADR-0014 makes web search a profile value, default on: every advantage counts on a 5.5-hour
     # clock, and a Challenge shipping an image or an audio clip is often solvable only by looking
     # something up. A Board whose rules withdraw it sets this false, and `check-rules-drift.sh` is
@@ -108,7 +114,7 @@ class Profile:
     def instances_reachable(self) -> bool:
         """Whether a leak sweep can run at all. `Board.instances_held` raises on a Board with no
         plugin, and the Run's tail must not die reclaiming Instances that could never exist."""
-        return self.chall_manager == PRESENT
+        return self.chall_manager == INSTALLED
 
     def recorded(self) -> dict[str, Any]:
         return {
@@ -131,6 +137,15 @@ class Profile:
         }
 
 
+def tracked(directory: Path = BOARDS) -> list[Rules]:
+    """Every event's tracked profile in one directory, read.
+
+    Public because *which Boards did this image ship rules for* is a question with two askers that
+    are not this module: the pre-flight check inside the built image, and `rules_for` below.
+    """
+    return [_read(path) for path in sorted(Path(directory).glob(f"*{SUFFIX}"))]
+
+
 def rules_for(url: str, directory: Path = BOARDS) -> Rules:
     """The tracked profile for the Board `CTFD_URL` points at, and a refusal where there is not one.
 
@@ -140,9 +155,10 @@ def rules_for(url: str, directory: Path = BOARDS) -> Rules:
     board under a profile that says AI is fine.
     """
     wanted = url.rstrip("/")
-    found = [rules for rules in _tracked(directory) if rules.url == wanted]
+    known_boards = tracked(directory)
+    found = [rules for rules in known_boards if rules.url == wanted]
     if not found:
-        known = ", ".join(sorted(rules.url for rules in _tracked(directory))) or "nothing"
+        known = ", ".join(sorted(rules.url for rules in known_boards)) or "nothing"
         raise Refusal(
             f"{BOOT} no Board profile in {directory} is for {wanted} — the image knows {known}. A Board "
             f"we have never met needs a `{SUFFIX}` holding its URL and what its rules forbid (ADR-0008)"
@@ -154,6 +170,20 @@ def rules_for(url: str, directory: Path = BOARDS) -> Rules:
 
 def discovered(board: Board, anyone: Board, rules: Rules) -> Profile:
     """Ask the Board everything about itself that it can answer, and refuse where it cannot.
+
+    A Board that does not answer at all refuses the Run like every other missing fact, rather than
+    reaching the entry point as a traceback: at boot there is a human present and a sentence is
+    worth more to them than a stack. Mid-Run the same fault is Intake's and is handled the opposite
+    way, because by then there is a snapshot worth keeping and nobody to read a sentence.
+    """
+    try:
+        return _asked(board, anyone, rules)
+    except (BoardFailure, OSError) as unreachable:
+        raise Refusal(f"{BOOT} the Board could not be read at boot — {unreachable}") from None
+
+
+def _asked(board: Board, anyone: Board, rules: Rules) -> Profile:
+    """The discovery itself.
 
     `anyone` is the same Board addressed with no token: whether an unauthenticated read is answered
     is a profile field, and asking it needs a second address rather than a flag, because the token
@@ -174,13 +204,14 @@ def discovered(board: Board, anyone: Board, rules: Rules) -> Profile:
     listed = board.challenges()
     instanced = sum(1 for one in listed if one.get("type") == INSTANCED_TYPE)
     chall_manager = _ledger(board)
-    if instanced and chall_manager != PRESENT:
+    if instanced and chall_manager != INSTALLED:
         raise Refusal(
             f"{BOOT} {instanced} Challenge(s) are {INSTANCED_TYPE} but the Instance ledger reads "
             f"{chall_manager} — a Run that deploys what it cannot sweep leaks capacity nobody reclaims, "
             f"because chall-manager never evicts (ADR-0007)"
         )
-    limit, source = _submission_limit(board)
+    configs = _configs(board)
+    limit, source = _submission_limit(configs)
     return Profile(
         rules=rules,
         chall_manager=chall_manager,
@@ -189,12 +220,8 @@ def discovered(board: Board, anyone: Board, rules: Rules) -> Profile:
         mana=_mana(board, chall_manager),
         submissions_per_minute=limit,
         submissions_per_minute_source=source,
-        board_window=_board_window(board),
+        board_window={key: configs[key] for key in ("start", "end") if configs.get(key) not in (None, "")},
     )
-
-
-def _tracked(directory: Path) -> list[Rules]:
-    return [_read(path) for path in sorted(Path(directory).glob(f"*{SUFFIX}"))]
 
 
 def _read(path: Path) -> Rules:
@@ -214,6 +241,8 @@ def _read(path: Path) -> Rules:
         raise Refusal(f"{BOOT} {path} states no {', '.join(missing)}")
     if unknown := sorted(set(document) - REQUIRED_KEYS - OPTIONAL_KEYS):
         raise Refusal(f"{BOOT} {path} carries {', '.join(unknown)}, which this profile has no meaning for")
+    if float(document["window_seconds"]) <= 0:
+        raise Refusal(f"{BOOT} {path} states a window of {document['window_seconds']}, which buys no Attempt at all")
     return Rules(
         event=str(document["event"]),
         url=str(document["url"]).rstrip("/"),
@@ -222,7 +251,21 @@ def _read(path: Path) -> Rules:
         prohibitions=tuple(str(one) for one in document["prohibitions"]),
         closes_at=_moment(path, document.get("closes_at")),
         web_search=bool(document.get("web_search", True)),
+        requires=_requires(path, document.get("requires") or ()),
     )
+
+
+def _requires(path: Path, stated: Any) -> tuple[str, ...]:
+    """The credentials this Board demands, each one a name the declared set already knows.
+
+    An undeclared name is refused rather than carried: the boot check reads its holdings from
+    `solver/credentials.py`, so a profile asking for a variable nobody declared would be asking for
+    something that is absent by construction and could never be satisfied.
+    """
+    named = tuple(str(one) for one in stated)
+    if unknown := sorted(set(named) - set(SECRETS) - set(NOT_SECRETS)):
+        raise Refusal(f"{BOOT} {path} requires {', '.join(unknown)}, which `solver/credentials.py` does not declare")
+    return named
 
 
 def _moment(path: Path, stated: Any) -> dt.datetime | None:
@@ -271,7 +314,7 @@ def _ledger(board: Board) -> str:
         board.instances_held()
     except BoardFailure:
         return UNREADABLE
-    return PRESENT
+    return INSTALLED
 
 
 def _mana(board: Board, chall_manager: str) -> Mana | None:
@@ -282,7 +325,7 @@ def _mana(board: Board, chall_manager: str) -> Mana | None:
     *mana switched off*, and a mana-limited Board would then be treated as one with no cap at all
     for the rest of the Run.
     """
-    if chall_manager != PRESENT:
+    if chall_manager != INSTALLED:
         return None
     reading = board.mana()
     if reading.outcome not in SETTLED_MANA:
@@ -303,11 +346,16 @@ def _answers_anyone(anyone: Board) -> bool:
         return False
 
 
-def _submission_limit(board: Board) -> tuple[int, str]:
-    status, raw, _location = board.request("GET", "/api/v1/configs")
-    if status != 200:
-        return CTFD_DEFAULT_INCORRECT_PER_MIN, ASSUMED
-    stated = _configs(raw).get("incorrect_submissions_per_min")
+def _submission_limit(configs: dict[str, Any]) -> tuple[int, str]:
+    """The Board-wide wrong-submissions-per-minute cap, and whether it was read or assumed.
+
+    An admin-only endpoint refusing us is **absent** rather than failed — it is the Board saying we
+    may not read this, and CTFd's own default is the documented answer to that. What would be a
+    fault is the Board not answering at all, and that no longer reaches here: `discovered` turns it
+    into a Refusal. Which of the two happened is on the record either way, because a Run paced at a
+    number nobody stated and one paced at the Board's own are different Runs.
+    """
+    stated = configs.get("incorrect_submissions_per_min")
     if stated in (None, ""):
         return CTFD_DEFAULT_INCORRECT_PER_MIN, ASSUMED
     try:
@@ -316,18 +364,17 @@ def _submission_limit(board: Board) -> tuple[int, str]:
         return CTFD_DEFAULT_INCORRECT_PER_MIN, ASSUMED
 
 
-def _board_window(board: Board) -> dict[str, Any]:
+def _configs(board: Board) -> dict[str, Any]:
+    """`/api/v1/configs` as a mapping, read **once** — the submission limit and the Board's own
+    event window are two fields of one document, and asking twice is two round-trips for one answer.
+
+    Empty where it answered anything else. It is admin-only on every Board we hold a token for, so
+    the empty case is the rule rather than the exception, and a body that does not parse is an
+    unread config rather than a Board fault.
+    """
     status, raw, _location = board.request("GET", "/api/v1/configs")
     if status != 200:
         return {}
-    configs = _configs(raw)
-    return {key: configs.get(key) for key in ("start", "end") if configs.get(key) not in (None, "")}
-
-
-def _configs(raw: bytes) -> dict[str, Any]:
-    """`/api/v1/configs` as a mapping, and an empty one where it answered something else. It is
-    admin-only on every Board we hold a token for, so this path is the exception rather than the
-    rule and a body that does not parse is an unread config rather than a Board fault."""
     try:
         document = json.loads(raw)
     except ValueError:

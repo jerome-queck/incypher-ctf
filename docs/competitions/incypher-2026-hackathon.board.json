@@ -5,6 +5,9 @@
   "window_seconds": 19800,
   "closes_at": "2026-09-22T16:00:00+08:00",
   "web_search": true,
+  "requires": [
+    "TEAM_KEY"
+  ],
   "prohibitions": [
     "Only the systems this Challenge hands you are in scope. Attack, scan and interfere with nothing else — not the platform, not other teams, not shared infrastructure.",
     "No broad automated enumeration against the event's infrastructure. Scanning and fuzzing are pointed at the Challenge you were handed or at nothing at all.",

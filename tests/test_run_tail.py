@@ -34,7 +34,16 @@ UNSTATED_MAX = object()
 class Wire:
     """A CTFd with chall-manager, whose ledger is whatever it currently has deployed."""
 
-    def __init__(self, *, count=2, instanced=True, max_attempts=UNSTATED_MAX, terminates=True, plugin=None):
+    def __init__(
+        self,
+        *,
+        count=2,
+        instanced=True,
+        max_attempts=UNSTATED_MAX,
+        terminates=True,
+        plugin=None,
+        ledger_breaks_after=None,
+    ):
         self.listed = [
             {
                 "id": one,
@@ -50,6 +59,8 @@ class Wire:
         self.max_attempts = max_attempts
         self.terminates = terminates
         self.plugin = instanced if plugin is None else plugin
+        self.ledger_breaks_after = ledger_breaks_after
+        self.ledger_reads = 0
         self.deployed: dict[int, str] = {}
         self.submitted: list[tuple[int, str]] = []
         self.terminated: list[int] = []
@@ -67,6 +78,9 @@ class Wire:
             if not self.plugin:
                 return (404, b'{"success": false}', "")
             if path == "/plugins/ctfd-chall-manager/instances":
+                self.ledger_reads += 1
+                if self.ledger_breaks_after is not None and self.ledger_reads > self.ledger_breaks_after:
+                    return (500, b"", "")
                 return (200, self._ledger(), "")
             if path.endswith("/mana"):
                 return self._answer({"used": len(self.deployed), "total": 8})
@@ -269,3 +283,16 @@ def test_a_crash_mid_run_still_reclaims_what_it_was_holding(tmp_path):
 
     assert ending.cause == "crashed"
     assert wire.deployed == {}
+
+
+def test_a_sweep_that_could_not_reach_the_board_is_never_reported_as_a_clean_run(tmp_path):
+    """The silent-success shape. A sweep that found nothing held and one that never looked are
+    otherwise byte-identical, and only the first of them is a Run that left nothing behind."""
+    clock = Clock()
+    wire = Wire(count=1, ledger_breaks_after=2)
+    run, _recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock)
+
+    ending = run.work()
+
+    assert ending.unswept, "a ledger that could not be read was reported as nothing held"
+    assert not ending.clean

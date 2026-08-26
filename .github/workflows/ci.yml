@@ -160,13 +160,13 @@ jobs:
       - name: every event's Board profile is baked in and reads
         run: |
           docker run --rm -i --entrypoint python3 solver:ci - <<'PY'
-          from solver.profile import BOARDS, _tracked
+          from solver.profile import BOARDS, tracked
 
-          tracked = _tracked(BOARDS)
-          assert tracked, f"no Board profile in {BOARDS} — the .dockerignore allowlist shipped none"
-          for rules in tracked:
+          shipped = tracked(BOARDS)
+          assert shipped, f"no Board profile in {BOARDS} — the .dockerignore allowlist shipped none"
+          for rules in shipped:
               assert rules.url and rules.flag_wrapper and rules.window_seconds > 0, rules
-          print(f"{len(tracked)} profile(s): " + ", ".join(f"{one.event} -> {one.url}" for one in tracked))
+          print(f"{len(shipped)} profile(s): " + ", ".join(f"{one.event} -> {one.url}" for one in shipped))
           PY
 
       # The recon cascade, run in the image it will run in, over an artefact whose name lies. The
