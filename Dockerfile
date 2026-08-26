@@ -73,16 +73,55 @@ RUN apt-get update \
 # network at 14:00, with nobody present when it is not.
 RUN gem install --no-document zsteg
 
+# The vendor's agent itself — the thing `solver/codex.py` spawns. Half of this dependency was
+# already here: `bubblewrap` above is installed *for* `codex`, and the reason is written beside it.
+#
+# **The standalone musl binary, not the npm package.** `npm install -g @openai/codex` would put a
+# Node runtime and its dependency tree in the image in order to launch one statically linked binary
+# that the same release already publishes. Nothing else here wants Node, and a runtime nobody else
+# uses is a runtime nobody notices breaking.
+#
+# **A per-architecture download is a trap, so it is said out loud.** The run-day image is built on
+# the arm64 Mac that runs it and CI proves amd64 (ADR-0008), so a URL naming one of them would build
+# green on the runner and 404 on the machine that competes. `TARGETARCH` is BuildKit's own, set for
+# the platform actually being built, and the `case` is exhaustive rather than defaulted — an
+# architecture nobody mapped fails the build here rather than shipping an image with no agent in it.
+#
+# Pinned to a release **and to its bytes**. A GitHub release asset can be replaced under its own
+# tag, and the window between the gate image and the run-day image is the one nobody is watching —
+# the same argument the base image's digest pin makes at the top of this file.
+ARG CODEX_VERSION=0.147.0
+ARG CODEX_SHA256_ARM64=eb677c80f666b1ab8b4b1d083b66e8d614b1281d960bb6f9fd8ca98f58b38b90
+ARG CODEX_SHA256_AMD64=0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) triple=aarch64-unknown-linux-musl; digest="$CODEX_SHA256_ARM64" ;; \
+      amd64) triple=x86_64-unknown-linux-musl;  digest="$CODEX_SHA256_AMD64" ;; \
+      *) echo "no codex build is mapped for TARGETARCH='$TARGETARCH'" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 5 -o /tmp/codex.tar.gz \
+      "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${triple}.tar.gz"; \
+    printf '%s  %s\n' "$digest" /tmp/codex.tar.gz | sha256sum -c -; \
+    tar -xzf /tmp/codex.tar.gz -C /tmp; \
+    mv "/tmp/codex-${triple}" /usr/local/bin/codex; \
+    chmod 0755 /usr/local/bin/codex; \
+    rm /tmp/codex.tar.gz
+
 # The single writable path (ADR-0008), host-mounted at run time. Deliberately not a `VOLUME`: that
 # hands a container started without `-v` an anonymous volume that dies with it, which is exactly
 # the missing mount we would want to notice.
 RUN mkdir /state
 
-# The five tools #65 names as the recon floor, each **exercised on real input** rather than looked
-# up on `PATH` — `command -v` passes for a binary that cannot run, and `file -b --mime-type` is
-# the exact call ADR-0005's cascade dispatches on. This is the floor and not the whole list: a
-# `binwalk3` or `exiftool` that installs but misbehaves is not caught here, only one that fails to
-# install at all.
+# The five tools #65 names as the recon floor plus the agent that drives them, each **exercised on
+# real input** rather than looked up on `PATH` — `command -v` passes for a binary that cannot run,
+# and `file -b --mime-type` is the exact call ADR-0005's cascade dispatches on. This is the floor
+# and not the whole list: a `binwalk3` or `exiftool` that installs but misbehaves is not caught
+# here, only one that fails to install at all.
+#
+# `codex --version` is asserted to carry the pinned version rather than merely to exit 0, because
+# the two ways this line can be wrong are a binary that does not run and a binary that is not the
+# one we pinned — and the second is invisible without it.
 #
 # It is a cached layer, so it re-runs when the lines above it change rather than on every `docker
 # build` — which is what matters, because what it guards against is a package list that stopped
@@ -95,6 +134,7 @@ RUN set -eu; \
     test "$(od -An -c "$probe" | tr -d ' \n')" = 'flag{probe}'; \
     test "$(python3 -c 'print("flag{probe}")')" = 'flag{probe}'; \
     if timeout 1 sleep 5; then echo 'timeout did not stop a command' >&2; exit 1; fi; \
+    codex --version | grep -qF "$CODEX_VERSION"; \
     rm "$probe"
 
 # Every gate Run is from a built image with **no source mount** (ADR-0008), so this is what a gate
