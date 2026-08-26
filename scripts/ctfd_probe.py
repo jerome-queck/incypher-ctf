@@ -43,7 +43,7 @@ PROBE_ATTEMPT = "ctfd-probe"
 # then provably the same code rather than two things that agree today (ADR-0008).
 sys.path.insert(0, str(REPO_ROOT))
 
-from solver.board import INCORRECT, Board, BoardFailure  # noqa: E402
+from solver.board import CHALLENGES, INCORRECT, Board, BoardFailure  # noqa: E402
 from solver.flag import Flags, Slots  # noqa: E402
 from solver.instance import INSTANCED_TYPE, Instances, Terms  # noqa: E402
 from solver.record import NO_MODEL, Recorder  # noqa: E402
@@ -102,22 +102,6 @@ def refuse_to_blame_the_token(board: Board, status: int) -> None:
         )
 
 
-def collection_endpoints_reach_ctfd(board: Board) -> bool:
-    """Whether a collection endpoint's reply was composed by CTFd, asked with a query it must refuse.
-
-    `field` is validated against an enumeration before any handler runs, so CTFd answers an unknown
-    one with a 400 naming the permitted values. A 200 to it cannot have come from CTFd, and a board
-    that agreeable is one whose empty collections mean nothing at all — the IN-CYPHER practice arena
-    answers every collection endpoint this way while `/api/v1/challenges/8/solves` returns real rows
-    ([ADR-0016](../docs/adr/0016-an-empty-list-is-not-an-empty-board.md)).
-
-    Any refusal counts as CTFd-shaped: the control is here to catch the reply that is too agreeable,
-    not to certify the stack behind a normal one.
-    """
-    status, _body, _reason = board.request("GET", "/api/v1/challenges?field=probe-is-not-a-field&q=a")
-    return status != 200
-
-
 def name_the_cause_of_an_empty_list(board: Board) -> NoReturn:
     """Say which situation emptied the challenge list, because all of them answer the same JSON.
 
@@ -130,7 +114,7 @@ def name_the_cause_of_an_empty_list(board: Board) -> NoReturn:
     """
     # Asked first, because it is prior to every cause below: the clock and the account are facts
     # about a board that answered, and this is the question of whether the board answered at all.
-    if not collection_endpoints_reach_ctfd(board):
+    if not board.collection_endpoints_reach_ctfd():
         raise ProbeFailure(
             "the empty list did not come from CTFd — this board also answers 200 to a query CTFd "
             "rejects with a 400, so its collection endpoints are being composed by something else "
@@ -186,9 +170,9 @@ def check_token_is_recognised(board: Board) -> str:
 
 def check_content_type_discipline(board: Board) -> str:
     """CTFd is widely reported to ignore token auth when Content-Type is absent. Measure it."""
-    with_header, _, _ = board.request("GET", "/api/v1/challenges")
+    with_header, _, _ = board.request("GET", CHALLENGES)
     refuse_to_blame_the_token(board, with_header)
-    without_header, _, location = board.request("GET", "/api/v1/challenges", json_content_type=False)
+    without_header, _, location = board.request("GET", CHALLENGES, json_content_type=False)
     if with_header != 200:
         raise ProbeFailure(f"the correctly-typed request itself failed with {with_header}")
     if without_header == 200:
@@ -204,14 +188,14 @@ def check_content_type_discipline(board: Board) -> str:
 
 
 def check_challenges_enumerate(board: Board) -> tuple[str, list[dict[str, Any]]]:
-    status, _, _ = board.request("GET", "/api/v1/challenges")
+    status, _, _ = board.request("GET", CHALLENGES)
     refuse_to_blame_the_token(board, status)
     if status == 403:
         raise ProbeFailure(
             "403 on enumeration with no scheduled open — check the account is on a team, and that "
             "the token has not been revoked"
         )
-    challenges = board.json("GET", "/api/v1/challenges")
+    challenges = board.json("GET", CHALLENGES)
     if not challenges:
         name_the_cause_of_an_empty_list(board)
     kinds = sorted({challenge.get("type", "?") for challenge in challenges})
@@ -256,7 +240,7 @@ def check_a_planted_flag_is_swept_and_graded(board: Board, challenges: list[dict
     )
     step.end(exit_code=0, output=f"{PROBE_FLAG}\n".encode(), usage=NO_MODEL)
 
-    detail = board.json("GET", f"/api/v1/challenges/{challenge['id']}")
+    detail = board.json("GET", f"{CHALLENGES}/{challenge['id']}")
     flags = Flags(board, recorder, flag_pattern=PROBE_WRAPPER)
     candidates = flags.candidates(attempt_id=PROBE_ATTEMPT)
     if not candidates:
@@ -282,7 +266,7 @@ def check_a_planted_flag_is_swept_and_graded(board: Board, challenges: list[dict
 
 def check_files_download_headlessly(board: Board, challenges: list[dict[str, Any]]) -> str:
     for challenge in challenges:
-        files = board.json("GET", f"/api/v1/challenges/{challenge['id']}").get("files") or []
+        files = board.json("GET", f"{CHALLENGES}/{challenge['id']}").get("files") or []
         if files:
             payload, hops = board.download(files[0])
             if not payload:
@@ -310,7 +294,7 @@ def check_instance_lifecycle(board: Board, challenges: list[dict[str, Any]]) -> 
     if instanced is None:
         raise Unproven(f"no {INSTANCED_TYPE} challenge on this board yet — re-run once one appears")
 
-    terms = Terms.of(board.json("GET", f"/api/v1/challenges/{instanced['id']}"))
+    terms = Terms.of(board.json("GET", f"{CHALLENGES}/{instanced['id']}"))
     instances = Instances(board, _probe_recorder())
     deployed = instances.deploy(terms, attempt_id=PROBE_ATTEMPT)
     if deployed.lease is None:

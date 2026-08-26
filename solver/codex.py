@@ -9,6 +9,8 @@ what breaks it: the counters still read only Observations, and the stream is whe
 Observations now come from.
 
 **This module owns exactly two things: how the CLI is spawned, and how its output becomes Steps.**
+It spawns it two ways — `run_attempt`, which sets the agent to work, and `asking`, which puts a
+question to it with as little to act on as the CLI permits (Triage's judge, ADR-0006).
 The counters, the deadline, the kill and the Board are the orchestrator's, and none of them is
 computed here. There is no abstract base — the shape below is one two files happen to share, and
 `Taken` is the deterministic schema every adapter emits, load-bearing because two differently
@@ -253,6 +255,70 @@ def run_attempt(
         now=now or _utcnow,
     )
     return transcript.run(prompt, deadline, tuple(chain))
+
+
+def asking(
+    credential: Credential,
+    *,
+    recorder: Recorder,
+    workdir: Path,
+    attempt_id: str = "triage",
+    seconds: float = 180.0,
+    launch: Launch | None = None,
+    now: Callable[[], dt.datetime] | None = None,
+) -> Callable[[str], str]:
+    """The CLI asked a question rather than set to work — a prompt in, the model's prose out.
+
+    The second of this module's two spawn shapes, here for the reason the first one is: **how the
+    CLI is spawned** is what this module owns, and a caller that assembled its own argv would be a
+    caller holding the invocation rules ADR-0014 put here. Triage is its one consumer today, and the
+    seam it plugs into is a plain `Callable[[str], str]` so that nothing above imports this module
+    to have a judge.
+
+    What is given up is as much as the CLI allows, which is less than "no tools".
+
+    **The shell cannot be taken away from it.** ADR-0014 measured that: `codex exec` has no door
+    marked *just answer*, and nothing removes its tools. So what keeps this judgement off the Board
+    is not a flag but the three things the invocation withholds — a **read-only sandbox**, so
+    nothing it does changes anything; **no network**, so no Board, no Instance and no submission is
+    reachable at all; and the allowlist environment every child gets, which holds no CTFd token and
+    not even the Board's URL (`solver/credentials.py`). A judge cannot spend a submission slot it
+    has no address for.
+
+    The residual is named rather than hidden, in the same spirit as the vendor's own context
+    compaction: a read-only sandbox can still *read*, so a judge that went looking could open a
+    file under `/state`. What is guaranteed here is narrower and is the thing that matters — Triage
+    itself never opens one, and the working directory it is pointed at holds nothing.
+
+    Everything the judge says lands in `claims/`, which Flag verification never sweeps, and the
+    tokens it spends are counted by the Steps the invocation writes.
+    """
+    clock = now or (lambda: dt.datetime.now(dt.timezone.utc))
+
+    def ask(prompt: str) -> str:
+        # The CLI is spawned *in* this directory, so it has to exist — and it stays empty, because
+        # pointing the judge at the Run's own files would hand a judgement the contents Triage is
+        # defined not to read. A directory that cannot be made ends as no answer at all, which every
+        # Challenge then records as `unjudged`: visible, and never a reason to lose the other Tiers.
+        try:
+            workdir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return ""
+        deadline = Deadline(budget=clock() + dt.timedelta(seconds=seconds))
+        said = run_attempt(
+            prompt,
+            workdir,
+            deadline,
+            recorder=recorder,
+            attempt_id=attempt_id,
+            chain=(credential,),
+            invocation=Invocation(sandbox="read-only", network=False),
+            launch=launch,
+            now=clock,
+        )
+        return "\n".join(taken.shown for taken in said if taken.kind == CLAIM)
+
+    return ask
 
 
 @dataclass

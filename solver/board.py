@@ -27,6 +27,39 @@ from typing import Any
 # and a client that chases one indefinitely hangs instead of reporting.
 MAX_FILE_REDIRECTS = 4
 
+# The ceiling on any single fetch through this seam, and the reason it is a transport rule rather
+# than a caller's discipline: Brunner ships one `.7z` of **6.15 GB**, linked from description prose
+# on a different host, and a Solver that fetches it has spent the Run on one Challenge's download.
+# A caller that had to remember the cap is a caller that will one day forget it on the one path
+# that matters.
+#
+# It is enforced **where the bytes are** — `_over_the_network` reads one byte past it and no more —
+# so an over-large fetch costs a bounded read rather than a bounded check over an unbounded read.
+# Over the cap is **refused and never truncated**: half an archive written to `/state` under the
+# right name is an artefact every later Step reasons over as though it were the file.
+#
+# It bounds **every** response through this seam and not only a file's, which is deliberate: a
+# reply big enough to matter is a reply nobody meant to send us. An API answer clipped at the cap
+# fails loudly at the JSON parse rather than parsing short, so the cap cannot quietly become a
+# Board that lists fewer Challenges than it has.
+#
+# The number is where it is because the body arrives whole, in memory, on the way to disk: a
+# gigabyte here would be a gigabyte resident inside a container whose memory nobody is watching at
+# 14:00. Like every other number in v1 it is a parameter, and a Board that legitimately ships more
+# than this raises it at the call site rather than losing the file silently.
+MAX_FETCH_BYTES = 256 * 1024 * 1024
+
+# The two collection endpoints Intake reads every cycle, and the detail GET the LIST payload makes
+# unavoidable — the list carries no description, and prose is the one place a password or a second
+# download host is ever written down.
+CHALLENGES = "/api/v1/challenges"
+SCOREBOARD_TOP = "/api/v1/scoreboard/top"
+
+# ADR-0016's read-contract control. `field` is validated against an enumeration before any handler
+# runs, so CTFd answers an unknown one with a refusal and **a 200 is proof the reply came from
+# somewhere else**. `q` is sent with it because CTFd only reaches that validation on a search.
+READ_CONTRACT_CONTROL = f"{CHALLENGES}?field=intake-is-not-a-field&q=a"
+
 # CTFd boards sit behind Cloudflare, which 403s `Python-urllib/3.x` before the request ever reaches
 # the application. Unset, every call below fails as though the token were rejected. Any HTTP client
 # the Solver uses announces itself as a browser or it never sees the board.
@@ -141,6 +174,21 @@ class Held:
     challenge_name: str
 
 
+@dataclass(frozen=True)
+class Standing:
+    """One row of the scoreboard, as this Board publishes it.
+
+    The rank is the Board's own and is kept rather than recomputed from `score`, because the two
+    can disagree — a Board that breaks ties on solve time orders rows by a fact the score does not
+    carry, and re-sorting here would quietly invent a different scoreboard from the one being
+    played on.
+    """
+
+    rank: int
+    name: str
+    score: int
+
+
 # `Board`'s one edge to the network: it is handed a request with every transport rule already
 # applied, and answers with the status, the body and any `Location`. Injectable because that is
 # the honest place to stand a test — above it are this module's rules, below it is a socket.
@@ -149,6 +197,16 @@ Transport = Callable[[urllib.request.Request], tuple[int, bytes, str]]
 
 class BoardFailure(Exception):
     """The board answered in a way the Solver would have silently mis-read."""
+
+
+class TooLarge(BoardFailure):
+    """A fetch was over the cap, and so was refused rather than truncated.
+
+    Its own class because the two responses are opposite: a `BoardFailure` on a download is a
+    Challenge whose file we could not read and should try again for, and this is a Challenge whose
+    file we have **decided** not to read — retrying it is spending the Run twice on the same
+    refusal. A caller records it against the Challenge and carries on.
+    """
 
 
 class Board:
@@ -160,10 +218,18 @@ class Board:
     says why.
     """
 
-    def __init__(self, url: str, token: str, transport: Transport | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        transport: Transport | None = None,
+        *,
+        fetch_bytes: int = MAX_FETCH_BYTES,
+    ) -> None:
         self.url = url.rstrip("/")
+        self.fetch_bytes = fetch_bytes
         self._token = token
-        self._transport = transport or _over_the_network()
+        self._transport = transport or _over_the_network(fetch_bytes)
 
     @property
     def authenticated(self) -> bool:
@@ -198,6 +264,54 @@ class Board:
         if not document.get("success", False):
             raise BoardFailure(f"{method} {path} answered success=false — {document}")
         return document["data"]
+
+    def challenges(self) -> list[dict[str, Any]]:
+        """Everything the Board lists, which is **not** everything it knows.
+
+        The LIST payload carries no description and no `shared` flag, so prose and deployability
+        both cost a detail GET (`challenge`). What it does carry is `solves` and `value`, which is
+        the pair a later version fits the scoring curve from.
+
+        An empty list is not an empty Board and must never be read as one — corroborate it with
+        `collection_endpoints_reach_ctfd` before believing it (ADR-0016).
+        """
+        listed = self.json("GET", CHALLENGES)
+        return [entry for entry in listed if isinstance(entry, dict)] if isinstance(listed, list) else []
+
+    def challenge(self, challenge_id: int | str) -> dict[str, Any]:
+        """One Challenge in full: the description, its files, `shared` and the deploy terms — and
+        `attempts`, our own submission count held **server-side**, which is what makes it the one
+        thing about a Run that survives the container being restarted."""
+        detail = self.json("GET", f"{CHALLENGES}/{challenge_id}")
+        return detail if isinstance(detail, dict) else {}
+
+    def scoreboard(self, top: int) -> tuple[Standing, ...]:
+        """The top `top` of the scoreboard, as rows rather than as CTFd's rank-keyed object.
+
+        Read every Intake cycle and never acted on in v1: it is the shape of the race, stored so
+        that fitting the scoring curve later needs no new Solver code (ADR-0015).
+        """
+        published = self.json("GET", f"{SCOREBOARD_TOP}/{top}")
+        rows = published.items() if isinstance(published, dict) else enumerate(published or [], start=1)
+        standings = (_standing(rank, row) for rank, row in rows if isinstance(row, dict))
+        return tuple(sorted((row for row in standings if row), key=lambda row: row.rank))
+
+    def collection_endpoints_reach_ctfd(self) -> bool:
+        """Whether a collection endpoint's reply was composed by CTFd, asked with a query it must
+        refuse ([ADR-0016](../docs/adr/0016-an-empty-list-is-not-an-empty-board.md)).
+
+        A 200 here cannot have come from CTFd, and a Board that agreeable is one whose empty
+        collections mean nothing at all — the IN-CYPHER practice arena answers every collection
+        endpoint this way while `/api/v1/challenges/8/solves` returns real rows. **Any refusal
+        counts**: a 400, a 403 and a 302 all pass, because this catches the reply that is too
+        agreeable rather than certifying the stack behind a normal one.
+
+        It lives on the seam rather than above it because it is a property of this Board's read
+        contract, and every reader of an empty list needs it — the pre-flight probe asks it before
+        naming any other cause, and Intake asks it before recording a Board as having emptied.
+        """
+        status, _body, _location = self.request("GET", READ_CONTRACT_CONTROL)
+        return status != 200
 
     def submit(self, challenge_id: int | str, flag: str) -> Verdict:
         """Submit one Flag, and answer with what the **body** said about it.
@@ -303,6 +417,8 @@ class Board:
             if status == 200:
                 if b"<html" in payload[:512].lower():
                     raise BoardFailure("the file fetch returned an HTML page — auth degraded to a login screen")
+                if len(payload) > self.fetch_bytes:
+                    raise TooLarge(f"{target} is over the {self.fetch_bytes}-byte cap on a single fetch")
                 return payload, hops
             if status not in (301, 302, 303, 307, 308) or not location:
                 raise BoardFailure(f"the file fetch answered {status}" + (f" → {location}" if location else ""))
@@ -385,6 +501,28 @@ class _LedgerTable(HTMLParser):
             self._row = None
 
 
+def _standing(rank: Any, row: dict[str, Any]) -> Standing | None:
+    """One scoreboard row, out of a payload whose shape CTFd changes by endpoint.
+
+    `/top/<n>` keys its object by rank and gives each row its solves rather than a total, where the
+    plain scoreboard gives a `score` and a list. Both are read here so that a Board serving either
+    is a Board we can snapshot, and a row that is neither is dropped rather than guessed at.
+    """
+    try:
+        place = int(rank)
+    except (TypeError, ValueError):
+        return None
+    score = row.get("score")
+    if not isinstance(score, int):
+        solves = row.get("solves")
+        score = (
+            sum(int(one.get("value") or 0) for one in solves if isinstance(one, dict))
+            if isinstance(solves, list)
+            else 0
+        )
+    return Standing(place, str(row.get("name", "")), score)
+
+
 def _answered(method: str, path: str, status: int, location: str) -> str:
     """One sentence for a board that answered something other than the 200 the caller wanted, with
     the destination where there was one — a bare status hides that this was a redirect to /login."""
@@ -424,19 +562,24 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _over_the_network() -> Transport:
+def _over_the_network(fetch_bytes: int = MAX_FETCH_BYTES) -> Transport:
     """The real transport: one no-redirect opener, reused for the life of a `Board`.
 
     An `HTTPError` is an answer, not an accident — CTFd says 401, 403 and 404 through it — so it
     is normalised into the same triple as a 200 rather than raised at a caller who would have to
     know that urllib splits the status range in two.
+
+    **One byte past the cap and no further.** This is the only place the cap can be honest: a check
+    on `len(payload)` after a bare `read()` is a check made after 6.15 GB has already arrived in
+    the memory of a container nobody is watching. Reading `fetch_bytes + 1` is what lets the caller
+    tell "at the cap" from "over it" while never holding more than one byte more than it allows.
     """
     opener = urllib.request.build_opener(_NoRedirect)
 
     def fetch(request: urllib.request.Request) -> tuple[int, bytes, str]:
         try:
             with opener.open(request, timeout=30) as response:
-                return response.status, response.read(), response.headers.get("Location", "")
+                return response.status, response.read(fetch_bytes + 1), response.headers.get("Location", "")
         except urllib.error.HTTPError as error:
             return error.code, error.read(), error.headers.get("Location", "")
 
