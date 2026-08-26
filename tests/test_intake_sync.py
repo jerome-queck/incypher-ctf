@@ -414,6 +414,37 @@ def test_the_record_carries_orders_tie_break_because_the_board_is_gone_by_replay
     assert [one["position"] for one in records(recorder)[-1]["challenges"]] == [7, 0]
 
 
+def test_the_field_set_of_a_challenge_on_the_intake_line_is_pinned(recorder):
+    """#16's stability rules are that a field's meaning never changes, a retired name is never
+    reused, and a reader defaults what is missing. Adding a field is free under them and renaming
+    or dropping one is not, so the set is pinned: this row is what every eval query reads, and a
+    silent rename breaks a query written against a Run nobody can re-run.
+    """
+    wire = Wire(listed=[listing(1)], detail={"1": detail(1)})
+
+    intake_over(wire, recorder).sync()
+
+    assert set(records(recorder)[-1]["challenges"][0]) == {
+        "challenge_id",
+        "name",
+        "category",
+        "type",
+        "value",
+        "solves",
+        "position",
+        "attempts",
+        "max_attempts",
+        "solved",
+        "shared",
+        "timeout",
+        "destroy_on_flag",
+        "mana_cost",
+        "changed",
+        "stale",
+        "files",
+    }
+
+
 def test_a_chall_manager_board_and_a_board_without_the_plugin_are_told_apart_in_the_record(recorder):
     """Every Instance term is a `ctfd-chall-manager` field, and Brunner runs no chall-manager — its
     detail payloads carry no `timeout`, `shared` or `mana_cost` key at all. So the only Board in
