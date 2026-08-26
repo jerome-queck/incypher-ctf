@@ -40,9 +40,20 @@ SUBSCRIPTION = "codex-subscription"
 METERED = "codex-metered"
 
 # ADR-0014 gives a Run one brain and switches on exhaustion alone, so this is one value for every
-# rung rather than one per rung. `gpt-5-codex` is rejected on the subscription we hold, which is
-# account state rather than a fact about the model, and so is config rather than a constant.
-DEFAULT_MODEL = "gpt-5"
+# rung rather than one per rung, and `CODEX_MODEL` overrides it without a rebuild.
+#
+# **Which ids exist at all is account state, and it moves.** Read live from the container on
+# 26 Aug 2026: `gpt-5` is refused outright — *"The 'gpt-5' model is not supported when using
+# Codex"* — as `gpt-5-codex` was before it, and what the subscription actually serves is the 5.4
+# through 5.6 families. So a default nobody checked against a live login is a default that fails
+# every Attempt of a Run with nobody there, which is why this one was.
+#
+# Daybreak Blue rather than `gpt-5.6-sol` because of what the vendor says it is for — *"Latest
+# frontier agentic coding model for broad defensive cybersecurity work"* — which is the work. The
+# cost is honest: the id floats where a versioned one would not, so the model can move under us
+# between the gate image and the run-day image in a way the base image's digest pin does not allow.
+# It is a dial rather than an artefact, and one a practice Run is meant to measure.
+DEFAULT_MODEL = "gpt-daybreak-blue-latest"
 
 # Read here and not in `.env` alone, because `docker run --env-file` and a `-e` on the command line
 # reach the same place. Every one of them is declared in `.env.example` and classified in
