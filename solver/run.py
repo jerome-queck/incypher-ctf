@@ -106,7 +106,6 @@ class Pending:
     """
 
     challenge_id: int | str
-    slots: Slots
     workdir: Path
     candidates: tuple[Candidate, ...] = ()
 
@@ -414,9 +413,7 @@ class Run:
         if outcome.held:
             waiting = self._pending.get(challenge.challenge_id)
             carried = (waiting.candidates if waiting else ()) + outcome.held
-            self._pending[challenge.challenge_id] = Pending(
-                challenge.challenge_id, challenge.slots, held.workdir, carried
-            )
+            self._pending[challenge.challenge_id] = Pending(challenge.challenge_id, held.workdir, carried)
         if outcome.solved:
             self._pending.pop(challenge.challenge_id, None)
             self._leases.pop(challenge.challenge_id, None)
@@ -524,6 +521,13 @@ class Run:
             return (), f"the Instance ledger could not be read, so nothing was reclaimed — {unreadable}"
         return swept.still_held + swept.unresolved, ""
 
+    def _slots_now(self, challenge_id: int | str) -> Slots:
+        """This Challenge's submission budget as the Board states it **now**. A Challenge that has
+        dropped off the Board answers unknown, which the gate reads as limited — and `last_call`
+        releases the reserve over it anyway, so nothing found is left unsent for want of a number."""
+        current = next((one for one in self._intake.snapshot.challenges if one.challenge_id == challenge_id), None)
+        return current.slots if current else Slots()
+
     def _solves_now(self, challenge: Sighting) -> int:
         current = next(
             (one for one in self._intake.snapshot.challenges if one.challenge_id == challenge.challenge_id), None
@@ -561,7 +565,10 @@ class Run:
                 pending.candidates,
                 attempt_id=TAIL,
                 challenge_id=pending.challenge_id,
-                slots=pending.slots,
+                # Read now rather than remembered from the Attempt that found the candidate: the
+                # count is the Board's and is held server-side, so a Challenge whose budget was
+                # spent since is one whose last slot we would otherwise send a Flag into.
+                slots=self._slots_now(pending.challenge_id),
                 workdir=pending.workdir,
                 lease=self._leases.get(pending.challenge_id),
                 last_call=True,

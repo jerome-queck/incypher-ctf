@@ -18,7 +18,8 @@ from solver.intake import Intake, Limits
 from solver.profile import Rules, discovered
 from solver.record import Recorder
 from solver.redaction import Redactor
-from solver.run import SIGNALLED, TAIL, WINDOW_CLOSED, Run, Steps
+from solver.flag import OBSERVED, Candidate
+from solver.run import SIGNALLED, TAIL, WINDOW_CLOSED, Pending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 from test_run_loop import BOARD, CONTROL_REFUSED, NOON, WRAPPER, Agent, Clock, records
 
@@ -61,6 +62,7 @@ class Wire:
         self.plugin = instanced if plugin is None else plugin
         self.ledger_breaks_after = ledger_breaks_after
         self.ledger_reads = 0
+        self.spent = 0
         self.deployed: dict[int, str] = {}
         self.submitted: list[tuple[int, str]] = []
         self.terminated: list[int] = []
@@ -87,7 +89,12 @@ class Wire:
             return self._instance(request, path)
         if path.startswith("/api/v1/challenges/"):
             found = next(one for one in self.listed if str(one["id"]) == path.rsplit("/", 1)[1])
-            detail = {**found, "description": f"Find the flag in {found['name']}.", "timeout": 600}
+            detail = {
+                **found,
+                "description": f"Find the flag in {found['name']}.",
+                "timeout": 600,
+                "attempts": self.spent,
+            }
             if self.max_attempts is not UNSTATED_MAX:
                 detail["max_attempts"] = self.max_attempts
             return self._answer(detail)
@@ -296,3 +303,22 @@ def test_a_sweep_that_could_not_reach_the_board_is_never_reported_as_a_clean_run
 
     assert ending.unswept, "a ledger that could not be read was reported as nothing held"
     assert not ending.clean
+
+
+def test_the_tail_reads_the_submission_budget_now_rather_than_remembering_it(tmp_path):
+    """The count is the Board's and is held server-side, so it survives a restart and moves under
+    us. A Challenge whose budget was spent since the Attempt that found the candidate is one whose
+    last slot the tail would otherwise send a Flag into."""
+    clock = Clock()
+    wire = Wire(count=1, instanced=False, max_attempts=1)
+    run, _recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock)
+    workdir = tmp_path / "work" / "1"
+    workdir.mkdir(parents=True)
+    run._pending[1] = Pending(1, workdir, (Candidate("brunner{held}", OBSERVED, command="cat flag"),))
+
+    # The Board has recorded a submission against this Challenge since, and states a maximum of one.
+    wire.spent = 1
+    run._intake.sync()
+    run._tail()
+
+    assert not [sent for sent in wire.submitted if sent[1] == "brunner{held}"]
