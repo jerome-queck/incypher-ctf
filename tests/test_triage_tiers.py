@@ -291,7 +291,10 @@ def test_the_judge_is_asked_with_nothing_it_can_act_on(recorder, tmp_path):
     assert tiers(judged) == {1: (4, JUDGED)}
     assert spawned["argv"][spawned["argv"].index("--sandbox") + 1] == "read-only"
     assert "sandbox_workspace_write.network_access=false" in spawned["argv"]
-    assert Invocation().sandbox == "workspace-write"  # an Attempt's, and deliberately not this
+    # An Attempt's own invocation is deliberately not this one. Stated as the contrast rather than
+    # as the literal, because what matters is that the judge is narrowed — an Attempt's sandbox is a
+    # dial that has already moved once, and this assertion is not about where it sits.
+    assert Invocation().sandbox != "read-only"
     assert not {"CTFD_URL", "CTFD_API_TOKEN"} & set(spawned["environment"])
     assert "id 1 " in spawned["prompt"]
 

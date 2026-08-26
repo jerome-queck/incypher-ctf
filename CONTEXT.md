@@ -307,6 +307,30 @@ _Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not w
 "state" bare either — that reads as the Solver's in-memory state, which is a different thing and
 does not survive anything.
 
+**Refusal**:
+The Solver declining to start, before anything is spent — a missing or empty credential, no tracked
+profile for the Board `CTFD_URL` names, a Board that fails ADR-0016's read-contract control, a first
+Intake that could not be believed, or a `RUN_ID` nobody set. It is **not a Cut**: a Cut ends an
+Attempt and says what stopped it, and at a Refusal nothing has been attempted. Its whole value is
+its timing — the failure being designed against is a container that comes up at 10:30 with one
+variable quietly unset and runs the full window on a credential that was never there, silent from
+inside and afterwards indistinguishable from bad luck. **A loud refusal at 10:15, with a human
+standing there, is setup rather than Intervention.**
+_Avoid_: error, crash, validation failure, precondition. A **crash** is one of the two ways a Run
+*ends*; a Refusal is a Run that never began.
+
+**Reserved tail**:
+The last stretch of a Run's window, held back by the scheduler rather than found at the end, with
+four jobs and no Attempts: submit the candidates the gate held back, destroy every Instance, flush
+telemetry, exit clean. `Dials.tail_seconds` is its length and `acquire` never returns a budget that
+eats into it, so the tail is about **doing** the four jobs rather than making room for them. It is
+where the submission reserve is released — there is no later Attempt for it to be reserved *for* —
+and where the leak sweep runs with nothing kept, because chall-manager never evicts and an Instance
+still held when the process exits is capacity nobody reclaims.
+_Avoid_: shutdown, cleanup, teardown, grace period. Not the **submission reserve** inside an
+Instance's own deadline either (`instance.Reserves.submission_seconds`) — that is a different
+reserve, held for a different reason, and the two are deliberately separate numbers.
+
 ### Secrets and tooling
 
 **Team key**:

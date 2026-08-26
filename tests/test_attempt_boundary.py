@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from solver.carry import DERIVED, FIELD, LABEL_LIMIT, SECTIONS, UNNAMED, Boundary, Line, label
-from solver.codex import COMMAND, Child, Credential, run_attempt
+from solver.codex import COMMAND, WATCH_SLICE_SECONDS, Child, Credential, run_attempt
 from solver.record import CUT_NOVELTY, CUT_REPETITION, Recorder
 from solver.redaction import Redactor
 from solver.stall import Deadline, Thresholds, Watch
@@ -276,7 +276,13 @@ def test_a_checkpoint_reaches_a_child_that_is_already_running(tmp_path):
             watch.observed(step.command, exit_code=step.exit_code, digest=step.digest)
 
     assert [found.replay for found in watch.checkpoints] == ["curl -s http://target/admin"]
-    assert child.budgets == [600.0, 720.0]
+    # The extension reached the child: the deadline the read loop consults moved out by the grant,
+    # and the loop went on reading past the moment the original ten minutes would have killed it.
+    # Stated as the property rather than as the size of each read — reads are **sliced** so that a
+    # deadline moved mid-turn is noticed within a second rather than at the end of the budget, which
+    # is what lets a signal reach the reserved tail. How big a slice is, is not what this is about.
+    assert watch.deadline.at == NOON + dt.timedelta(minutes=12)
+    assert child.budgets and max(child.budgets) <= WATCH_SLICE_SECONDS
 
 
 def test_an_early_stop_with_budget_remaining_is_not_a_cause_to_close_on(tmp_path):

@@ -175,8 +175,13 @@ both hold to it.
   time is a line in that list and never a runtime install — the venue network at 14:00 is not a
   dependency we get to have. Where two packages ship the same tool, the `Dockerfile` installs one
   and says which, so nothing depends on whichever binary resolves first.
-- **`docs/competitions/` — one file per event.** Our reading of the event, beside a verbatim
-  `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed.
+- **`docs/competitions/` — three files per event.** Our reading of the event, beside a verbatim
+  `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed —
+  and an `<event>.board.json`, the tracked half of a Board profile, holding the URL and the
+  prohibitions that exist in that Board's prose and nowhere in its API
+  ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)). The
+  snapshot is generated and says so; the other two are hand-written, and the `.board.json` is what
+  a human edits when `scripts/check-rules-drift.sh` shows a rule has moved.
 - **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
   credential, or a network the runner does not have, which is what keeps them out of `ci.yml`.
   They consume `solver/` and never re-implement it; a rule that exists in both places is a rule

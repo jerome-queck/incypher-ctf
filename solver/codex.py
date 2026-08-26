@@ -66,6 +66,12 @@ from solver.stall import Deadline
 # same reason: none of these is a command anyone could replay in a shell.
 MARK = "[codex]"
 
+# The tool name the adapter puts on its **own** Steps — the spawn, a failure the CLI reported about
+# itself, a switch to the next rung. Named rather than repeated, because the stall call has to be
+# able to tell them from the model working the Challenge: one spawn per rung is the same command
+# line every time, and a chain switch is not the model looping (`solver/stall.py`).
+ADAPTER = "codex"
+
 # What a `Taken` is. Four kinds, closed, and the same four whatever vendor is behind them.
 # `COMMAND` is the only one the stall counters may read, because it is the only one that is an
 # Observation; `CLAIM` is the model talking and is evidence of nothing.
@@ -123,6 +129,13 @@ READ_BLOCK_BYTES = 65536
 # sandbox, where there a single tool is closing a pipe.
 REAP_GRACE_SECONDS = 2.0
 
+# The longest a single read waits before the deadline is looked at again. The deadline is an object
+# precisely so the orchestrator can move it while a child is running — a Checkpoint lengthens it, a
+# stall or a signal shortens it — and a read that blocked for the whole remaining budget could not
+# hear either. Measured: `docker stop`'s ten-second grace expired with a turn in flight and PID 1
+# was killed with the reserved tail unrun.
+WATCH_SLICE_SECONDS = 1.0
+
 
 @dataclass(frozen=True)
 class Credential:
@@ -148,9 +161,22 @@ class Invocation:
     """
 
     executable: str = "codex"
-    # The sandbox around challenge-supplied code. `workspace-write` is what the image ships
-    # `bubblewrap` for; the container is the outer boundary either way.
-    sandbox: str = "workspace-write"
+    # **The container is the only boundary, and this is where that is admitted.** `workspace-write`
+    # is what the image ships `bubblewrap` for, and bubblewrap cannot build a sandbox inside an
+    # unprivileged container: measured every way on 26 August 2026, it fails at
+    # `bwrap: No permissions to create a new namespace` and, with seccomp relaxed and `SYS_ADMIN`
+    # granted, at `bwrap: Failed to make / slave`. Landlock is refused as incompatible. The only two
+    # configurations that run a command at all are `--privileged` with bubblewrap, and this one.
+    #
+    # This one, because `--privileged` spends the container boundary to buy a smaller one inside it,
+    # and ADR-0008 is already explicit that the container boundary *is* the isolation here. v1
+    # accepts what that costs and names it rather than hiding it (ADR-0018): challenge code runs as root with
+    # nothing between it and `/state`, so *the Observation log is orchestrator-append-only* is a
+    # claim about the model's cooperation rather than a fact about the filesystem. `run_attempt`
+    # still refuses to put the record inside the working directory, which holds the accidental case
+    # and not a determined one. The boundary that closes it is v2's uid separation
+    # (`docs/credentials.md`), which is the same boundary that closes the credential on disk.
+    sandbox: str = "danger-full-access"
     # Off by default in the sandbox, and a Challenge whose Target is a socket is unsolvable without
     # it. ADR-0014 makes web search a Board profile value for the same reason it is on here.
     network: bool = True
@@ -158,6 +184,11 @@ class Invocation:
     # directory happens to hold — a dial nobody set is a dial that moves when a login is retaken.
     # Spec #63 pins it to a constant so a later version tunes a number rather than reshaping this.
     reasoning_effort: str = "medium"
+    # ADR-0014 makes web search a Board profile value, default on: every advantage counts on a
+    # 5.5-hour clock, and a Challenge shipping an image or an audio clip is often solvable only by
+    # looking something up. A Board whose rules withdraw it sets `web_search` false in its tracked
+    # profile, and it is passed either way for the reason `reasoning_effort` is.
+    web_search: bool = True
 
 
 @dataclass(frozen=True)
@@ -401,12 +432,25 @@ class _Transcript:
         a test of a parser nobody ships.
         """
         buffered = b""
+        waited = 0.0
         while True:
             if (left := deadline.left(self.now())) <= 0:
                 return self._cut_short(credential)
-            block = child.read(left)
+            # Read in slices, so a deadline the orchestrator moved — lengthened by a Checkpoint,
+            # shortened by a stall or by a signal — reaches a child that is already blocked. `read`
+            # answering `None` on a slice is the slice ending rather than the Attempt.
+            #
+            # The silence is counted as well as the clock, and that is not belt-and-braces: a caller
+            # whose clock does not advance would otherwise loop here forever, and every test of this
+            # module holds one still. Either bound ends the Attempt.
+            slice_seconds = min(left, WATCH_SLICE_SECONDS)
+            block = child.read(slice_seconds)
             if block is None:
-                return self._cut_short(credential)
+                waited += slice_seconds
+                if waited >= left:
+                    return self._cut_short(credential)
+                continue
+            waited = 0.0
             if not block:
                 yield from self._line(buffered, credential)
                 return ""
@@ -432,7 +476,7 @@ class _Transcript:
             # Not a record we can classify, so it goes where an unclassified thing is safe: the
             # channel no check greps. The alternative — presuming it is output — is the one that
             # ends with a model's sentence swept as though a command had produced it.
-            yield self._claimed(credential, "codex", line)
+            yield self._claimed(credential, ADAPTER, line)
             return
         yield from self._event(event, credential)
 
@@ -536,7 +580,7 @@ class _Transcript:
         command: str,
         told: str,
         *,
-        tool: str = "codex",
+        tool: str = ADAPTER,
         kind: str = COMMAND,
         credential: Credential | None = None,
     ) -> Taken:
@@ -659,6 +703,7 @@ def _argv(credential: Credential, invocation: Invocation) -> tuple[str, ...]:
         f"sandbox_workspace_write.network_access={network}",
     ]
     argv += ["-c", f"model_reasoning_effort={invocation.reasoning_effort}"]
+    argv += ["-c", f"tools.web_search={'true' if invocation.web_search else 'false'}"]
     return (*argv, "-")
 
 

@@ -160,19 +160,21 @@ RUN set -eu; \
     rm "$probe"
 
 # Every gate Run is from a built image with **no source mount** (ADR-0008), so this is what a gate
-# proves. ADR-0008 bakes in three things and this bakes two: the event's `.board.json` is the
-# third, and it arrives with #74, which owns the profile it configures.
+# proves. ADR-0008 bakes in three things and all three are here: the tools above, `solver/`, and
+# every event's `.board.json` — every event's rather than one, because which Board a Run plays is
+# `CTFD_URL`'s decision at run time and an image carrying one event's rules would be an image per
+# event. `solver/profile.py` selects between them by URL, so an image built for Brunner and pointed
+# at the Danish board matches nothing and refuses rather than playing a strict no-AI board.
 #
 # No secret is an `ARG`, an `ENV` or a `COPY` anywhere in this file, and none ever will be:
 # credentials arrive by `--env-file` at run time (`docs/credentials.md`), which is what lets the
 # image be handed over without handing over the team key.
 WORKDIR /opt/solver
 COPY solver/ solver/
+COPY docs/competitions/*.board.json boards/
 
 # PID 1 is the Solver process — no supervisor, and exec form so no shell sits in front of it.
 # v1's gate has to tell a clean exit from a restart loop, and anything between them blurs exactly
 # that. It runs as root: the container boundary is the isolation a non-root user would buy, and
 # CTF tooling that needs a privilege at 14:00 has nobody to ask for one.
-#
-# `solver/__main__.py` arrives with #74, which owns boot refusal and clean termination.
 ENTRYPOINT ["python3", "-m", "solver"]
