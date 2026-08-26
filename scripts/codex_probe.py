@@ -1,128 +1,175 @@
-"""Ask the credential we would spend a Run on whether it answers, before the Run spends it.
+"""Ask the image whether the brain we would spend a Run on can actually run a command.
 
-    python3 scripts/codex_probe.py [--model gpt-…] [--seconds 120]
+    python3 scripts/codex_probe.py [--image solver] [--model gpt-…] [--seconds 240]
 
-The gap this closes is one no offline check can: **which model ids a subscription serves is account
-state**, it moves, and a default nobody asked a live login about is a default that fails every
-Attempt of an unattended Run with nobody there. Measured on 26 August 2026, `gpt-5` answers *"The
-'gpt-5' model is not supported when using Codex"* and `gpt-5-codex` was refused before it — so this
-is the pre-flight that would have caught a Solver shipping a brain it could not reach.
+Three things fail silently between a green build and a working Solver, and this is the only check
+that catches any of them. All three were met on 26 August 2026, in this order, each one hidden
+behind the last:
 
-It spawns the CLI through `solver/codex.py` rather than building its own command line, so what is
-proven is the argv the Solver actually uses — the sandbox, the reasoning effort, the web-search
-dial. What it cannot prove is the *container's* copy of the CLI: `scripts/` is in no image
-(`Dockerfile` copies `solver/` and the Board profiles), so this runs against the host's `codex` and
-the same `CODEX_HOME`. The credential and the account are the thing under test, and those are shared.
+1. **The model id is not served.** `gpt-5` answers *"not supported when using Codex with a ChatGPT
+   account"*, as `gpt-5-codex` did before it. Which ids a subscription serves is account state.
+2. **The CLI ships in two halves.** From 0.147.0 the shell tool routes through a separate
+   `codex-code-mode-host`, and without it every command fails before it runs — *"Code mode will fail
+   closed"* is the CLI's own wording, and `codex --version` answers perfectly meanwhile.
+3. **The sandbox cannot be built.** `bubblewrap` needs a mount namespace Docker will not grant an
+   unprivileged container, so every command dies at `bwrap: Failed to make / slave`.
 
-Standard library only — it has to run beside every other pre-flight in here.
+**It runs inside the image, and that is the point.** A probe run on the host would have passed all
+three — the host has a working CLI and no container confinement — while the thing that competes
+could not execute one command. So this drives `docker run` against the image a Run will use, and
+what it proves is the argv `solver/codex.py` builds, the binaries the `Dockerfile` installed, and
+the sandbox `Invocation` asks for.
+
+Standard library only, and no import of `solver/` on the host side: the repository and the image
+are two different trees, and the one under test is the image.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
+import subprocess
 import sys
-import tempfile
-from collections.abc import Mapping
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 import ctfd_probe  # noqa: E402
-from solver.boot import AUTH, DEFAULT_MODEL, SUBSCRIPTION  # noqa: E402
-from solver.codex import CLAIM, CODEX_HOME, Credential, Invocation, run_attempt  # noqa: E402
-from solver.record import Recorder  # noqa: E402
-from solver.redaction import Redactor  # noqa: E402
-from solver.stall import Deadline  # noqa: E402
 
-# A question with one right answer that no tool can produce, so a reply proves the model reached us
-# rather than that a shell did.
-QUESTION = "Reply with exactly one word and nothing else: PONG"
-ANSWER = "PONG"
+# A sentinel no model would emit on its own and no tool would print by accident, so seeing it come
+# back is a command having run rather than prose about one.
+SENTINEL = "CODEX-PROBE-RAN-A-COMMAND"
 
-RUN_ID = "codex-probe"
+ASK = f"Run exactly this command, then stop and say nothing else:\n\n    printf '%s\\\\n' '{SENTINEL}'\n"
 
-# Where the CLI caches what the login was offered. Read only to *list* ids when the configured one
-# fails, because "that model is not served" and "here is what is" are two halves of one answer.
-CATALOGUE = "models_cache.json"
+# What runs *inside* the image: `solver/` is there, `scripts/` is not, so the probe's own body
+# travels over stdin. It builds the invocation the way an Attempt does and reads the stream the way
+# the Run loop does, so a pass here is a pass for the thing that competes.
+INSIDE = f"""
+import datetime as dt, json, sys, tempfile
+from pathlib import Path
+from solver.codex import ADAPTER, CLAIM, COMMAND, Credential, Invocation, run_attempt
+from solver.record import Recorder
+from solver.redaction import Redactor
+from solver.stall import Deadline
 
-
-def home_of(environ: Mapping[str, str]) -> Path:
-    """The `CODEX_HOME` this probe asks — the Run's own mount by default, so what is proven is the
-    login a Run will use rather than the operator's own."""
-    return Path(environ.get("CODEX_HOME") or REPO_ROOT / "state" / CODEX_HOME.name)
+model, seconds = sys.argv[1], float(sys.argv[2])
+with tempfile.TemporaryDirectory() as workdir:
+    taken = list(run_attempt(
+        {ASK!r},
+        Path(workdir),
+        Deadline(budget=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=seconds)),
+        recorder=Recorder(Path("/state"), "codex-probe", Redactor.for_declared_secrets({{}})),
+        attempt_id="codex-probe",
+        chain=(Credential(slot="codex-subscription", model=model),),
+        invocation=Invocation(network=False),
+    ))
+ran = [one for one in taken if one.kind == COMMAND and one.tool != ADAPTER and {SENTINEL!r} in one.shown]
+print(json.dumps({{
+    "ran": bool(ran),
+    "sandbox": Invocation().sandbox,
+    "commands": [one.command for one in taken if one.kind == COMMAND and one.tool != ADAPTER],
+    "told": [one.shown.replace(chr(10), " ")[:300] for one in taken if not ran or one.kind != CLAIM][:6],
+}}))
+"""
 
 
 def offered(home: Path) -> list[str]:
-    """Every model id the login was offered, out of the CLI's own cache. Empty where there is no
-    cache to read, which is a fact about this login and not a failure of the probe."""
+    """Every model id this login was offered, out of the CLI's own cache — the other half of the
+    answer when the configured one is refused."""
     try:
-        catalogue = json.loads((home / CATALOGUE).read_text())
+        catalogue = json.loads((home / "models_cache.json").read_text())
     except (OSError, ValueError):
         return []
     models = catalogue.get("models") if isinstance(catalogue, dict) else None
-    entries = models if isinstance(models, list) else []
-    return [str(one.get("slug")) for one in entries if isinstance(one, dict) and one.get("slug")]
-
-
-def answered(model: str, home: Path, seconds: float) -> tuple[bool, str]:
-    """Spawn one invocation and say whether the model answered — and what it said if it did not.
-
-    Read-only and off the network, because the question needs neither and a probe that could reach a
-    Board is a probe that could spend a submission.
-    """
-    with tempfile.TemporaryDirectory() as empty:
-        recorder = Recorder(REPO_ROOT / "state", RUN_ID, Redactor.for_declared_secrets(os.environ))
-        deadline = Deadline(budget=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=seconds))
-        said = list(
-            run_attempt(
-                QUESTION,
-                Path(empty),
-                deadline,
-                recorder=recorder,
-                attempt_id=RUN_ID,
-                chain=(Credential(slot=SUBSCRIPTION, model=model, home=home),),
-                invocation=Invocation(sandbox="read-only", network=False),
-            )
-        )
-    spoken = [taken.shown for taken in said if taken.kind == CLAIM]
-    if any(ANSWER in one for one in spoken):
-        return True, f"{model} answered"
-    told = " | ".join(taken.shown.replace("\n", " ")[:200] for taken in said if ANSWER not in taken.shown)
-    return False, told or f"{model} said nothing at all"
+    return [str(one["slug"]) for one in (models or []) if isinstance(one, dict) and one.get("slug")]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="", help=f"the id to ask; defaults to CODEX_MODEL or {DEFAULT_MODEL}")
-    parser.add_argument("--seconds", type=float, default=120.0, help="how long to wait for a reply")
+    parser = argparse.ArgumentParser(description="Prove the image can run a command through its model.")
+    parser.add_argument("--image", default="solver", help="the built image to ask")
+    parser.add_argument("--model", default="", help="the id to ask; defaults to CODEX_MODEL, then the image's own")
+    parser.add_argument("--seconds", type=float, default=240.0)
+    parser.add_argument("--state", default=str(REPO_ROOT / "state"), help="the host mount holding the login")
     args = parser.parse_args(argv)
 
     ctfd_probe.load_env(REPO_ROOT / ".env")
-    home = home_of(os.environ)
-    model = args.model or os.environ.get("CODEX_MODEL", "").strip() or DEFAULT_MODEL
-
-    print(f"CODEX_HOME  {home}")
-    if not (home / AUTH).is_file():
-        print(f"  FAIL  nothing is logged in — there is no {home / AUTH}.", flush=True)
+    state = Path(args.state)
+    home = state / "codex"
+    if not (home / "auth.json").is_file():
+        print(f"  FAIL  nothing is logged in — there is no {home / 'auth.json'}.")
         print("        Run `codex login --device-auth` in the container before the Run (ADR-0011).")
         return 1
 
-    catalogue = offered(home)
-    print(f"offered     {', '.join(catalogue) if catalogue else 'unknown — no cached catalogue yet'}")
+    model = args.model or os.environ.get("CODEX_MODEL", "").strip() or _default_of(args.image)
+    print(f"image       {args.image}")
+    print(f"offered     {', '.join(offered(home)) or 'unknown — no cached catalogue yet'}")
     print(f"asking      {model}", flush=True)
 
-    ok, told = answered(model, home, args.seconds)
-    if ok:
-        print(f"  PASS  {told}")
+    told = _inside(args.image, state, model, args.seconds)
+    if told is None:
+        return 1
+    print(f"sandbox     {told['sandbox']}")
+    if told["ran"]:
+        print(f"  PASS  a command ran and its output came back: {told['commands']}")
         return 0
-    print(f"  FAIL  {told}")
-    if catalogue and model not in catalogue:
-        print(f"        {model!r} is not in this login's catalogue. Set CODEX_MODEL to one that is.")
+    print("  FAIL  no command ran. What the invocation said:")
+    for line in told["told"]:
+        print(f"          {line}")
     return 1
+
+
+def _default_of(image: str) -> str:
+    """The image's own default, asked of the image rather than imported from the checkout — the two
+    trees can differ, and the one that matters is the one that competes."""
+    asked = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "python3",
+            image,
+            "-c",
+            "from solver.boot import DEFAULT_MODEL; print(DEFAULT_MODEL)",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return asked.stdout.strip() or "unknown"
+
+
+def _inside(image: str, state: Path, model: str, seconds: float) -> dict | None:
+    asked = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "-v",
+            f"{state}:/state",
+            "--entrypoint",
+            "python3",
+            image,
+            "-",
+            model,
+            str(seconds),
+        ],
+        input=INSIDE,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for line in reversed(asked.stdout.splitlines()):
+        try:
+            return json.loads(line)
+        except ValueError:
+            continue
+    print(f"  FAIL  the probe did not run inside {image} — {(asked.stderr or asked.stdout).strip()[:400]}")
+    return None
 
 
 if __name__ == "__main__":

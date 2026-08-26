@@ -154,9 +154,22 @@ class Invocation:
     """
 
     executable: str = "codex"
-    # The sandbox around challenge-supplied code. `workspace-write` is what the image ships
-    # `bubblewrap` for; the container is the outer boundary either way.
-    sandbox: str = "workspace-write"
+    # **The container is the only boundary, and this is where that is admitted.** `workspace-write`
+    # is what the image ships `bubblewrap` for, and bubblewrap cannot build a sandbox inside an
+    # unprivileged container: measured every way on 26 August 2026, it fails at
+    # `bwrap: No permissions to create a new namespace` and, with seccomp relaxed and `SYS_ADMIN`
+    # granted, at `bwrap: Failed to make / slave`. Landlock is refused as incompatible. The only two
+    # configurations that run a command at all are `--privileged` with bubblewrap, and this one.
+    #
+    # This one, because `--privileged` spends the container boundary to buy a smaller one inside it,
+    # and ADR-0008 is already explicit that the container boundary *is* the isolation here. v1
+    # accepts what that costs and names it rather than hiding it: challenge code runs as root with
+    # nothing between it and `/state`, so *the Observation log is orchestrator-append-only* is a
+    # claim about the model's cooperation rather than a fact about the filesystem. `run_attempt`
+    # still refuses to put the record inside the working directory, which holds the accidental case
+    # and not a determined one. The boundary that closes it is v2's uid separation
+    # (`docs/credentials.md`), which is the same boundary that closes the credential on disk.
+    sandbox: str = "danger-full-access"
     # Off by default in the sandbox, and a Challenge whose Target is a socket is unsolvable without
     # it. ADR-0014 makes web search a Board profile value for the same reason it is on here.
     network: bool = True
