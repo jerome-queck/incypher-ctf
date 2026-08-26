@@ -33,8 +33,15 @@ SECRETS = (
 
 # Declared in the template and deliberately *not* secret. `CTFD_URL` is the guard that decides which
 # competition the Solver enters, so a record that redacted it would hide the one field a post-mortem
-# needs to tell "played badly" from "played the wrong board".
-NOT_SECRETS = ("CTFD_URL",)
+# needs to tell "played badly" from "played the wrong board". The other three are the same class of
+# thing — which Run this is, how long it may last, and which model it thinks with — and every one of
+# them is a field a post-mortem reads rather than a value anyone could spend.
+#
+# They are here rather than in a second list beside the boot check for the reason the secrets are:
+# `solver/boot.py` reads *this* tuple to decide what it is looking at, so a name declared in
+# `.env.example` and forgotten in one of the two places is a failing test rather than a Run that
+# started short a value (ADR-0010).
+NOT_SECRETS = ("CTFD_URL", "RUN_ID", "RUN_SECONDS", "CODEX_MODEL")
 
 # The complement, and the reason it lives beside the two lists above rather than in either module
 # that spawns a child: **every** child gets exactly these four names and nothing else. The recon

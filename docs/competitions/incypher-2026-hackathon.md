@@ -27,6 +27,12 @@ the team key is — and defers to the first for anything canonical. Both were re
 | Categories | Web, pwn, crypto, reversing, forensics "and more", several set in medical scenarios |
 | Stakes | SGD 1,500 / 1,000 / 500, and the first-place team presents at the conference |
 
+**The tracked profile is [`incypher-2026-hackathon.board.json`](incypher-2026-hackathon.board.json)**:
+5.5 hours, closing 22 Sep 16:00 SGT. It deliberately does not take the board's own `window.init`
+values — those are the *practice* window, 1 Jul to 22 Sep 00:00 SGT, which closes ten and a half
+hours before the scored Run begins. The Solver reads the board's window at startup and records it
+beside the configured one rather than instead of it, so a post-mortem can see both.
+
 **The competition-day batch is challenges we have never seen.** Challenges are released in two
 batches: the first opens 14 Sep online and is *the same batch* again on-site on day 1, and "the
 remaining challenges open" on day 2. Day-1 tuning therefore cannot be tuning against the

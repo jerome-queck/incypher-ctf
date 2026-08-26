@@ -16,6 +16,14 @@ change to them is a diff rather than a thing nobody noticed.
 | Categories | Web, Crypto, Forensics, Rev, Pwn, OSINT, and whatever else ships |
 | Stakes | CTFtime points. No prizes on this platform. |
 
+**The tracked profile is [`brunnerctf-2026-global.board.json`](brunnerctf-2026-global.board.json)**,
+and it states no `closes_at`. The scored window above ended on 23 August; the board stays up and is
+the practice board every Run since has been taken against, so a close stamped in the file would
+refuse every one of them for a competition that is already over. What the file carries instead is
+the window's *length*, which is what a practice Run is bounded by, and `RUN_SECONDS` shortens it.
+The IN-CYPHER profile does state a close, because there the moment scoring stops is the fact that
+matters most.
+
 **Play Global, never Danish.** `danmark.brunnerctf.dk` is a separate platform with its own
 scoreboard, and it carries a strict no-AI policy that would disqualify everything this repository
 builds. The two are one click apart in the site navigation — the Solver is pointed at a board by

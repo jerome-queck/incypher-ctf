@@ -136,6 +136,39 @@ jobs:
       - name: docker build
         run: docker build -t solver:ci .
 
+      # v1's gate turns on a refusal that only exists at boot, so it is proved from the image
+      # rather than from the tree: a container that comes up at 10:30 with one variable unset and
+      # runs the whole window on a credential that was never there is silent from inside and
+      # afterwards indistinguishable from bad luck. Exit 2 is the Refusal, and the sentence has to
+      # name the missing value or a human at 10:15 learns nothing from it.
+      - name: the Solver refuses to start with nothing set, from the built image
+        run: |
+          set +e
+          said=$(docker run --rm solver:ci 2>&1); code=$?
+          set -e
+          echo "$said"
+          [ "$code" = 2 ] || { echo "expected the Refusal exit code 2, got $code" >&2; exit 1; }
+          case "$said" in
+            *CTFD_URL*) ;;
+            *) echo "the refusal did not name the value that was missing" >&2; exit 1 ;;
+          esac
+
+      # The third thing ADR-0008 bakes in. It is checked from inside because the `.dockerignore` is
+      # an allowlist: a re-inclusion whose parent directory is still excluded ships nothing, and
+      # nothing about the tree says so — the container refuses at 10:15 instead, for a reason
+      # nobody would look for here.
+      - name: every event's Board profile is baked in and reads
+        run: |
+          docker run --rm -i --entrypoint python3 solver:ci - <<'PY'
+          from solver.profile import BOARDS, _tracked
+
+          tracked = _tracked(BOARDS)
+          assert tracked, f"no Board profile in {BOARDS} — the .dockerignore allowlist shipped none"
+          for rules in tracked:
+              assert rules.url and rules.flag_wrapper and rules.window_seconds > 0, rules
+          print(f"{len(tracked)} profile(s): " + ", ".join(f"{one.event} -> {one.url}" for one in tracked))
+          PY
+
       # The recon cascade, run in the image it will run in, over an artefact whose name lies. The
       # Python job cannot prove this and never will: the machine it runs on has a package manager
       # and `exiftool` already on it, so a cascade reaching for a tool the image does not install

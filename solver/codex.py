@@ -158,6 +158,11 @@ class Invocation:
     # directory happens to hold — a dial nobody set is a dial that moves when a login is retaken.
     # Spec #63 pins it to a constant so a later version tunes a number rather than reshaping this.
     reasoning_effort: str = "medium"
+    # ADR-0014 makes web search a Board profile value, default on: every advantage counts on a
+    # 5.5-hour clock, and a Challenge shipping an image or an audio clip is often solvable only by
+    # looking something up. A Board whose rules withdraw it sets `web_search` false in its tracked
+    # profile, and it is passed either way for the reason `reasoning_effort` is.
+    web_search: bool = True
 
 
 @dataclass(frozen=True)
@@ -659,6 +664,7 @@ def _argv(credential: Credential, invocation: Invocation) -> tuple[str, ...]:
         f"sandbox_workspace_write.network_access={network}",
     ]
     argv += ["-c", f"model_reasoning_effort={invocation.reasoning_effort}"]
+    argv += ["-c", f"tools.web_search={'true' if invocation.web_search else 'false'}"]
     return (*argv, "-")
 
 
