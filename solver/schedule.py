@@ -305,10 +305,12 @@ class Scheduler:
     def acquire(self, snapshot: Snapshot, *, leased: Collection[int | str] = ()) -> Pick | None:
         """The next Challenge and its budget, or `None` where the clock can no longer buy an Attempt.
 
-        `None` says the window has less than `L_min` left over the tail — it never says the Board is
-        finished. Challenges drop mid-event, so "nothing left to work" is not a conclusion the
-        Solver is allowed to reach, and an empty eligible set means the next Intake is what to wait
-        for rather than that the Run is over (`CONTEXT.md`, *Run*).
+        `None` has two causes and they want **opposite** responses, so a caller reads
+        `out_of_time()` to tell them apart rather than assuming: the window being spent runs the
+        tail and ends the Run, and nothing being eligible right now waits for the next Intake.
+        Challenges drop mid-event, so "nothing left to work" is not a conclusion the Solver is ever
+        allowed to reach — a Run ends when the window closes and **never because the Board looks
+        finished** (`CONTEXT.md`, *Run*).
         """
         if len(self._held) >= self.dials.concurrency:
             holding = ", ".join(repr(one) for one in self._held)
@@ -318,7 +320,7 @@ class Scheduler:
             )
         now = self._now()
         affordable = self.window.left(now) - self.dials.tail_seconds
-        if affordable < self.dials.floor_seconds:
+        if self.out_of_time():
             return None
         ranked = self.order(snapshot, leased=leased)
         if not ranked:
@@ -344,6 +346,20 @@ class Scheduler:
             exploring=exploring,
         )
         return self._held[chosen.challenge_id]
+
+    def out_of_time(self) -> bool:
+        """Whether the clock can no longer buy an Attempt over the tail — the **one** thing that
+        ends a Run.
+
+        Public because `acquire` answering `None` is otherwise ambiguous, and the ambiguity is
+        dangerous in one direction: a caller that read *nothing is eligible* as *the window is
+        spent* would end a Run at 11:00 on a Board that had simply gone quiet, which is precisely
+        the failure the "never because the Board looks finished" rule exists for.
+
+        Asked here rather than recomputed at the call site, because the tail and `L_min` are this
+        module's dials and a rule kept in two places is a rule that will disagree.
+        """
+        return self.window.left(self._now()) - self.dials.tail_seconds < self.dials.floor_seconds
 
     def release(self, outcome: Ended) -> None:
         """Give the Attempt back, and count what it cost.

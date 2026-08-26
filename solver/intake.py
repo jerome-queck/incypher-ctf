@@ -484,6 +484,11 @@ def _as_record(sighting: Sighting) -> dict[str, Any]:
         "type": sighting.challenge_type,
         "value": sighting.value,
         "solves": sighting.solves,
+        # Order's last tie-break, and the one input to the ranking that is neither derivable nor
+        # re-fetchable afterwards — the Board is gone by the time anyone replays this. Without it
+        # a shadow-mode replay cannot resolve a tie at all, which is the whole of ADR-0015's
+        # *"a non-deterministic Order cannot be replayed"*.
+        "position": sighting.position,
         "attempts": sighting.attempts,
         "max_attempts": sighting.max_attempts,
         "solved": sighting.solved,

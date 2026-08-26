@@ -339,6 +339,22 @@ def test_no_attempt_is_started_shorter_than_the_floor(scheduler, clock):
     assert scheduler.acquire(board) is None
 
 
+def test_the_two_reasons_acquire_answers_nothing_are_told_apart(scheduler, clock):
+    """They want opposite responses. A window that is spent runs the tail and ends the Run; a Board
+    with nothing eligible waits for the next Intake — and a caller that read the second as the
+    first would end a Run at 11:00 on a Board that had simply gone quiet, which is the failure
+    *"never because the Board looks finished"* exists for."""
+    nothing_to_work = seen(sighting(1, solved=True))
+
+    assert scheduler.acquire(nothing_to_work) is None
+    assert not scheduler.out_of_time(), "the Board is quiet, and the clock has hours left in it"
+
+    clock.on(COMPETITION - Dials().tail_seconds - Dials().floor_seconds + 1)
+
+    assert scheduler.acquire(seen(sighting(1))) is None
+    assert scheduler.out_of_time()
+
+
 def test_a_budget_is_cut_to_what_is_left_over_the_tail_rather_than_refused(scheduler, clock):
     board = seen(sighting(1))
     clock.on(COMPETITION - Dials().tail_seconds - 400)
