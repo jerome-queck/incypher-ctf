@@ -185,7 +185,18 @@ both hold to it.
 - **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
   credential, or a network the runner does not have, which is what keeps them out of `ci.yml`.
   They consume `solver/` and never re-implement it; a rule that exists in both places is a rule
-  that will disagree.
+  that will disagree. The eval queries live here too, `eval_*.py`, one per question
+  ([ADR-0009](docs/adr/0009-store-what-was-observed-derive-every-judgement.md) — *eval is seven
+  questions, not a harness*), and they consume `solver/` for the same reason: a replay against a
+  re-written counter measures a rule that never ran.
+- **`runs/` — the Step stream of every Run that reached an Attempt**, one file per Run, written
+  only by `scripts/promote_run.py` and never by the Solver, which has no git binary
+  ([ADR-0009](docs/adr/0009-store-what-was-observed-derive-every-judgement.md)). It is **data, not
+  code**: excluded from lint in `pyproject.toml` and held to none of the conventions above.
+  Excluded from the conformance scan for the same reason — it earns a `MAP.md` row like every
+  other top-level area, and nothing else here reaches inside it. **It is not excluded from the
+  secret scan**, which is the one check that has to see it, and the promotion that writes it
+  re-runs that scan first because nothing human stands between the file and the push.
 
 ## 7. Evolution — what is rigid, what moves
 

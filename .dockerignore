@@ -1,7 +1,8 @@
 # An allowlist, because of what the two excluded things cost. `.env` and `.env.<event>` must never
 # reach a layer — secrets arrive by `--env-file` at run time (ADR-0008) — and an allowlist means a
-# later `COPY` cannot widen onto one by accident. `.git/`, `.cache/` and `state/` are the rest of
-# this repository by volume, and none of it is the image's business.
+# later `COPY` cannot widen onto one by accident. `.git/`, `.cache/`, `state/` and `runs/` are the
+# rest of this repository by volume, and none of it is the image's business — `runs/` least of all,
+# since a promoted Step stream is what the image *produces* and never something it reads.
 *
 !solver
 

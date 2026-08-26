@@ -317,7 +317,21 @@ variable quietly unset and runs the full window on a credential that was never t
 inside and afterwards indistinguishable from bad luck. **A loud refusal at 10:15, with a human
 standing there, is setup rather than Intervention.**
 _Avoid_: error, crash, validation failure, precondition. A **crash** is one of the two ways a Run
-*ends*; a Refusal is a Run that never began.
+*ends*; a Refusal is a Run that never began. A **model refusal** — the solving model declining to
+work a Challenge it was handed — is a third thing again, derived offline from a stream, joined to
+Category, and never a Cut cause (ADR-0014).
+
+**Promotion**:
+Copying a finished Run's Step stream out of `/state` and into `runs/<run_id>.jsonl`, where it
+survives the laptop. It is a separate step run by an agent afterwards and never part of a Run — the
+Solver has no git binary and never commits while it is working (ADR-0009) — and it copies the stream
+**as written**, never a projection of it, because every number v1 turns on is uncalibrated and a
+projection freezes the one reading that was live when it was taken. Observation and Claim bodies
+stay behind in `/state`, so a promoted stream keeps its digests and can never be resolved back to
+the content they were taken over. Because nothing human stands between the file and the push,
+promotion **re-scans for a declared credential and refuses on a hit**.
+_Avoid_: export, archive, publish, upload. Not **Run state** either — promotion moves one file out
+of it and leaves the rest where it is.
 
 **Reserved tail**:
 The last stretch of a Run's window, held back by the scheduler rather than found at the end, with

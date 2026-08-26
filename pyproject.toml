@@ -12,6 +12,11 @@ cache-dir = ".cache/ruff"
 # reformat rather than a rewrite. The 100-column wrap in `docs/` is a prose convention and does
 # not reach code.
 line-length = 120
+# `runs/` is promoted Step streams — data this repository stores, not code it writes (ADR-0009).
+# Named here rather than left to the absence of `.py` files under it, because the exclusion is a
+# decision: a Run that ever writes a `.py` into its record must not turn the linter red for it.
+# The one check `runs/` is emphatically *not* excluded from is the secret scan.
+extend-exclude = ["runs"]
 
 [tool.ruff.lint]
 # Ruff's own default set, written down rather than inherited. CI installs ruff unversioned, and an
