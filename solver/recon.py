@@ -134,6 +134,7 @@ def recon(
     recorder: Recorder,
     attempt_id: str,
     limits: Limits = Limits(),
+    first_step: int = 1,
 ) -> Recon:
     """Work a Challenge's prose and its files, and return what was observed.
 
@@ -141,10 +142,13 @@ def recon(
     an optional one: a password or a second download host lives only in prose, and 22 of 74 Brunner
     Challenges ship no file at all, so it is the only input three Challenges in ten ever have.
 
-    Steps are numbered from one — recon *is* the opening of an Attempt, so its Steps are the
-    Attempt's first Steps, and how many it spent is `len(result.probes)`.
+    Steps are numbered from `first_step` — recon *is* the opening of an Attempt, so its Steps are
+    the Attempt's first Steps, and how many it spent is `len(result.probes)`. The default is one and
+    the parameter exists for the one Step that can precede it: a Challenge that needs an Instance is
+    deployed before anything is reconned, and two counters would put two Steps at the same address
+    (`solver/instance.py`).
     """
-    cascade = _Cascade(recorder, attempt_id, limits, flag_pattern)
+    cascade = _Cascade(recorder, attempt_id, limits, flag_pattern, first_step - 1)
     cascade.read(description)
     for artefact in artefacts:
         cascade.work(Path(artefact))
@@ -155,13 +159,13 @@ class _Cascade:
     """One Attempt's recon in flight: the deadline it shares, the Steps it has spent, and the one
     place a probe of any kind — external command or in-process reading — becomes a record."""
 
-    def __init__(self, recorder: Recorder, attempt_id: str, limits: Limits, flag_pattern: str) -> None:
+    def __init__(self, recorder: Recorder, attempt_id: str, limits: Limits, flag_pattern: str, spent: int = 0) -> None:
         self._recorder = recorder
         self._attempt_id = attempt_id
         self._limits = limits
         self._pattern = flag_pattern
         self._deadline = time.monotonic() + limits.cascade_seconds
-        self._step = 0
+        self._step = spent
         self.probes: list[Probe] = []
 
     def read(self, description: str) -> None:

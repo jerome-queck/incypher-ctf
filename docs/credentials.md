@@ -154,7 +154,19 @@ two auth headers, which the API rejects outright. Two things that are easy to ge
 competition the Solver enters. BrunnerCTF runs a Danish platform under a strict no-AI policy
 alongside the Global one that permits AI; pointing the Solver at the wrong host is a
 disqualification, not a misconfiguration. See
-[`competitions/brunnerctf-2026-global.md`](competitions/brunnerctf-2026-global.md).
+[`competitions/brunnerctf-2026-global.md`](competitions/brunnerctf-2026-global.md). It is also
+what selects the Board profile: every event's `docs/competitions/<event>.board.json` is baked into
+the image, and the Solver refuses to start where none of them claims this URL — so an image
+pointed at the Danish board plays nothing rather than playing it under Global's rules.
+
+Three more non-secrets share the file, and one of them is load-bearing. **`RUN_ID` names the Run
+and the Solver refuses to mint it**: the Run's absolute deadline is stamped under
+`/state/runs/<RUN_ID>` and is consulted only when there is no window there already, so an id
+generated at startup would hand every restart a fresh window with nobody there to notice. Reuse it
+to rejoin a Run and change it to start a new one. `RUN_SECONDS` shortens the window and can never
+lengthen one, which is what makes a half-hour practice Run possible without any variable being able
+to buy a Run past the event it is playing. `CODEX_MODEL` is the model every rung of the chain runs
+at, config rather than a constant because which model a subscription serves is account state.
 
 ## One board at a time, and the overlay for the others
 

@@ -204,8 +204,13 @@ class Watch:
     stuck puts the judgement back inside the narrative this whole module removes it from, and is
     close to an ideal prompt for inducing "impossible".
 
-    `steps` is seeded rather than started at zero because recon **is** the opening of an Attempt and
-    its probes are the Attempt's first Steps.
+    `steps` counts what the **model** spent, and is seeded only where an earlier turn of the same
+    Attempt already spent some. It deliberately does not count the Attempt's opening: ADR-0005's
+    ~20-Step figure is a measurement of *model trajectories*, and a Run against BrunnerCTF on
+    26 August 2026 showed what conflating the two costs — a Challenge shipping files gave the model
+    10 Steps before the cliff and one shipping none gave it 18, for the same cliff and the same
+    budget. What an Attempt costs in wall-clock is the `Deadline`'s question; this one is only ever
+    *is the model going anywhere*.
     """
 
     deadline: Deadline
