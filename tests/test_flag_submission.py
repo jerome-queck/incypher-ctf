@@ -184,6 +184,26 @@ def test_the_derived_attempt_line_is_never_swept(recorder):
     assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
 
 
+def test_a_model_that_quotes_its_carried_line_still_nominates_the_flag_it_states(recorder):
+    """The derived rule is a **body** rule, and applying it to the model's prose only costs.
+
+    `said` arrives as one whole message per element (`solver/run.py`), so a `[derived]` line quoted
+    anywhere in a message would take every Flag in that message down with it — and the message most
+    likely to quote one is a model summarising what it tried in the same breath as what it found.
+    Nothing is protected by refusing it: a candidate reaching the sweep through prose alone is
+    `unverified` by construction, which is exactly what the rule wants
+    ([#107](https://github.com/jerome-queck/incypher-ctf/issues/107)).
+    """
+    said = [
+        f'The carried line reads {DERIVED} Attempt 1 · approach: "LSB stego on the PNG" · 18 steps.\n'
+        f"That approach worked once I fixed the bit order; the flag is {FLAG}."
+    ]
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID, said=said)
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, UNVERIFIED)]
+
+
 def test_this_modules_own_report_never_authorises_a_candidate(recorder):
     """The sweep writes what it found into an Observation like everything else, so a second sweep
     reads its own last report. A candidate must not survive on the strength of being mentioned."""
