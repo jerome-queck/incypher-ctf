@@ -105,11 +105,9 @@ its own entry below.
 Our hold on an Instance — held from the deploy that creates it to the terminate that releases it,
 and **not** the same span as an Attempt. The word was parked through v1's early design on the
 grounds that a hold one-to-one with an Attempt names nothing Attempt does not already name; it is
-coined here because that stopped being true. The two end at different moments in both directions: a
-submitted Flag releases the Lease while the Attempt is still open, and an Instance can expire under
-an Attempt that is still working. So "the Instance expired", "the Attempt was cut" and "we let the
-Lease go" are three separate facts
-([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). What
+coined here because a hold and the work done under it are different things: "the Instance expired",
+"the Attempt was cut" and "we let the Lease go" are three separate facts, and only the middle one is
+about the Challenge. What
 a Lease costs is Mana, which is why one nobody is working is not free, and why the boundary leak
 sweep looks for a Lease nothing is using rather than an Instance nothing is using.
 _Avoid_: hold, reservation, session, and *Instance* — the Instance is the Board's running copy of a
@@ -239,35 +237,32 @@ One bounded run of the Solver at a single Challenge — from the recon that open
 is cut or a Flag is submitted. A Challenge may be attempted many times: **an Attempt ends, a
 Challenge does not.** Keeping the two apart is what makes giving up cheap, because what is
 abandoned is an Attempt and never the Challenge (ADR-0005). **Consecutive Attempts on one Challenge
-are ordinary**, not a special case — a cut Challenge is never terminal, so Order can rank it first
-again and take it back to back. What carries across is the environment — the workdir is the memory —
-plus the approach labels, never a conclusion
+are ordinary**, not a special case — a cut Challenge is never terminal, so Order can pick one it has
+already worked. What carries across is the environment — the workdir is the memory — plus the
+approach labels, never a conclusion
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)).
-**An early stop is not what produces one.** When the solving agent ends its turn with budget left
-the orchestrator re-invokes *inside the same Attempt*, and that is a new **Turn** — the entry below,
-and the unit that keeps the give-up button ADR-0005 removed out of the model's reach.
+**An early stop does not produce a second Attempt.** When the solving agent ends its turn with
+budget left the orchestrator re-invokes *inside the same Attempt*, and what that produces is a new
+**Turn** — the entry below.
 _Avoid_: run (see the Run entry above — the whole competition window, holding many Attempts),
-session, try. Not **Lease** either — a Lease can outlive several Attempts, which is why it is a
-separate word.
+session, try. Not **Lease** either — a Lease is our hold on the Instance and an Attempt is the work
+done under it, which is why it is a separate word.
 
 **Turn**:
 One invocation of the vendor's agent — the spawn, everything it does, and the moment it comes back
-or is killed — and the unit the vendor **meters**. Turns exist at all because the vendor's agent
-drives its own loop and can end one with budget left
+or is killed — and the unit the vendor **meters**. Turns exist because the vendor's agent drives its
+own loop and can end one with budget left
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)); an
-Attempt holds one or more of them, because the orchestrator answers that early stop by re-invoking
-over the same working directory rather than letting the model end the Attempt — which would be the
-give-up button ADR-0005 removed, arriving by the back door. The stall counters are fresh per turn
-and the approach label is not, because the counters are about one trajectory and a turn that
-re-orients itself is not the same trajectory.
+Attempt holds one or more of them, because the orchestrator answers an early stop by re-invoking
+over the same working directory rather than letting that stop end the Attempt — which would be the
+give-up button ADR-0005 removed, arriving by the back door.
 **It is the middle of three units and never a synonym for either neighbour**: an Attempt is what a
-Cut ends, a Turn is what a premature quit is about, and a Step is one command inside one. The record
-turns on the difference — a turn's tokens ride its own invocation's Step and every Step inside the
-turn reports zero, so a reader holding one word for two units reads hundreds of Steps where a
-handful of turns were meant
+Cut ends, a Turn is what a premature quit is about, and a Step is one command inside a Turn. Holding
+one word for two of them is how a Run's own record gets misread — what a model *spent* is counted
+per Turn and what it *did* is counted per Step, so the two are never the same number
 ([ADR-0022](docs/adr/0022-an-unmeasured-turn-is-marked-and-never-guessed.md)).
 _Avoid_: iteration, round, cycle. **Invocation** is fine in prose about the CLI and is not the unit's
-name. Not **Attempt** — one Attempt is many Turns, and the two end for different reasons.
+name. Not **Attempt** — one Attempt holds one or more Turns, and the two end for different reasons.
 
 **Step**:
 One cycle of an Attempt: a command is proposed, it runs, and its output is recorded as an
