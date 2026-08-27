@@ -165,7 +165,7 @@ jobs:
           shipped = tracked(BOARDS)
           assert shipped, f"no Board profile in {BOARDS} — the .dockerignore allowlist shipped none"
           for rules in shipped:
-              assert rules.url and rules.flag_wrapper and rules.window_seconds > 0, rules
+              assert rules.url and rules.flag_wrappers and rules.window_seconds > 0, rules
           print(f"{len(shipped)} profile(s): " + ", ".join(f"{one.event} -> {one.url}" for one in shipped))
           PY
 
