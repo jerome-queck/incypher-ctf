@@ -75,6 +75,8 @@ class Conduct:
     a model takes turns inside an Attempt and a Category holds whole ones, so the same counter has
     to answer both without double-counting either."""
 
+    # Keyed on `Attempt.ref`, never on `attempt_id`: the same id is reused by every Run of one
+    # Board, so a set of bare ids counted the four gate Runs' 27 attempts as 11.
     seen: set[str] = field(default_factory=set)
     turns: int = 0
     barren: int = 0
@@ -82,10 +84,12 @@ class Conduct:
     quit_early: int = 0
     prose: int = 0
 
-    def took(self, attempt_id: str, turn: stream.Turn, *, said: Sequence[str], refused: bool, early: bool) -> None:
+    def took(
+        self, attempt: stream.Attempt, turn: stream.Turn, *, said: Sequence[str], refused: bool, early: bool
+    ) -> None:
         """One turn. `said` is counted rather than kept, because how much prose was reachable is
         what decides whether the refused column is a measurement or a blank."""
-        self.seen.add(attempt_id)
+        self.seen.add(attempt.ref)
         self.turns += 1
         self.barren += 1 if turn.barren else 0
         self.refused += 1 if refused else 0
@@ -141,7 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     by_model.setdefault(turn.model or "(unnamed)", Conduct()),
                     whole,
                 ):
-                    group.took(attempt.attempt_id, turn, said=said, refused=refused, early=early)
+                    group.took(attempt, turn, said=said, refused=refused, early=early)
 
     if not whole.turns:
         print("\nno turn in these streams — the model was never invoked")

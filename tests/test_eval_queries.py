@@ -379,3 +379,48 @@ def test_a_ratio_over_no_checkpoint_at_all_is_blank_rather_than_zero():
     then went quiet. Those are opposite findings — the same reason the token rate blanks."""
     assert eval_context._ratio((), 12) == ""
     assert eval_context._ratio((6,), 12) == "0.50"
+
+
+def two_runs_sharing_an_attempt_id(tmp_path):
+    """Two Runs at the same Board, which is what a practice weekend produces.
+
+    `attempt_id` is `<challenge_id>-<attempt_sequence>`, so both Runs call their first Attempt at
+    Challenge 94 `94-1`. That is correct — the id is unique within a Run — and it is exactly what a
+    query keying on the bare id gets wrong.
+    """
+    for run_id in ("gate-a", "gate-b"):
+        written = Written(tmp_path / run_id, run_id=run_id).opened()
+        written.attempt("94-1", challenge_id=94, category="Web").turn(("ls", b"a")).over(CUT_NOVELTY)
+        written.closed()
+    return [tmp_path / run_id / "runs" / run_id / "stream.jsonl" for run_id in ("gate-a", "gate-b")]
+
+
+def test_two_runs_sharing_an_attempt_id_are_two_attempts(tmp_path, capsys):
+    """The defect the four gate Runs surfaced: they all worked one Board, so 27 attempts carried 11
+    distinct `attempt_id` strings and a query keying on the bare id reported 11. Single-Run testing
+    could never see it, which is why this test loads two."""
+    paths = two_runs_sharing_an_attempt_id(tmp_path)
+
+    runs = stream.load([str(path) for path in paths])
+    attempts = [one for run in runs for one in run.attempts if one.opened]
+
+    assert len(attempts) == 2
+    assert len({one.attempt_id for one in attempts}) == 1, "the ids must collide, or this proves nothing"
+    assert len({one.ref for one in attempts}) == 2
+
+    code, said = answer(eval_refusals, paths, capsys)
+    everything = next(line.split() for line in said.splitlines() if line.strip().startswith("everything"))
+    assert code == 0
+    assert everything[1] == "2", f"counted {everything[1]} attempts across two Runs"
+
+
+def test_the_budget_does_not_merge_two_runs_attempts_into_one_row(tmp_path, capsys):
+    """Merging them summed the minutes of separate Attempts into a row nobody asked for."""
+    paths = two_runs_sharing_an_attempt_id(tmp_path)
+
+    code, said = answer(eval_budget, paths, capsys)
+    rows = [line for line in said.splitlines() if "94-1" in line]
+
+    assert code == 0
+    assert len(rows) == 2, f"expected one row per Run, got {len(rows)}"
+    assert any("gate-a" in row for row in rows) and any("gate-b" in row for row in rows)

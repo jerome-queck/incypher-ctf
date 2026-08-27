@@ -225,7 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ["attempt", "category", "model steps", "replayed to", "would cut", "really ended", "checkpoints at"],
             [
                 [
-                    attempt.attempt_id,
+                    attempt.ref,
                     attempt.category,
                     len(attempt.model_steps),
                     replayed.steps,
