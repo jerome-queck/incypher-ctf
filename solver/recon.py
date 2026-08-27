@@ -37,7 +37,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from solver.record import NO_MODEL, Recorder
+from solver.record import NO_MODEL, SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.shell import run
 
 # Every line the cascade writes about itself opens with this — the name of an in-process probe, a
@@ -169,14 +169,18 @@ class _Cascade:
         self.probes: list[Probe] = []
 
     def read(self, description: str) -> None:
+        """The one input that is the Board *stating* the Challenge rather than the Solver working
+        it. Both probes here read bytes nothing produced, so both are recorded as the Board's
+        (ADR-0019) — a flag-format example in the prose is the Board showing the wrapper's shape."""
         prose = description.strip().encode()
         self._probe(
             "description",
             f"{MARK} the description as the Board gave it",
             "description",
             lambda _budget: (0, prose or f"{MARK} the Board's description is empty".encode()),
+            source=SOURCE_BOARD,
         )
-        self._scan("description", prose, "the description")
+        self._scan("description", prose, "the description", source=SOURCE_BOARD)
 
     def work(self, artefact: Path) -> None:
         """Dispatch, then the floor, then the branch — in that order, because the floor is what
@@ -214,12 +218,13 @@ class _Cascade:
             self._command(subject, (*OD, "-j", str(size - OD_EDGE_BYTES), "-N", str(OD_EDGE_BYTES), str(artefact)))
         self._scan(subject, artefact, str(artefact))
 
-    def _scan(self, subject: str, source: Path | bytes, where: str) -> None:
+    def _scan(self, subject: str, read_from: Path | bytes, where: str, *, source: str = SOURCE_SOLVER) -> None:
         self._probe(
             subject,
             f"{MARK} flag-scan for {self._pattern} — {where}",
             "flag-scan",
-            lambda budget: _scanned(source, where, self._pattern, self._limits.artefact_bytes, budget),
+            lambda budget: _scanned(read_from, where, self._pattern, self._limits.artefact_bytes, budget),
+            source=source,
         )
 
     def _command(self, subject: str, argv: tuple[str, ...]) -> tuple[int | None, bytes]:
@@ -236,6 +241,8 @@ class _Cascade:
         command: str,
         tool: str,
         produce: Callable[[float], tuple[int | None, bytes]],
+        *,
+        source: str = SOURCE_SOLVER,
     ) -> tuple[int | None, bytes]:
         """Record one probe, whatever it turned out to be — including one the budget left no room
         for, which is a fact about the Attempt and so is written like any other.
@@ -253,6 +260,7 @@ class _Cascade:
             # be applied to an earlier Run (`solver/record.py`).
             command_normalised=" ".join(command.split()),
             tool=tool,
+            source=source,
         )
         left = self._deadline - time.monotonic()
         if left <= 0:
@@ -328,7 +336,7 @@ def _shannon(window: bytes) -> float:
     return sum(-(share := window.count(value) / len(window)) * math.log2(share) for value in set(window))
 
 
-def _scanned(source: Path | bytes, where: str, pattern: str, cap: int, budget: float) -> tuple[int | None, bytes]:
+def _scanned(read_from: Path | bytes, where: str, pattern: str, cap: int, budget: float) -> tuple[int | None, bytes]:
     """The Board's own Flag wrapper, over as much of the artefact as the caps allow.
 
     The pattern comes from the Board profile at runtime, so a wrapper this code has never seen
@@ -345,7 +353,7 @@ def _scanned(source: Path | bytes, where: str, pattern: str, cap: int, budget: f
     carried = b""
     stopped = ""
     try:
-        for block in _blocks(source, cap):
+        for block in _blocks(read_from, cap):
             read += len(block)
             for match in matcher.finditer(carried + block):
                 if match.group(0) not in found:
@@ -369,11 +377,11 @@ def _scan_report(found: list[bytes], read: int, stopped: str) -> bytes:
     return f"{MARK} scanned {read} bytes{stopped}\n{len(found)} match(es): ".encode() + shown + more.encode()
 
 
-def _blocks(source: Path | bytes, cap: int) -> Iterator[bytes]:
-    if isinstance(source, bytes):
-        yield source[:cap]
+def _blocks(read_from: Path | bytes, cap: int) -> Iterator[bytes]:
+    if isinstance(read_from, bytes):
+        yield read_from[:cap]
         return
-    with source.open("rb") as reading:
+    with read_from.open("rb") as reading:
         while cap > 0 and (block := reading.read(min(SCAN_BLOCK_BYTES, cap))):
             cap -= len(block)
             yield block

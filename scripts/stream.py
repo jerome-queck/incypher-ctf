@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from solver.codex import ADAPTER, TOOLS  # noqa: E402
-from solver.record import CLAIMS, FLAG, OBSERVATIONS  # noqa: E402
+from solver.record import CLAIMS, FLAG, OBSERVATIONS, SOURCE_SOLVER  # noqa: E402
 
 # Where a promoted stream lands, and what every query reads when it is given no path of its own.
 # The live copy under `/state` is one argument away and carries the bodies with it.
@@ -94,6 +94,9 @@ class Step:
     command_raw: str
     command_normalised: str
     tool: str
+    # Where the bytes came from — the Solver's own work, or the Board stating the Challenge
+    # (ADR-0019). A replay that could not see it could not re-derive what authorised a submission.
+    source: str
     exit_code: int | None
     duration_ms: int
     observation_digest: str
@@ -350,6 +353,7 @@ def _step(record: dict[str, Any], *, ended: bool) -> Step:
         command_raw=str(record.get("command_raw", "")),
         command_normalised=str(record.get("command_normalised", "")),
         tool=str(record.get("tool", "")),
+        source=str(record.get("source", SOURCE_SOLVER)),
         exit_code=record.get("exit_code"),
         duration_ms=int(record.get("duration_ms", 0)),
         observation_digest=str(record.get("observation_digest", "")),

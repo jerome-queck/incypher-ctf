@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from solver import shell as shell_module
 from solver.recon import BRANCHES, DISPATCH, OD, STRINGS, Limits, recon
-from solver.record import Recorder
+from solver.record import SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.redaction import Redactor
 
 BRUNNER = r"brunner{[^}]*}"
@@ -58,6 +58,11 @@ def tools(result, subject=None) -> list[str]:
 
 def records(recorder) -> list[dict]:
     return [json.loads(line) for line in recorder.stream_path.read_text().splitlines()]
+
+
+def sources(recorder, subject: str) -> set[str]:
+    ends = (one for one in records(recorder) if one["record"] == "step-end")
+    return {one["source"] for one in ends if subject in one["command_raw"]}
 
 
 def test_the_mime_type_decides_the_branch_and_the_extension_never_does(tmp_path, recorder):
@@ -110,6 +115,19 @@ def test_the_description_is_read_for_the_boards_wrapper(recorder):
     result = scout(recorder, "Warm-up: brunner{prose_is_an_artefact} was left in the notes.")
 
     assert "brunner{prose_is_an_artefact}" in output_for(result, "flag-scan")
+
+
+def test_the_description_and_its_scan_are_recorded_as_the_boards_own_statement(tmp_path, recorder):
+    """Both probes over the prose read bytes the Board handed us; every probe over an artefact
+    reads bytes off the working directory. The record carries which, because what authorises a Flag
+    submission is what the Solver's own work produced (ADR-0019)."""
+    artefact = tmp_path / "note.txt"
+    artefact.write_bytes(b"nothing here\n")
+
+    scout(recorder, "Flag format: brunner{like_this}", artefacts=[artefact])
+
+    assert sources(recorder, "the description") == {SOURCE_BOARD}
+    assert sources(recorder, str(artefact)) == {SOURCE_SOLVER}
 
 
 def test_the_wrapper_comes_from_the_board_and_not_from_the_code(tmp_path, recorder):

@@ -30,7 +30,7 @@ from solver.flag import (
     confusables,
 )
 from solver.instance import EXPIRED_AT_SUBMIT_SAYS, INSTANCE_EXPIRED_AT_SUBMIT, Instances, Lease, Terms
-from solver.record import NO_MODEL, Recorder
+from solver.record import NO_MODEL, SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.redaction import Redactor
 
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
@@ -119,7 +119,7 @@ def spend(flags, candidates, *, slots=Slots(max_attempts=0), lease=None, last_ca
     )
 
 
-def observe(recorder, command, output, *, attempt_id=ATTEMPT_ID, tool="shell"):
+def observe(recorder, command, output, *, attempt_id=ATTEMPT_ID, tool="shell", source=SOURCE_SOLVER):
     """One Step of an Attempt, exactly as the adapter would have written it."""
     step = recorder.step_begin(
         attempt_id=attempt_id,
@@ -127,6 +127,7 @@ def observe(recorder, command, output, *, attempt_id=ATTEMPT_ID, tool="shell"):
         command_raw=command,
         command_normalised=command,
         tool=tool,
+        source=source,
     )
     step.end(exit_code=0, output=output, usage=NO_MODEL)
 
@@ -158,6 +159,50 @@ def test_a_flag_the_model_only_stated_is_never_authorised_by_its_own_prose(recor
 
     assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, UNVERIFIED)]
     assert found[0].command == ""
+
+
+def test_a_flag_the_board_stated_in_its_own_prose_is_never_a_candidate(recorder):
+    """The other half of the Claim/Observation split, and the one ADR-0009 did not name.
+
+    A Challenge's description reaches the record through the Observation channel because recon
+    records everything it does uniformly — not because anything ran. So a Flag-shaped string in it
+    is the Board showing the wrapper's shape, and it authorises nothing
+    ([#98](https://github.com/jerome-queck/incypher-ctf/issues/98)).
+    """
+    observe(
+        recorder, "[recon] the description as the Board gave it", f"Flag format: {FLAG}".encode(), source=SOURCE_BOARD
+    )
+
+    assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
+
+
+def test_a_board_stated_flag_the_model_repeats_is_nominated_and_never_authorised(recorder):
+    """The one case a Flag really does live in the prose — a freebie — is not lost by the rule
+    above: the model reads the description in its opening frame and states it, which is exactly
+    what `unverified` is for. What it may never be is `observed`."""
+    observe(
+        recorder, "[recon] the description as the Board gave it", f"the flag is {FLAG}".encode(), source=SOURCE_BOARD
+    )
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID, said=[f"the flag is {FLAG}"])
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, UNVERIFIED)]
+
+
+def test_a_stream_written_before_the_source_field_existed_still_authorises(recorder):
+    """ADR-0009's third stability rule, exercised: readers access by name with a default. A Run
+    promoted before this field was written must replay as it behaved, so an absent source is the
+    Solver's own work rather than a Board statement."""
+    observe(recorder, "cat note.txt", FLAG.encode())
+    stripped = [
+        json.dumps({key: value for key, value in json.loads(line).items() if key != "source"})
+        for line in recorder.stream_path.read_text().splitlines()
+    ]
+    recorder.stream_path.write_text("\n".join(stripped) + "\n")
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
 
 
 def test_a_claim_alone_puts_nothing_in_the_sweep(recorder):

@@ -55,6 +55,19 @@ NEVER_REDACTED = ("flag",)
 OBSERVATIONS = "observations"
 CLAIMS = "claims"
 
+# Where a Step's bytes came from, and the third thing the two channels above cannot say. A Challenge
+# **description** reaches `observations/` because the recon cascade records everything it does
+# uniformly — not because anything ran — so the Board stating the shape of a Flag would otherwise be
+# read as the Solver having found one ([ADR-0019](../docs/adr/0019-the-boards-statement-of-a-challenge-is-not-evidence.md)).
+# It is one directory with a field rather than a third channel, for the reason the two above are
+# not: a Claim and an Observation have different *bodies*, where these have the same body and
+# differ only in who produced it.
+#
+# The fact, never the judgement — "may this authorise a submission" is a policy in `solver/flag.py`
+# and is expected to change, so it is derived from this and never frozen into the record.
+SOURCE_SOLVER = "solver"
+SOURCE_BOARD = "board"
+
 # Why an Attempt ended, and the whole of it — the vocabulary `CONTEXT.md` closes, given one home
 # here because this is where a cause becomes permanent. `cut:novely` reaching the stream is a typo
 # nothing goes red for, and it breaks the eval query that counts which counter fired.
@@ -326,13 +339,24 @@ class Recorder:
         return shown
 
     def step_begin(
-        self, *, attempt_id: str, step_index: int, command_raw: str, command_normalised: str, tool: str
+        self,
+        *,
+        attempt_id: str,
+        step_index: int,
+        command_raw: str,
+        command_normalised: str,
+        tool: str,
+        source: str = SOURCE_SOLVER,
     ) -> Step:
         """Record that a command is in flight, and hand back the only route to its end.
 
         `command_raw` is kept beside `command_normalised` because normalisation *is* the repetition
         counter's rule: keep only the normalised form and no future rule can be applied to a past
         Run.
+
+        `source` defaults to the Solver's own work, which is what all but two Steps of an Attempt
+        are — so the caller that has to say otherwise is the one probing what the Board merely
+        stated.
         """
         identity = {
             "attempt_id": attempt_id,
@@ -340,6 +364,7 @@ class Recorder:
             "command_raw": command_raw,
             "command_normalised": command_normalised,
             "tool": tool,
+            "source": source,
         }
         self._write("step-begin", identity)
         return Step(self, identity, self._mono())

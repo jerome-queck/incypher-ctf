@@ -93,8 +93,9 @@ class Wire:
         return (404, b'{"success": false}', "")
 
     def described(self, found):
-        """Brunner's own shape: every Challenge's prose ends in a flag-format section, and some of
-        them show an example — which recon reads, the sweep finds, and the gate spends a slot on."""
+        """Brunner's own shape: a Challenge's prose commonly ends in a flag-format section, and
+        every real one that does spells the wrapper out — which recon reads, the sweep finds, and
+        the gate spends a slot on."""
         return f"Find the flag in {found['name']}. Flag format: brunner{{like_this}}"
 
     def _graded(self, sent):
@@ -534,3 +535,21 @@ def test_the_step_cliff_is_charged_for_the_models_steps_and_not_for_reconning_a_
     assert len(reconned) > 2, "recon spent nothing, so this proves nothing about what it is charged"
     # The carried line is what the next turn is told, and it is the count the cliff reads.
     assert re.search(r"\b2 steps\b", agent.prompts[-1]), agent.prompts[-1].split("Earlier Attempts")[-1][:200]
+
+
+def test_the_flag_format_example_in_the_boards_prose_is_never_submitted(tmp_path):
+    """Four of the nine Brunner descriptions our Runs persisted end in a flag-format section, and
+    every one of those four spells the wrapper out.
+
+    The Board stating the *shape* of a Flag is not the Solver having found one, so the example must
+    never reach the gate — it costs a slot on a decoy in the Run's first cycle, before the model has
+    done anything ([#98](https://github.com/jerome-queck/incypher-ctf/issues/98)).
+    """
+    clock = Clock()
+    wire = Wire(count=3)
+    run, _recorder = solver(tmp_path, wire, Agent(clock, wire=wire, solving=(2,)), clock)
+
+    run.work()
+
+    assert wire.submitted, "nothing was submitted at all, so this proves nothing"
+    assert "brunner{like_this}" not in [flag for _challenge_id, flag in wire.submitted]

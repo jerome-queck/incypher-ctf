@@ -32,6 +32,8 @@ from solver.record import (
     CUT_NOVELTY,
     CUT_SELF_REPORTED_IMPOSSIBLE,
     FLAG,
+    SOURCE_BOARD,
+    SOURCE_SOLVER,
     Recorder,
     Usage,
 )
@@ -109,7 +111,7 @@ class Written:
         self.recorder.run_close(cause=cause)
         return stream.read(self.recorder.stream_path)
 
-    def _step(self, command, *, tool, output, exit_code, usage=NOTHING, seconds=1.0):
+    def _step(self, command, *, tool, output, exit_code, usage=NOTHING, seconds=1.0, source=SOURCE_SOLVER):
         self.step += 1
         begun = self.recorder.step_begin(
             attempt_id=self.attempt_id,
@@ -117,6 +119,7 @@ class Written:
             command_raw=command,
             command_normalised=command,
             tool=tool,
+            source=source,
         )
         self.clock.on(seconds)
         return begun.end(exit_code=exit_code, output=output, usage=usage)
@@ -335,6 +338,26 @@ def test_a_query_reads_a_promoted_stream_and_says_when_the_bodies_are_gone(run, 
     assert code == 0
     assert "bodies not beside this stream" in said
     assert "unmeasured rather than zero" in said
+
+
+def test_a_read_back_step_carries_where_its_bytes_came_from(tmp_path):
+    """A projection that dropped `source` would leave an offline replay unable to re-derive what
+    authorised a submission, which is the one thing a replay of a stored stream exists to do
+    (ADR-0019)."""
+    written = Written(tmp_path, run_id="sourced").opened()
+    written.attempt("1-1", challenge_id=1)
+    written._step(
+        "[recon] the description as the Board gave it",
+        tool="description",
+        output=b"prose",
+        exit_code=0,
+        source=SOURCE_BOARD,
+    )
+    written._step("cat note.txt", tool="shell", output=b"a fact", exit_code=0)
+
+    steps = written.closed().attempts[0].steps
+
+    assert [one.source for one in steps if one.tool in ("description", "shell")] == [SOURCE_BOARD, SOURCE_SOLVER]
 
 
 def test_a_sweep_that_left_something_held_is_named_as_the_leak(tmp_path, capsys):
