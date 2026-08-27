@@ -354,8 +354,9 @@ class Recorder:
         counter's rule: keep only the normalised form and no future rule can be applied to a past
         Run.
 
-        `source` defaults to the Solver's own work, which is what all but two Steps of a Run are —
-        so the caller that has to say otherwise is the one probing what the Board merely stated.
+        `source` defaults to the Solver's own work, which is what all but two Steps of an Attempt
+        are — so the caller that has to say otherwise is the one probing what the Board merely
+        stated.
         """
         identity = {
             "attempt_id": attempt_id,

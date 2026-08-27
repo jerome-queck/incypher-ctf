@@ -16,10 +16,10 @@ sweep that read its last report would authorise a candidate on the strength of h
 A fourth is skipped, and it is the one the Claim/Observation pair could not name
 ([ADR-0019](../docs/adr/0019-the-boards-statement-of-a-challenge-is-not-evidence.md)): a Challenge's
 **description** and the flag-scan over it are recorded as Observations because the recon cascade
-records everything it does uniformly, not because anything ran. Nearly every Board's prose ends in a
-flag-format section and some of them show an example, so the string a sweep finds there is the
-Board's own statement of the wrapper's shape. The record says which Steps those are — `source` —
-and this module reads it.
+records everything it does uniformly, not because anything ran. Four of the nine Brunner
+descriptions our Runs persisted end in a flag-format section, and **all four spell the wrapper
+out** — so wherever that section exists the sweep finds a decoy, every time. The record says which
+Steps those are — `source` — and this module reads it.
 
 How strongly a candidate is known is the whole of the policy below, and there are four answers:
 

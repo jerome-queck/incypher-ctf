@@ -269,8 +269,8 @@ The Board's own words about a Challenge — its description — as opposed to an
 The third thing beside Claim and Observation, and the one the pair could not name: the model did not
 write it, and nothing ran to produce it. It is recorded, because 22 of 74 Brunner Challenges ship no
 file at all and a password or a second download host lives nowhere else, and it **authorises
-nothing** — nearly every Board's prose ends in a flag-format section, so a Flag-shaped string there
-is the Board showing the wrapper's shape (ADR-0019).
+nothing** — a Board's prose commonly ends in a flag-format section, and every Brunner one that does
+spells the wrapper out, so a Flag-shaped string there is the Board showing its shape (ADR-0019).
 _Avoid_: prose alone (the Solver's own `[recon]` lines are prose too), and not *Observation* — the
 record keeps both in one channel and tells them apart by `source`
 

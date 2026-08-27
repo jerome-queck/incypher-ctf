@@ -14,25 +14,38 @@ says what it is worth.
 
 ## What was measured
 
-A live Run against `global.brunnerctf.dk`, from the built image, 26 August 2026
-([#98](https://github.com/jerome-queck/incypher-ctf/issues/98)). Every Brunner Challenge's
-description ends in a flag-format section and some of them show an example. Challenge 94
-*Blackboard* ends in one, and the Run's first cycle read it, swept it, ranked it `observed` — the
-strength that authorises — and sent it:
+Live Runs against `global.brunnerctf.dk`, from the built image, 26 August 2026
+([#98](https://github.com/jerome-queck/incypher-ctf/issues/98)).
+
+**A flag-format section is not universal, and where it appears it always shows an example.** Of the
+nine distinct Brunner descriptions our Runs persisted, **four carry one — and all four of those spell
+the wrapper out**, `brunner{…}` and all. That second number is the one that matters: the section is
+not a hazard the Solver sometimes meets, it is a decoy the Solver meets *every time* the section is
+there. #98 reports the first half as "every Challenge"; our own streams do not support that and do
+support the worse half.
+
+Challenge 94 *Blackboard* is one of the four. In `runs/brunner-gate-1.jsonl`, Attempt 94-1 read the
+prose, swept it, ranked the example `observed` — the strength that authorises — and sent it:
 
 ```
-step 2  description  [recon] the description as the Board gave it
-step 3  flag-scan    [recon] flag-scan for brunner\{[^}]{1,256}\} — the description
-step 17 flag-submit  [flag] submit brunner{arthur_is_gone}
-        → the Board graded it 'incorrect' (HTTP 200)
+step  2  description  [recon] the description as the Board gave it
+step  3  flag-scan    [recon] flag-scan for brunner\{[^}]{1,256}\} — the description
+step 14  flag-replay  [flag] replay — [recon] the description as the Board gave it
+         → not replayed — the Solver's own probe, so this candidate stays observed
+step 15  flag-submit  [flag] submit brunner{arthur_is_gone}
+         → the Board graded it 'incorrect' (HTTP 200)
 ```
 
-One wrong submission per Challenge whose prose shows an example, in the Run's first cycle, before
-the model had done anything. On Brunner that costs only the Board-wide
-`incorrect_submissions_per_min` limiter — which is every *other* Challenge's budget. On a Board
-that limits attempts it costs a real slot on a decoy, and `solver/flag.py` treats an unstated
-maximum as limited precisely because that is the expensive direction. It also sits badly beside
-Brunner's own rule against indiscriminate submissions.
+That Attempt's model never ran a command — the CLI errored at step 12 — so the whole submission is
+the deterministic cascade's, spent in the Run's first cycle on a string the Board had simply shown
+us. On Brunner that costs only the Board-wide `incorrect_submissions_per_min` limiter — which is
+every *other* Challenge's budget. On a Board that limits attempts it costs a real slot on a decoy,
+and `solver/flag.py` treats an unstated maximum as limited precisely because that is the expensive
+direction. It also sits badly beside Brunner's own rule against indiscriminate submissions.
+
+The replay at step 14 is worth reading, because #98 reports it as a second defect and it is not one:
+`solver/flag.py` already asks `stall.replayable` before replaying, so nothing was handed to a shell.
+The refusal is *why* the candidate stayed `observed` rather than a consequence of having run.
 
 ## The obvious fix, and why not
 
@@ -47,7 +60,7 @@ in a file the Board handed us. A filter on "is this replayable" cannot tell thos
 the property it reads is *how the Step was performed* and the property that matters is *where its
 bytes came from*.
 
-So the axis is provenance, not spelling. Two probes of a Run read bytes the Board stated — the
+So the axis is provenance, not spelling. Two probes of an Attempt read bytes the Board stated — the
 description, and the flag-scan over it. Every other probe of every Attempt reads the working
 directory or a process's output. That line is knowable at the moment the Step is recorded and at no
 point afterwards, which is what settles where the fix goes.
