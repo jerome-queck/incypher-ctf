@@ -1,5 +1,14 @@
 # The Board's statement of a Challenge is not evidence
 
+> **One clause superseded by
+> [ADR-0021](0021-a-string-the-board-stated-waits-for-the-reserved-tail.md).** *A prose match is not
+> demoted* below reasons that a freebie Flag the model restates "reaches the gate as `unverified`,
+> which is the strength it deserves". It does reach the gate — and on a Board reporting
+> `max_attempts` 0 it is *submitted outright*, which is this record's own defect arriving by the
+> other door. Such a candidate is now `stated`, a fifth strength, held back from every live
+> submission and released by the reserved tail. Everything else here stands, and the `source` fact
+> below is what makes that rule possible.
+
 **A Flag submission is authorised by what the Solver's own work produced, and by nothing it was
 told.** A Challenge's description is the Board stating the puzzle, so a Flag-shaped string in it
 authorises nothing — whatever channel the Solver happened to record it through.

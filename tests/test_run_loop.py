@@ -553,3 +553,26 @@ def test_the_flag_format_example_in_the_boards_prose_is_never_submitted(tmp_path
 
     assert wire.submitted, "nothing was submitted at all, so this proves nothing"
     assert "brunner{like_this}" not in [flag for _challenge_id, flag in wire.submitted]
+
+
+def test_a_model_that_repeats_the_boards_flag_format_is_held_rather_than_submitted(tmp_path):
+    """#98 closed the sweep's route to the flag-format example. This is the model's.
+
+    The description reaches the model verbatim, so a model narrating what it tried can restate the
+    example — and an `unverified` candidate is submitted outright where the Board states unlimited
+    attempts, which every Brunner Challenge does. It arrives `stated` instead, and waits for the
+    tail ([#111](https://github.com/jerome-queck/incypher-ctf/issues/111)).
+    """
+    clock = Clock()
+    wire = Wire(count=2)
+    parroting = stream(
+        commands=(("echo hello", "hello\n", 0),),
+        says=["APPROACH: reading the brief — the flag format is brunner{like_this}"],
+    )
+    agent = Agent(clock, wire=wire, scripted={1: parroting, 2: parroting})
+    run, recorder = solver(tmp_path, wire, agent, clock)
+
+    run.work()
+
+    held = [one["command_raw"] for one in records(recorder, "step-end") if one["command_raw"].startswith("[flag] hold")]
+    assert any("brunner{like_this}" in one for one in held), "the Board's own example went straight to the gate"
