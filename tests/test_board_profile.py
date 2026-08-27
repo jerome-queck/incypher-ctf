@@ -28,7 +28,7 @@ LEDGER = (
 RULES = Rules(
     event="somewhere",
     url=BOARD,
-    flag_wrapper=r"flag\{[^}]{1,256}\}",
+    flag_wrappers=(r"flag\{[^}]{1,256}\}",),
     window_seconds=5.5 * 3600,
     prohibitions=("do not brute-force flags",),
 )
@@ -125,7 +125,7 @@ def test_web_search_is_a_profile_value_defaulting_on():
     """ADR-0014: default on, and a Board's rules turn it off. Neither Board we hold rules for bans
     it, so both read true — and the default is what a Board we have never met gets."""
     assert rules_for("https://global.brunnerctf.dk", TRACKED).web_search is True
-    assert Rules(event="e", url="u", flag_wrapper="f", window_seconds=1).web_search is True
+    assert Rules(event="e", url="u", flag_wrappers=("f",), window_seconds=1).web_search is True
 
 
 def test_the_board_that_needs_a_team_key_says_so_and_the_one_that_does_not_says_nothing():
@@ -144,7 +144,7 @@ def test_a_required_credential_nothing_declares_is_refused(tmp_path):
             {
                 "event": "x",
                 "url": BOARD,
-                "flag_wrapper": "f",
+                "flag_wrappers": ["f"],
                 "window_seconds": 1,
                 "prohibitions": [],
                 "requires": ["SOME_KEY_NOBODY_DECLARED"],
@@ -177,7 +177,7 @@ def test_a_mistyped_key_is_refused_rather_than_silently_defaulted(tmp_path):
             {
                 "event": "x",
                 "url": BOARD,
-                "flag_wrapper": "f",
+                "flag_wrappers": ["f"],
                 "window_seconds": 1,
                 "prohibitions": [],
                 "prohibition": [],
@@ -193,10 +193,49 @@ def test_a_window_that_buys_no_attempt_is_refused_where_it_is_read(tmp_path):
     """So the close a Board's rules state is the one bound that can ever have run out, and the
     refusal at boot can name it rather than guessing between three."""
     (tmp_path / "x.board.json").write_text(
-        json.dumps({"event": "x", "url": BOARD, "flag_wrapper": "f", "window_seconds": 0, "prohibitions": []})
+        json.dumps({"event": "x", "url": BOARD, "flag_wrappers": ["f"], "window_seconds": 0, "prohibitions": []})
     )
 
     with pytest.raises(Refusal, match="buys no Attempt"):
+        rules_for(BOARD, tmp_path)
+
+
+def test_a_profile_still_stating_one_wrapper_under_the_old_key_fails_loudly(tmp_path):
+    """The singular key is retired rather than aliased. A profile carrying it fails twice over —
+    missing `flag_wrappers`, and an unknown `flag_wrapper` — which is the loud failure a silently
+    defaulted pattern would not have been: a Run sweeping for nothing finds nothing and says so
+    only five and a half hours later."""
+    (tmp_path / "x.board.json").write_text(
+        json.dumps({"event": "x", "url": BOARD, "flag_wrapper": "f", "window_seconds": 1, "prohibitions": []})
+    )
+
+    with pytest.raises(Refusal, match="flag_wrappers"):
+        rules_for(BOARD, tmp_path)
+
+
+@pytest.mark.parametrize("stated", ["f", [], {}, None])
+def test_a_wrapper_list_that_is_not_a_non_empty_list_is_refused(tmp_path, stated):
+    """A bare string is the shape someone migrating from the old key writes, and it would iterate
+    character by character into a set of one-character patterns. A Board with no wrapper at all is a
+    Board nothing could ever be swept for."""
+    (tmp_path / "x.board.json").write_text(
+        json.dumps({"event": "x", "url": BOARD, "flag_wrappers": stated, "window_seconds": 1, "prohibitions": []})
+    )
+
+    with pytest.raises(Refusal, match="not a non-empty list"):
+        rules_for(BOARD, tmp_path)
+
+
+def test_a_wrapper_stated_twice_is_refused(tmp_path):
+    """It buys no match one entry would not, and costs a second full pass over every artefact the
+    cascade reads — inside a deadline the whole cascade shares."""
+    (tmp_path / "x.board.json").write_text(
+        json.dumps(
+            {"event": "x", "url": BOARD, "flag_wrappers": ["f", "g", "f"], "window_seconds": 1, "prohibitions": []}
+        )
+    )
+
+    with pytest.raises(Refusal, match="twice"):
         rules_for(BOARD, tmp_path)
 
 
@@ -215,7 +254,7 @@ def test_a_close_with_no_timezone_is_refused(tmp_path):
             {
                 "event": "x",
                 "url": BOARD,
-                "flag_wrapper": "f",
+                "flag_wrappers": ["f"],
                 "window_seconds": 1,
                 "prohibitions": [],
                 "closes_at": "2026-09-22T16:00:00",
@@ -253,7 +292,7 @@ def test_a_flag_wrapper_that_does_not_compile_refuses_before_anything_is_swept()
     """Inside an Attempt this is an Observation and correct; at boot it is five and a half hours of
     sweeping nothing, silently."""
     with pytest.raises(Refusal, match="does not compile"):
-        discovered(*Wire().boards(), Rules(event="x", url=BOARD, flag_wrapper="flag{[", window_seconds=1))
+        discovered(*Wire().boards(), Rules(event="x", url=BOARD, flag_wrappers=("flag{[",), window_seconds=1))
 
 
 def test_mana_that_is_neither_a_total_nor_an_absence_refuses_the_run():
@@ -340,7 +379,7 @@ def test_the_whole_profile_as_discovered_is_writable_at_run_open():
     assert set(recorded) >= {
         "event",
         "url",
-        "flag_wrapper",
+        "flag_wrappers",
         "window_seconds",
         "closes_at",
         "web_search",

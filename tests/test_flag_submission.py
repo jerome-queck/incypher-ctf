@@ -96,7 +96,7 @@ def flags_of(recorder, wire, *, runner=None, now=NOON, pace=None, instances=None
     return Flags(
         board,
         recorder,
-        flag_pattern=WRAPPER,
+        flag_wrappers=(WRAPPER,),
         instances=instances,
         pace=pace,
         runner=runner or Runner((0, FLAG.encode())),
@@ -277,10 +277,38 @@ def test_the_wrapper_comes_from_the_board_profile_rather_than_from_this_code(rec
 
 def test_a_wrapper_that_does_not_compile_is_an_observation_rather_than_a_raise(recorder):
     board = Board("https://board.example", "", Wire().transport)
-    flags = Flags(board, recorder, flag_pattern="zephyr{[", now=lambda: NOON)
+    flags = Flags(board, recorder, flag_wrappers=("zephyr{[",), now=lambda: NOON)
 
     assert flags.candidates(attempt_id=ATTEMPT_ID) == ()
     assert "did not compile" in recorder.run_dir.joinpath("observations").glob("*.out").__next__().read_text()
+
+
+def test_a_flag_in_either_shape_the_board_states_becomes_a_candidate(recorder):
+    """A Board stating two shapes gets both swept for, over the same bytes, primary shape first —
+    never one alternation, which would let whichever match starts earlier eat the other."""
+    board = Board("https://board.example", "", Wire().transport)
+    observe(recorder, "cat note.txt", b"noise FLAG-abczephyr{the_planted_one} more\n")
+    flags = Flags(board, recorder, flag_wrappers=(WRAPPER, r"FLAG-[0-9a-f]{1,64}"), now=lambda: NOON)
+
+    found = flags.candidates(attempt_id=ATTEMPT_ID)
+
+    assert [candidate.text for candidate in found] == [FLAG, "FLAG-abc"]
+
+
+def test_one_broken_wrapper_costs_only_itself_and_the_others_still_sweep(recorder):
+    """A Board that publishes a pattern we cannot compile is a fact about the Board. Giving up on
+    every shape because one was malformed would be a Run finding nothing for a reason nobody chose."""
+    board = Board("https://board.example", "", Wire().transport)
+    observe(recorder, "cat note.txt", FLAG.encode())
+    flags = Flags(board, recorder, flag_wrappers=("zephyr{[", WRAPPER), now=lambda: NOON)
+
+    found = flags.candidates(attempt_id=ATTEMPT_ID)
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
+    swept = next(
+        one for one in sorted(recorder.run_dir.joinpath("observations").glob("*.out")) if "swept" in one.read_text()
+    )
+    assert "did not compile" in swept.read_text()
 
 
 def test_a_candidate_is_reproduced_by_replaying_its_exact_command_once(recorder):
@@ -628,7 +656,7 @@ def test_the_replay_runs_in_the_working_directory_under_caps_that_are_parameters
     runner = Runner((0, FLAG.encode()))
     board = Board("https://board.example", "", Wire().transport)
     limits = ReplayLimits(seconds=1.5, output_bytes=4096)
-    flags = Flags(board, recorder, flag_pattern=WRAPPER, runner=runner, limits=limits, now=lambda: NOON)
+    flags = Flags(board, recorder, flag_wrappers=(WRAPPER,), runner=runner, limits=limits, now=lambda: NOON)
 
     spend(flags, flags.candidates(attempt_id=ATTEMPT_ID), workdir=WORKDIR)
 

@@ -463,7 +463,7 @@ class Run:
         found = recon.recon(
             challenge.description,
             held.artefacts,
-            flag_pattern=self.profile.rules.flag_wrapper,
+            flag_wrappers=self.profile.rules.flag_wrappers,
             recorder=self._recorder,
             attempt_id=held.attempt_id,
             first_step=self._steps.next_index(),

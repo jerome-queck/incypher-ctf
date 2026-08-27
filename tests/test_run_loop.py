@@ -29,7 +29,7 @@ CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "not valid"}}')
 RULES = Rules(
     event="offline",
     url=BOARD,
-    flag_wrapper=WRAPPER,
+    flag_wrappers=(WRAPPER,),
     window_seconds=3600,
     prohibitions=("no broad automated enumeration — an immediate ban",),
 )
@@ -219,7 +219,7 @@ def solver(tmp_path, wire, agent, clock, *, lasting=3600.0, dials=DIALS, cycle_s
     flags = Flags(
         board,
         recorder,
-        flag_pattern=WRAPPER,
+        flag_wrappers=(WRAPPER,),
         instances=instances,
         pace=Pace(per_minute=found.submissions_per_minute),
         limits=ReplayLimits(seconds=1.0),

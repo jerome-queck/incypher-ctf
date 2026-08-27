@@ -58,7 +58,7 @@ def test_a_step_that_never_finished_leaves_its_begin_behind(recorder):
 
 
 def test_every_record_is_sequence_numbered_without_a_gap(recorder):
-    recorder.run_open(board_profile={"flag_wrapper": "brunner{.*}"})
+    recorder.run_open(board_profile={"flag_wrappers": ["brunner{.*}"]})
     a_step(recorder).end(exit_code=0, output=b"", usage=usage())
     recorder.run_close(cause="window-closed")
 
@@ -250,7 +250,7 @@ def test_attempt_close_records_a_cause_rather_than_an_outcome(recorder):
 def test_run_open_carries_the_board_profile_as_discovered(recorder):
     """ADR-0008's named failure is a profile that discovers the *wrong* thing, and a post-mortem
     cannot otherwise tell "behaved wrongly" from "read the Board wrongly"."""
-    profile = {"url": "https://global.brunnerctf.dk", "flag_wrapper": "brunner{.*}", "chall_manager": False}
+    profile = {"url": "https://global.brunnerctf.dk", "flag_wrappers": ["brunner{.*}"], "chall_manager": False}
 
     recorder.run_open(board_profile=profile)
 

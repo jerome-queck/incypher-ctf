@@ -1,7 +1,9 @@
 {
   "event": "brunnerctf-2026-global",
   "url": "https://global.brunnerctf.dk",
-  "flag_wrapper": "brunner\\{[^}]{1,256}\\}",
+  "flag_wrappers": [
+    "brunner\\{[^}]{1,256}\\}"
+  ],
   "window_seconds": 172800,
   "closes_at": null,
   "web_search": true,

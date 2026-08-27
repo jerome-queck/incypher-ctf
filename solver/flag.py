@@ -63,6 +63,7 @@ from solver.instance import Instances, Lease, submission_shape
 from solver.record import NO_MODEL, SOURCE_SOLVER, Recorder
 from solver.shell import run
 from solver.stall import replayable
+from solver.wrapper import compiled, found_in
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
 # gives: a reader of a stream can tell what the Solver said from what a tool said, and never takes
@@ -284,7 +285,7 @@ class Flags:
         board: Board,
         recorder: Recorder,
         *,
-        flag_pattern: str,
+        flag_wrappers: Sequence[str],
         instances: Instances | None = None,
         pace: Pace | None = None,
         limits: ReplayLimits = ReplayLimits(),
@@ -295,7 +296,7 @@ class Flags:
     ) -> None:
         self._board = board
         self._recorder = recorder
-        self._pattern = flag_pattern
+        self._wrappers = tuple(flag_wrappers)
         self._instances = instances
         self._pace = pace or Pace()
         self._limits = limits
@@ -314,10 +315,11 @@ class Flags:
         `observed` because the Observations are read first; a string that appears nowhere else comes
         back `unverified` and is submitted as that.
         """
-        matcher = self._matcher()
-        if matcher is None:
-            told = f"{MARK} the Board's Flag wrapper {self._pattern!r} did not compile — nothing was swept"
-            self._record(SWEEP, f"{MARK} sweep {self._pattern}", told.encode(), attempt_id, ok=False)
+        shapes = ", ".join(self._wrappers)
+        matchers, broken = compiled(self._wrappers)
+        if not matchers:
+            told = f"{MARK} {'; '.join(broken) or 'the Board states no Flag wrapper'} — nothing was swept"
+            self._record(SWEEP, f"{MARK} sweep {shapes}", told.encode(), attempt_id, ok=False)
             return ()
         found: dict[str, Candidate] = {}
         swept = 0
@@ -329,17 +331,18 @@ class Flags:
                 stated += 1
                 continue
             swept += 1
-            for text in _in_body(self._recorder.run_dir / ref, matcher):
+            for text in _in_body(self._recorder.run_dir / ref, matchers):
                 found.setdefault(text, Candidate(text, OBSERVED, command=command, ref=ref))
-        for text in (match for prose in said for match in _matches(prose.encode(), matcher)):
+        for text in (match for prose in said for match in _matches(prose.encode(), matchers)):
             found.setdefault(text, Candidate(text, UNVERIFIED))
         ordered = tuple(sorted(found.values(), key=lambda candidate: candidate.rank))
         self._record(
             SWEEP,
-            f"{MARK} sweep {self._pattern}",
+            f"{MARK} sweep {shapes}",
             (
-                f"{MARK} swept {swept} observation(s), passed over {stated} the Board stated, "
-                f"and no claim\n{_listed(ordered)}"
+                f"{MARK} swept {swept} observation(s), passed over {stated} the Board stated, and no claim"
+                + "".join(f"\n{MARK} {one}" for one in broken)
+                + f"\n{_listed(ordered)}"
             ).encode(),
             attempt_id,
             ok=True,
@@ -462,15 +465,6 @@ class Flags:
         if lease is not None and self._instances is not None:
             self._instances.terminate(challenge_id, attempt_id=attempt_id, after_flag=True)
 
-    def _matcher(self) -> re.Pattern[bytes] | None:
-        """The Board's own Flag wrapper, read from the profile and never hardcoded — so a Board we
-        have never met costs a config value. One it publishes that we cannot compile is a fact about
-        the Board, reported as an Observation rather than raised at an Attempt already in flight."""
-        try:
-            return re.compile(self._pattern.encode())
-        except re.error:
-            return None
-
     def _record(self, tool: str, command: str, output: bytes, attempt_id: str, *, ok: bool) -> str:
         """One Step per thing this module did, as a `step-begin` / `step-end` pair like any other."""
         step = self._recorder.step_begin(
@@ -538,7 +532,7 @@ def _bodies_of(stream: Path, attempt_id: str) -> Iterator[tuple[str, str, str]]:
         yield str(record.get("command_raw", "")), str(ref), str(record.get("source", SOURCE_SOLVER))
 
 
-def _in_body(body: Path, matcher: re.Pattern[bytes]) -> Iterator[str]:
+def _in_body(body: Path, matchers: Sequence[re.Pattern[bytes]]) -> Iterator[str]:
     """Every wrapper match in one Observation's body, minus any derived record the body carries.
 
     `carry.DERIVED` marks the one line per Attempt holding a model-authored approach label. That
@@ -556,17 +550,22 @@ def _in_body(body: Path, matcher: re.Pattern[bytes]) -> Iterator[str]:
     try:
         for line in _lines(body):
             if DERIVED.encode() not in line:
-                yield from _matches(line, matcher)
+                yield from _matches(line, matchers)
     except OSError:
         # A body file that has been deleted under us costs the candidates it held and nothing more:
         # `/state` is deletable mid-Run by design, and a Run that died sweeping is the worse trade.
         return
 
 
-def _matches(text: bytes, matcher: re.Pattern[bytes]) -> Iterator[str]:
-    """The wrapper's matches in some bytes — one line of a body, or one whole model message."""
-    for match in matcher.finditer(text):
-        yield match.group(0).decode("utf-8", "replace")
+def _matches(text: bytes, matchers: Sequence[re.Pattern[bytes]]) -> Iterator[str]:
+    """Every wrapper's matches in some bytes — one line of a body, or one whole model message.
+
+    Every shape the Board states is matched separately, never as one alternation built out of them:
+    an alternative that starts earlier eats the bytes a later one would have matched
+    (`solver/wrapper.py`).
+    """
+    for match in found_in(text, matchers):
+        yield match.decode("utf-8", "replace")
 
 
 def _lines(body: Path) -> Iterator[bytes]:

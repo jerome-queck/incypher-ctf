@@ -8,6 +8,7 @@ reaches the thing that could break it is this prompt.
 """
 
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 
 from solver import prompt
@@ -20,7 +21,7 @@ from solver.prompt import APPROACH, DERIVATION, compose
 RULES = Rules(
     event="somewhere",
     url="https://board.example",
-    flag_wrapper=r"brunner\{[^}]{1,256}\}",
+    flag_wrappers=(r"brunner\{[^}]{1,256}\}",),
     window_seconds=5.5 * 3600,
     prohibitions=("no broad automated enumeration — an immediate ban", "no sandbagging"),
 )
@@ -72,13 +73,17 @@ def test_every_prohibition_this_boards_rules_impose_is_named():
 
 
 def test_a_board_whose_rules_forbid_nothing_says_so_rather_than_showing_an_empty_list():
-    text = prompt_for(rules=Rules(event="e", url="u", flag_wrapper="f", window_seconds=1))
+    text = prompt_for(rules=Rules(event="e", url="u", flag_wrappers=("f",), window_seconds=1))
 
     assert prompt.NO_PROHIBITIONS in text
 
 
-def test_the_flag_wrapper_is_the_boards_own_and_never_hardcoded():
-    assert RULES.flag_wrapper in prompt_for()
+def test_every_flag_wrapper_is_the_boards_own_and_never_hardcoded():
+    """Every shape, not just the primary one — a model told only the first would read a Flag in the
+    second as not a Flag at all."""
+    text = prompt_for(rules=replace(RULES, flag_wrappers=(*RULES.flag_wrappers, r"FLAG-[0-9a-f]{1,64}")))
+
+    assert all(one in text for one in (*RULES.flag_wrappers, r"FLAG-[0-9a-f]{1,64}"))
 
 
 def test_submitting_is_not_the_models():

@@ -56,7 +56,7 @@ UNREADABLE = "unreadable"
 # Every key a tracked profile may carry. Read strictly, because the failure mode of a permissive
 # reader is a mistyped key silently taking its default — which is a prohibition that never reached a
 # prompt, on a Board whose rules make one of them an immediate ban.
-REQUIRED_KEYS = frozenset({"event", "url", "flag_wrapper", "window_seconds", "prohibitions"})
+REQUIRED_KEYS = frozenset({"event", "url", "flag_wrappers", "window_seconds", "prohibitions"})
 OPTIONAL_KEYS = frozenset({"closes_at", "web_search", "requires"})
 
 
@@ -73,7 +73,10 @@ class Rules:
 
     event: str
     url: str
-    flag_wrapper: str
+    # A list, and never one pattern built out of several: joining two shapes into `a|b` loses the
+    # Flags the first would have found, which is `solver/wrapper.py`'s whole subject. The first
+    # entry is the Board's primary shape.
+    flag_wrappers: tuple[str, ...]
     window_seconds: float
     prohibitions: tuple[str, ...] = ()
     closes_at: dt.datetime | None = None
@@ -120,7 +123,7 @@ class Profile:
         return {
             "event": self.rules.event,
             "url": self.rules.url,
-            "flag_wrapper": self.rules.flag_wrapper,
+            "flag_wrappers": list(self.rules.flag_wrappers),
             "window_seconds": self.rules.window_seconds,
             "closes_at": self.rules.closes_at.isoformat() if self.rules.closes_at else None,
             "web_search": self.rules.web_search,
@@ -200,7 +203,7 @@ def _asked(board: Board, anyone: Board, rules: Rules) -> Profile:
             f"were not composed by CTFd and an empty collection from it means nothing. Failing this is "
             f"not transient and is never retried into a pass (ADR-0016)"
         )
-    _compiles(rules.flag_wrapper)
+    _compiles(rules.flag_wrappers)
     listed = board.challenges()
     instanced = sum(1 for one in listed if one.get("type") == INSTANCED_TYPE)
     chall_manager = _ledger(board)
@@ -246,13 +249,29 @@ def _read(path: Path) -> Rules:
     return Rules(
         event=str(document["event"]),
         url=str(document["url"]).rstrip("/"),
-        flag_wrapper=str(document["flag_wrapper"]),
+        flag_wrappers=_wrappers(path, document["flag_wrappers"]),
         window_seconds=float(document["window_seconds"]),
         prohibitions=tuple(str(one) for one in document["prohibitions"]),
         closes_at=_moment(path, document.get("closes_at")),
         web_search=bool(document.get("web_search", True)),
         requires=_requires(path, document.get("requires") or ()),
     )
+
+
+def _wrappers(path: Path, stated: Any) -> tuple[str, ...]:
+    """The Flag shapes this Board states, in the order it states them.
+
+    A non-empty list, because a Board with no wrapper is a Board nothing could ever be swept for,
+    and that is a refusal at boot rather than a Run that quietly finds nothing. A repeat is refused
+    too: it buys no match a single entry would not, and costs a second full pass over every artefact
+    the cascade reads.
+    """
+    if not isinstance(stated, list) or not stated:
+        raise Refusal(f"{BOOT} {path} states flag_wrappers {stated!r}, which is not a non-empty list of patterns")
+    named = tuple(str(one) for one in stated)
+    if repeated := sorted({one for one in named if named.count(one) > 1}):
+        raise Refusal(f"{BOOT} {path} states the Flag wrapper {', '.join(repr(one) for one in repeated)} twice")
+    return named
 
 
 def _requires(path: Path, stated: Any) -> tuple[str, ...]:
@@ -283,16 +302,21 @@ def _moment(path: Path, stated: Any) -> dt.datetime | None:
     return moment
 
 
-def _compiles(wrapper: str) -> None:
-    """A wrapper that does not compile sweeps nothing, and does it silently — `solver/flag.py`
-    records the failure as an Observation inside an Attempt already in flight, which is correct
-    there and five and a half hours too late here."""
-    try:
-        re.compile(wrapper)
-    except re.error as broken:
-        raise Refusal(
-            f"{BOOT} the Flag wrapper {wrapper!r} does not compile — {broken}. Nothing would ever be swept"
-        ) from None
+def _compiles(wrappers: tuple[str, ...]) -> None:
+    """Every wrapper, because one that does not compile sweeps nothing and does it silently.
+
+    `solver/flag.py` records the failure as an Observation inside an Attempt already in flight,
+    which is correct there and five and a half hours too late here. **Any** one of them failing
+    refuses the Run: a profile that states two shapes wants both, and starting on one of them is
+    starting on a Board we have half-read.
+    """
+    for wrapper in wrappers:
+        try:
+            re.compile(wrapper)
+        except re.error as broken:
+            raise Refusal(
+                f"{BOOT} the Flag wrapper {wrapper!r} does not compile — {broken}. Nothing would ever be swept"
+            ) from None
 
 
 def _ledger(board: Board) -> str:

@@ -165,7 +165,7 @@ jobs:
           shipped = tracked(BOARDS)
           assert shipped, f"no Board profile in {BOARDS} — the .dockerignore allowlist shipped none"
           for rules in shipped:
-              assert rules.url and rules.flag_wrapper and rules.window_seconds > 0, rules
+              assert rules.url and rules.flag_wrappers and rules.window_seconds > 0, rules
           print(f"{len(shipped)} profile(s): " + ", ".join(f"{one.event} -> {one.url}" for one in shipped))
           PY
 
@@ -195,7 +195,7 @@ jobs:
           found = recon(
               "The archive password is in the notes.",
               sorted(shed.iterdir()),
-              flag_pattern=r"brunner\{[^}]*\}",
+              flag_wrappers=(r"brunner\{[^}]*\}",),
               recorder=Recorder(pathlib.Path("/state"), run_id="ci", redactor=Redactor({})),
               attempt_id="ci-1",
           )

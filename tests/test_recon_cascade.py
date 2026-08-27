@@ -33,11 +33,11 @@ def recorder(tmp_path):
     return Recorder(tmp_path / "state", run_id="run-1", redactor=Redactor({}))
 
 
-def scout(recorder, description="", artefacts=(), *, pattern=BRUNNER, limits=None):
+def scout(recorder, description="", artefacts=(), *, wrappers=(BRUNNER,), limits=None):
     return recon(
         description,
         artefacts,
-        flag_pattern=pattern,
+        flag_wrappers=wrappers,
         recorder=recorder,
         attempt_id="attempt-1",
         limits=limits or Limits(),
@@ -136,14 +136,46 @@ def test_the_wrapper_comes_from_the_board_and_not_from_the_code(tmp_path, record
     artefact = tmp_path / "note.txt"
     artefact.write_bytes(b"nothing here but flag{another_boards_wrapper}\n")
 
-    board = scout(recorder, artefacts=[artefact], pattern=r"flag\{[^}]*\}")
-    elsewhere = scout(recorder, artefacts=[artefact], pattern=BRUNNER)
+    board = scout(recorder, artefacts=[artefact], wrappers=(r"flag\{[^}]*\}",))
+    elsewhere = scout(recorder, artefacts=[artefact], wrappers=(BRUNNER,))
 
     found = output_for(board, "flag-scan", subject="note.txt")
     missed = output_for(elsewhere, "flag-scan", subject="note.txt")
 
     assert "flag{another_boards_wrapper}" in found
     assert "flag{another_boards_wrapper}" not in missed
+
+
+def test_every_wrapper_the_board_states_is_scanned_for_and_none_eats_another(tmp_path, recorder):
+    """The trap `solver/wrapper.py` exists for, end to end. The second shape's match starts *earlier*
+    in these bytes, so a single `a|b` alternation would consume the `brunner{` after it and answer
+    with the decoy alone — worse than scanning for the primary shape by itself."""
+    artefact = tmp_path / "note.txt"
+    artefact.write_bytes(b"noise FLAG-abcbrunner{the_real_flag} more\n")
+
+    second = r"FLAG-[0-9a-f]{1,64}"
+
+    result = scout(recorder, artefacts=[artefact], wrappers=(BRUNNER, second))
+    joined = scout(recorder, artefacts=[artefact], wrappers=(f"{BRUNNER}|{second}",))
+
+    found = output_for(result, "flag-scan", subject="note.txt")
+    assert "brunner{the_real_flag}" in found
+    assert "FLAG-abc" in found
+    # The route a single pattern leaves open, and what it costs — this is the whole reason the
+    # profile states a list.
+    assert "brunner{the_real_flag}" not in output_for(joined, "flag-scan", subject="note.txt")
+
+
+def test_a_second_wrapper_costs_no_second_step_and_no_second_read(tmp_path, recorder):
+    """The cascade shares one deadline, so a re-read per pattern would spend a later artefact's
+    budget on bytes this one has already seen."""
+    artefact = tmp_path / "note.txt"
+    artefact.write_bytes(b"nothing here\n")
+
+    one = scout(recorder, artefacts=[artefact], wrappers=(BRUNNER,))
+    two = scout(recorder, artefacts=[artefact], wrappers=(BRUNNER, r"FLAG-[0-9a-f]{1,64}"))
+
+    assert tools(one) == tools(two)
 
 
 def test_a_zip_is_listed_by_the_one_branch_the_census_justifies(tmp_path, recorder):
@@ -271,7 +303,7 @@ def test_one_enormous_match_does_not_become_the_whole_block(tmp_path, recorder):
     greedy = tmp_path / "greedy.bin"
     greedy.write_bytes(b"brunner{" + b"a" * 50_000 + b"}")
 
-    scan = output_for(scout(recorder, artefacts=[greedy], pattern=r"brunner\{.*\}"), "flag-scan", "greedy.bin")
+    scan = output_for(scout(recorder, artefacts=[greedy], wrappers=(r"brunner\{.*\}",)), "flag-scan", "greedy.bin")
 
     assert "1 match(es)" in scan
     assert len(scan) < 500
