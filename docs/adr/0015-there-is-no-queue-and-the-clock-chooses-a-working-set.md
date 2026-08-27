@@ -153,6 +153,14 @@ tool schemas, paid fresh on every invocation, and since ADR-0014 makes each Atte
 `codex exec` it is a fixed per-Attempt tax. It is an independent floor under `L_min` and a second
 argument against spreading the clock thin.
 
+> **Per *turn*, not per Attempt**
+> ([ADR-0023](0023-an-attempt-holds-the-turn-loop-and-order-is-not-asked-between-turns.md)). An
+> Attempt is a turn loop rather than a single `codex exec`, so the tax is paid at every invocation
+> inside it. `v1-gate/94-2` is the measurement: eight turns, of which the seven that reported paid
+> **25–39k uncached input tokens each** before the model did anything, and re-read 1.08M tokens of
+> context between them. The conclusion is unchanged and strengthened — the floor under `L_min` is
+> higher than this record thought, and spreading the clock thin costs more, not less.
+
 ## Tier moves on evidence, and only upward
 
 Triage's Tier is a **prior**, and #18 established how weak a prior it is: an LLM asked for difficulty

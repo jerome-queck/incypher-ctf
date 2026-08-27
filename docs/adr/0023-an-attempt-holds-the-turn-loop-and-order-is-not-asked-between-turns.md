@@ -45,15 +45,20 @@ consequences:
 That is false under the mechanism the same record decided, and it is the load-bearing claim: it is
 why ADR-0014 concluded Way B needed no new Cut cause. Under the turn loop it is half-true — `Watch`
 is seeded with the Attempt's model Steps, so the **step cliff** carries across turns and does the
-catching. It is what ended every multi-turn Attempt in the gate Runs, `v1-gate/94-2` among them.
+catching. Of the four multi-turn Attempts in the gate Runs, it ended both of the two that a counter
+ended at all — `brunner-gate-3/94-1` and `v1-gate/94-2` — while the other two ended in a crash and
+in a Run that died with the Attempt still open. Two is thin evidence and is named as thin; what it
+is not is zero, which is what ADR-0014's mechanism would have produced.
 
 **Order would not have done what ADR-0014 assumed.**
 [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md) subtracts an anti-livelock
 term, `w_spend × max(time_norm, attempts_norm)`, and `attempts_norm` is `spent.attempts /
 attempts_full` — 6 by default, at weight 1.5. So "Order simply ranks the same Challenge first again"
-holds for one or two re-invocations and then stops holding: by the sixth, the Challenge carries the
-maximum spend penalty and Order ranks it *away*. ADR-0014 was written before ADR-0015 and assumed a
-ranking function that no longer exists. The two records do not compose, and this is where they part.
+holds for one or two re-invocations and then stops holding: by the sixth the term reads full and
+stays full, and the Challenge is ranked monotonically down under the largest single weight Order
+has — the one whose stated job is that *"it eventually does"* outweigh the rest. ADR-0014 was
+written before ADR-0015 and assumed a ranking function that no longer exists. The two records do not
+compose, and this is where they part.
 
 Under the turn loop they compose cleanly: `seconds` carries the anti-livelock load for a long
 trajectory, and `attempts` counts what Order itself did.
@@ -79,7 +84,8 @@ No field moves and no stream is rewritten. What moves is what two numbers *mean*
 being read as if ADR-0014 had run:
 
 - **`attempt_sequence` counts Order's picks, not re-invocations.** It is written at `attempt-open`
-  and read by `solver/schedule.py` as `_Spent.attempts`, the anti-livelock term above. An Attempt
+  from `solver/schedule.py`'s `_Spent.attempts` — the anti-livelock counter above, which Order keeps
+  for itself and never reads back off the record. An Attempt
   that ran eight turns increments it once, which is correct under this record and would have been an
   under-count under ADR-0014.
 - **An Attempt contributes one cause, not one per turn.** The five queries that read
@@ -88,7 +94,8 @@ being read as if ADR-0014 had run:
   before it ended themselves.
 
 **Eval question 5 is untouched by any of this.** It plots cumulative Flags against elapsed Run time
-from `run-open` and reads no per-Attempt field at all, so the loop cannot move its curve. It is
+from `run-open`, and while it reads an Attempt's Flag, close and Category, it reads no per-Attempt
+*count* or *cause* — nothing whose meaning the loop moves — so the loop cannot move its curve. It is
 named here because it was wrongly named as affected when this divergence was first written up
 ([#115](https://github.com/jerome-queck/incypher-ctf/issues/115)), and a record that leaves the
 wrong claim standing is how it gets re-derived.
@@ -110,11 +117,20 @@ is the test the glossary already applies to Run and Attempt.
 - **ADR-0014 keeps its reasoning and loses its mechanism.** Its section gains a forward pointer;
   ADR-0007's amendment, which quotes that mechanism as the reason a hold outlives an Attempt, is
   corrected in the same change.
-- **Two code comments stop describing a mechanism that never ran** — `solver/codex.py`'s note beside
-  `STOPPED` and `solver/instance.py`'s `Lease` docstring. Comments, not logic: nothing here changes
-  what the Solver does.
+- **Five sites stop describing a mechanism that never ran.** Two are comments — `solver/codex.py`
+  beside `STOPPED`, and `solver/instance.py`'s `Lease` docstring. Two are citations that had the
+  loop right and credited the record that decided against it, in `scripts/stream.py` and
+  `scripts/eval_refusals.py`. The fifth was neither: **`scripts/eval_instances.py` told a reader
+  that a hold spanning consecutive Attempts is correct rather than a leak**, in its docstring and in
+  a heading it prints — so eval question 7, the leak query, was excusing exactly the leak it exists
+  to find. Text in every case: nothing here changes what the Solver does.
 - **`CONTEXT.md` already describes this**, from [#114](https://github.com/jerome-queck/incypher-ctf/issues/114).
   The glossary reached the tree first and this record catches the decisions up to it.
+- **One number moves, and it is ADR-0015's.** That record measured the system prompt and tool
+  schemas at ~22k tokens and called it *"a fixed per-Attempt tax"*; under the loop it is paid at
+  every invocation inside the Attempt. `v1-gate/94-2`'s seven reporting turns each paid 25–39k
+  uncached input before doing anything. Its conclusion survives and gets stronger — the floor under
+  `L_min` is higher than it thought — and its paragraph is annotated rather than rewritten.
 - **The four promoted gate Runs are readable exactly as they stand.** They were written under the
   loop, so nothing about them was mis-recorded — only mis-explained.
 

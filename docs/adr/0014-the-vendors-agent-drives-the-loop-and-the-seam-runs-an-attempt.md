@@ -11,6 +11,11 @@
 > stands** — the vendor's agent driving its own loop, the workdir as the memory, the rejection of
 > `codex exec resume`, and the rule that an early stop must never become the give-up button ADR-0005
 > removed. That last one is exactly what the turn loop delivers; only its location moves.
+>
+> **One Consequence goes with it**, below: *"An Instance hold now spans consecutive Attempts on one
+> Challenge, which amends ADR-0007's 1:1 line."* It does not — the hold is released at the close of
+> every Attempt — so ADR-0007's 1:1 line was never overtaken. `CONTEXT.md` keeps **Lease** on the
+> ground ADR-0023 gives instead. Everything else in *Consequences* stands.
 
 [#17](https://github.com/jerome-queck/incypher-ctf/issues/17) was chartered to pick v1's default
 model and design a provider-abstraction seam behind it. It assumed the seam would be a completion

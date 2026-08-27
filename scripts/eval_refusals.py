@@ -20,7 +20,7 @@ Two things, and they are told apart by shape before any prose is read:
 - **A premature quit** is the vendor's agent ending its turn with the Attempt still running. It is
   visible in the lines alone: a spawn that exited 0 — came back of its own accord rather than being
   killed at the deadline — with another spawn after it in the same Attempt, because the orchestrator
-  only re-invokes when nothing had ended the Attempt. It is **ordinary**, not a fault: ADR-0014
+  only re-invokes when nothing had ended the Attempt. It is **ordinary**, not a fault: ADR-0023
   makes an early stop a new turn over the same working directory, precisely so that the model is
   never handed the give-up button ADR-0005 removed. The number is here to be watched, not zeroed.
 - **A barren turn** is a turn in which the model ran nothing at all. It may have talked at length;
