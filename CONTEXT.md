@@ -51,7 +51,14 @@ is a property of the Board, not of the domain** — IN-CYPHER's is `flag{…}`, 
 `brunner{.*}` with any text as the body, and a practice Board we have not met yet will have its
 own. So will its rules, its scoring, and its categories: each Board is read at the start of the
 event, not assumed. A Solver that hardcodes one event's wrapper finds nothing at the next.
-_Avoid_: answer, solution, key (a "key" here is a credential — see Team key)
+
+**A Board states its wrappers as a list, and a list of one is the ordinary case.** Where it states
+more, every shape is matched **separately** over the same bytes and they are never joined into one
+alternation — an alternative that starts earlier eats the bytes a later one would have matched, so
+the join finds *fewer* Flags than the first shape alone (ADR-0020). The first entry is the Board's
+primary shape and wins provenance on a tie.
+_Avoid_: answer, solution, key (a "key" here is a credential — see Team key). Not *the* wrapper
+either, where a Board states more than one — the singular is what invited the alternation.
 
 **Board**:
 One competition's CTFd instance — the thing the Solver enumerates, submits to, and is scored by.

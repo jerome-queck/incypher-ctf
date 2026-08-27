@@ -31,7 +31,6 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import math
-import re
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -39,6 +38,7 @@ from pathlib import Path
 
 from solver.record import NO_MODEL, SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.shell import run
+from solver.wrapper import compiled, found_in
 
 # Every line the cascade writes about itself opens with this — the name of an in-process probe, a
 # kill, a cap, a spent budget — so a reader of a stream can tell what the Solver said from what the
@@ -130,7 +130,7 @@ def recon(
     description: str,
     artefacts: Sequence[Path],
     *,
-    flag_pattern: str,
+    flag_wrappers: Sequence[str],
     recorder: Recorder,
     attempt_id: str,
     limits: Limits = Limits(),
@@ -148,7 +148,7 @@ def recon(
     deployed before anything is reconned, and two counters would put two Steps at the same address
     (`solver/instance.py`).
     """
-    cascade = _Cascade(recorder, attempt_id, limits, flag_pattern, first_step - 1)
+    cascade = _Cascade(recorder, attempt_id, limits, tuple(flag_wrappers), first_step - 1)
     cascade.read(description)
     for artefact in artefacts:
         cascade.work(Path(artefact))
@@ -159,11 +159,13 @@ class _Cascade:
     """One Attempt's recon in flight: the deadline it shares, the Steps it has spent, and the one
     place a probe of any kind — external command or in-process reading — becomes a record."""
 
-    def __init__(self, recorder: Recorder, attempt_id: str, limits: Limits, flag_pattern: str, spent: int = 0) -> None:
+    def __init__(
+        self, recorder: Recorder, attempt_id: str, limits: Limits, flag_wrappers: tuple[str, ...], spent: int = 0
+    ) -> None:
         self._recorder = recorder
         self._attempt_id = attempt_id
         self._limits = limits
-        self._pattern = flag_pattern
+        self._wrappers = flag_wrappers
         self._deadline = time.monotonic() + limits.cascade_seconds
         self._step = spent
         self.probes: list[Probe] = []
@@ -219,11 +221,14 @@ class _Cascade:
         self._scan(subject, artefact, str(artefact))
 
     def _scan(self, subject: str, read_from: Path | bytes, where: str, *, source: str = SOURCE_SOLVER) -> None:
+        """One Step per subject however many shapes the Board states — the bytes are read once and
+        every matcher applied to each block, because the cascade's deadline is shared and a re-read
+        per pattern would spend a later artefact's budget on bytes this one has already seen."""
         self._probe(
             subject,
-            f"{MARK} flag-scan for {self._pattern} — {where}",
+            f"{MARK} flag-scan for {', '.join(self._wrappers)} — {where}",
             "flag-scan",
-            lambda budget: _scanned(read_from, where, self._pattern, self._limits.artefact_bytes, budget),
+            lambda budget: _scanned(read_from, where, self._wrappers, self._limits.artefact_bytes, budget),
             source=source,
         )
 
@@ -336,17 +341,20 @@ def _shannon(window: bytes) -> float:
     return sum(-(share := window.count(value) / len(window)) * math.log2(share) for value in set(window))
 
 
-def _scanned(read_from: Path | bytes, where: str, pattern: str, cap: int, budget: float) -> tuple[int | None, bytes]:
-    """The Board's own Flag wrapper, over as much of the artefact as the caps allow.
+def _scanned(
+    read_from: Path | bytes, where: str, wrappers: tuple[str, ...], cap: int, budget: float
+) -> tuple[int | None, bytes]:
+    """Every Flag shape the Board states, over as much of the artefact as the caps allow.
 
-    The pattern comes from the Board profile at runtime, so a wrapper this code has never seen
-    costs a config value. A Board that publishes one we cannot compile is a fact about the Board,
-    and is reported as such rather than raised at an Attempt that was about to start.
+    The patterns come from the Board profile at runtime, so a wrapper this code has never seen costs
+    a config value — and a Board that states two shapes costs two entries rather than one alternation,
+    which `solver/wrapper.py` exists to explain. One it publishes that we cannot compile is a fact
+    about the Board, reported as such rather than raised at an Attempt that was about to start; the
+    other shapes are still scanned for.
     """
-    try:
-        matcher = re.compile(pattern.encode())
-    except re.error as broken:
-        return None, f"{MARK} the Board's Flag wrapper {pattern!r} did not compile — {broken}".encode()
+    matchers, broken = compiled(wrappers)
+    if not matchers:
+        return None, f"{MARK} {'; '.join(broken) or 'the Board states no Flag wrapper'}".encode()
     deadline = time.monotonic() + budget
     found: list[bytes] = []
     read = 0
@@ -355,9 +363,9 @@ def _scanned(read_from: Path | bytes, where: str, pattern: str, cap: int, budget
     try:
         for block in _blocks(read_from, cap):
             read += len(block)
-            for match in matcher.finditer(carried + block):
-                if match.group(0) not in found:
-                    found.append(match.group(0))
+            for match in found_in(carried + block, matchers):
+                if match not in found:
+                    found.append(match)
             carried = block[-SCAN_OVERLAP_BYTES:]
             if time.monotonic() > deadline:
                 stopped = f", stopping after {budget:.1f}s"
@@ -366,15 +374,18 @@ def _scanned(read_from: Path | bytes, where: str, pattern: str, cap: int, budget
             stopped = f", stopping at the {cap}-byte size cap" if read >= cap else ""
     except OSError as error:
         return None, f"{MARK} {where} could not be read — {error}".encode()
-    return 0, _scan_report(found, read, stopped)
+    return 0, _scan_report(found, read, stopped, broken)
 
 
-def _scan_report(found: list[bytes], read: int, stopped: str) -> bytes:
+def _scan_report(found: list[bytes], read: int, stopped: str, broken: tuple[str, ...] = ()) -> bytes:
+    """What the scan saw, and any shape it could not look for — a wrapper that would not compile is
+    a fact about the Board, and a report that omitted it would read as prose that held nothing."""
+    said = "".join(f"\n{MARK} {one}" for one in broken)
     if not found:
-        return f"{MARK} scanned {read} bytes{stopped}\nno match".encode()
+        return f"{MARK} scanned {read} bytes{stopped}\nno match{said}".encode()
     shown = b", ".join(match[:MATCH_BYTES] for match in found[:MATCHES_SHOWN])
     more = f" (+{len(found) - MATCHES_SHOWN} more)" if len(found) > MATCHES_SHOWN else ""
-    return f"{MARK} scanned {read} bytes{stopped}\n{len(found)} match(es): ".encode() + shown + more.encode()
+    return f"{MARK} scanned {read} bytes{stopped}\n{len(found)} match(es): ".encode() + shown + f"{more}{said}".encode()
 
 
 def _blocks(read_from: Path | bytes, cap: int) -> Iterator[bytes]:

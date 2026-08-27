@@ -23,7 +23,7 @@ from solver.run import SIGNALLED, TAIL, WINDOW_CLOSED, Pending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 from test_run_loop import BOARD, CONTROL_REFUSED, NOON, WRAPPER, Agent, Clock, records
 
-RULES = Rules(event="offline", url=BOARD, flag_wrapper=WRAPPER, window_seconds=3600, prohibitions=())
+RULES = Rules(event="offline", url=BOARD, flag_wrappers=(WRAPPER,), window_seconds=3600, prohibitions=())
 DIALS = Dials(knee_seconds=600.0, floor_seconds=300.0, tail_seconds=300.0)
 
 # A candidate that came out of a command is `observed`; the Board stating no maximum is read as
@@ -139,7 +139,7 @@ def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):
     flags = Flags(
         board,
         recorder,
-        flag_pattern=WRAPPER,
+        flag_wrappers=(WRAPPER,),
         instances=instances,
         pace=Pace(per_minute=found.submissions_per_minute),
         limits=ReplayLimits(seconds=1.0),

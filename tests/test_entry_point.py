@@ -24,7 +24,7 @@ def boards(tmp_path):
             {
                 "event": "offline",
                 "url": BOARD,
-                "flag_wrapper": r"brunner\{[^}]{1,256}\}",
+                "flag_wrappers": [r"brunner\{[^}]{1,256}\}"],
                 "window_seconds": 3600,
                 "prohibitions": ["no broad automated enumeration"],
             }
@@ -105,7 +105,7 @@ def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_re
     opened = [one for one in written if one["record"] == "run-open"][0]["board_profile"]
     assert opened["event"] == "offline"
     assert opened["prohibitions"] == ["no broad automated enumeration"]
-    assert opened["flag_wrapper"] == r"brunner\{[^}]{1,256}\}"
+    assert opened["flag_wrappers"] == [r"brunner\{[^}]{1,256}\}"]
     assert opened["chall_manager"] == "absent"
     assert opened["run"]["run_id"] == "gate-1"
     assert opened["run"]["restarted"] is False

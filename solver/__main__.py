@@ -132,7 +132,7 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
         flags=Flags(
             board,
             recorder,
-            flag_pattern=rules.flag_wrapper,
+            flag_wrappers=rules.flag_wrappers,
             instances=instances,
             pace=Pace(per_minute=discovered.submissions_per_minute),
             step_numbers=steps.spend,
