@@ -22,12 +22,16 @@ not what happened. Question 1, *Checkpoints per thousand tokens*, had no denomin
 
 ## What `codex exec --json` actually emits
 
-Read out of the 0.147.0 binary the `Dockerfile` pins, its `exec` schema has exactly seven event
-names — `thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.started`,
-`item.updated`, `item.completed` — and one `usage` group, `input_tokens` / `cached_input_tokens` /
-`cache_write_input_tokens` / `output_tokens` / `reasoning_output_tokens`, which rides `turn.completed`
-alone. The captured stream `tests/test_codex_adapter.py` runs every parser test over is a real turn
-and agrees.
+Read out of the 0.147.0 binary the `Dockerfile` pins, the `exec` schema names seven events —
+`thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.started`, `item.updated`,
+`item.completed` — beside one `usage` group, `input_tokens` / `cached_input_tokens` /
+`cache_write_input_tokens` / `output_tokens` / `reasoning_output_tokens`, and that group rides
+`turn.completed` alone. The eighth thing the CLI emits is its own `error`, which carries a message
+and no counts — *"Model metadata for `gpt-5` not found"* is one this repository has met. The captured
+stream `tests/test_codex_adapter.py` runs every parser test over is a real turn and agrees.
+
+The vendor does count sooner than that internally — `codex-core` has a `token_count` event, and the
+rollout below is where it surfaces — but the `exec` translation this Solver reads does not carry it.
 
 The Runs agree too, from the other side. An event kind `solver/codex.py` does not classify is written
 to `claims/`, whole — so a usage-bearing event we did not know about would be sitting there. Over the

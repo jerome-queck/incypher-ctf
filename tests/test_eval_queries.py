@@ -433,10 +433,28 @@ def test_a_killed_turn_reaches_the_queries_as_unmeasured_and_never_as_a_zero(tmp
 
 def test_a_measured_total_beside_an_unmeasured_turn_is_marked_as_a_floor():
     """An Attempt that mixes metered turns with killed ones is the case a blank would over-correct:
-    something *was* measured, and what it is not is the whole of what was spent."""
-    assert eval_budget.Spend(unmeasured=2).counted(0) == ""
-    assert eval_budget.Spend(unmeasured=1).counted(4500) == "4500+"
-    assert eval_budget.Spend().counted(4500) == "4500"
+    something *was* measured, and what it is not is the whole of what was spent. One renderer for
+    every column and every totals line, because a zero wearing a `+` is still a zero being read as
+    a fact — which is what a second copy of these three lines printed."""
+    assert stream.counted(0, unmeasured=2) == ""
+    assert stream.counted(4500, unmeasured=1) == "4500+"
+    assert stream.counted(4500, unmeasured=0) == "4500"
+
+
+def test_a_run_where_nothing_was_measured_says_so_in_its_totals_line(tmp_path, capsys):
+    """The whole-Run shape of the same finding: `brunner-gate-2` is five Attempts and not one
+    metered turn between them, so a totals line reading `0 token(s)` — with or without a marker —
+    reports a spend it never measured."""
+    written = Written(tmp_path, run_id="nothing-measured").opened()
+    written.attempt("1-1", challenge_id=1).turn(("ls", b"a"), exit_code=-9).over(CUT_BUDGET)
+    run = written.closed()
+
+    code, said = answer(eval_context, [run.path], capsys)
+    totals = next(line for line in said.splitlines() if "Checkpoint(s) over" in line)
+
+    assert code == 0
+    assert "no token(s)" in totals, totals
+    assert "0 token(s)" not in totals and "0+ token(s)" not in totals
 
 
 def test_a_stream_written_before_the_field_still_reads_a_killed_turn_as_unmeasured(tmp_path):

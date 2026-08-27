@@ -487,6 +487,18 @@ def table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> str:
     return "\n".join("  " + line for line in ruled)
 
 
+def counted(tokens: int, unmeasured: int) -> str:
+    """A token figure, marked for what it is: a total, a floor, or nothing measured at all.
+
+    Here rather than in the two queries that print one, for the reason `table` is here — the same
+    three lines copied twice is how `1234+` in one query and `0+` in the other happen, and a zero
+    wearing a marker is still the zero ADR-0022 exists to stop being read as a fact.
+    """
+    if not unmeasured:
+        return str(tokens)
+    return f"{tokens}+" if tokens else ""
+
+
 def heading(runs: Sequence[Run]) -> str:
     """What was read, said once at the top of every query — including the Runs that carry no bodies,
     since that is the difference between a query answering nothing and a query unable to ask."""

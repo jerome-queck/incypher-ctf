@@ -66,20 +66,14 @@ class Spend:
         self.model_steps += len(attempt.model_steps)
         self.flags += 1 if attempt.flag else 0
 
-    def counted(self, tokens: int) -> str:
-        """One token column, marked for what it is: a total, a floor, or nothing measured."""
-        if not self.unmeasured:
-            return str(tokens)
-        return f"{tokens}+" if tokens else ""
-
     def row(self, name: str) -> list[object]:
         return [
             name,
             self.attempts,
             f"{self.seconds / 60:.1f}",
             f"{self.seconds / 60 / self.attempts:.1f}" if self.attempts else "",
-            self.counted(self.tokens),
-            self.counted(self.cache_read),
+            stream.counted(self.tokens, self.unmeasured),
+            stream.counted(self.cache_read, self.unmeasured),
             self.unmeasured or "",
             self.model_steps,
             self.flags or "",

@@ -66,13 +66,6 @@ def _rate(checkpoints: int, tokens: int) -> str:
     return f"{checkpoints / (tokens / 1000):.3f}" if tokens else ""
 
 
-def _tokens(attempt: stream.Attempt) -> str:
-    """What this Attempt was measured spending — blank where nothing was, `+` where it is a floor."""
-    if not attempt.unmeasured:
-        return str(attempt.tokens)
-    return f"{attempt.tokens}+" if attempt.tokens else ""
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
@@ -100,7 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     len(marks),
                     max(marks) if marks else 0,
                     _ratio(marks, spent),
-                    _tokens(attempt),
+                    stream.counted(tokens, len(attempt.unmeasured)),
                     _rate(len(marks), tokens),
                     attempt.cause or stream.NEVER_CLOSED,
                 ]
@@ -122,8 +115,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if totals["unmeasured"] and totals["tokens"]:
         rate = f"at most {rate}"
     print(
-        f"\n{totals['checkpoints']} Checkpoint(s) over {totals['steps']} model Step(s) "
-        f"and {totals['tokens']}{'+' if totals['unmeasured'] else ''} token(s): {rate} per thousand"
+        f"\n{totals['checkpoints']} Checkpoint(s) over {totals['steps']} model Step(s) and "
+        f"{stream.counted(totals['tokens'], totals['unmeasured']) or 'no'} token(s): {rate} per thousand"
     )
     if totals["unmeasured"]:
         print(
