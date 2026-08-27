@@ -241,7 +241,7 @@ def check_a_planted_flag_is_swept_and_graded(board: Board, challenges: list[dict
     step.end(exit_code=0, output=f"{PROBE_FLAG}\n".encode(), usage=NO_MODEL)
 
     detail = board.json("GET", f"{CHALLENGES}/{challenge['id']}")
-    flags = Flags(board, recorder, flag_pattern=PROBE_WRAPPER)
+    flags = Flags(board, recorder, flag_wrappers=(PROBE_WRAPPER,))
     candidates = flags.candidates(attempt_id=PROBE_ATTEMPT)
     if not candidates:
         raise ProbeFailure("the sweep found no candidate in an Observation that holds one")

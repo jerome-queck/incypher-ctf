@@ -195,7 +195,7 @@ jobs:
           found = recon(
               "The archive password is in the notes.",
               sorted(shed.iterdir()),
-              flag_pattern=r"brunner\{[^}]*\}",
+              flag_wrappers=(r"brunner\{[^}]*\}",),
               recorder=Recorder(pathlib.Path("/state"), run_id="ci", redactor=Redactor({})),
               attempt_id="ci-1",
           )
