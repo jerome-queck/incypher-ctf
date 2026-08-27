@@ -37,6 +37,13 @@ The Runs agree too, from the other side. An event kind `solver/codex.py` does no
 to `claims/`, whole — so a usage-bearing event we did not know about would be sitting there. Over the
 four gate Runs, **227 Claim bodies and not one carries a token or usage field**.
 
+Both counts were taken against `/state` on the machine that ran the gates, which is where the bodies
+and the rollouts live and where `runs/` deliberately does not reach (ADR-0009) — so they hold only
+while that directory survives, and what to re-run matters more than the numbers. The Claim bodies are
+`state/runs/<run>/claims/`, 227 files over the four gate Runs, and the question asked of each is
+whether it parses as JSON carrying a key containing `token` or `usage`; none does. One body says the
+word in prose, which is a model talking and is exactly the channel a Claim is for.
+
 So on the stream the count is not recoverable. It is only ever markable as absent, which is what this
 record does.
 
@@ -45,9 +52,9 @@ record does.
 `$CODEX_HOME/sessions/rollout-*.jsonl` — the vendor's own session log, which for the Solver lands in
 `/state/codex` — carries a `token_count` record after each model response, holding
 `total_token_usage` and `last_token_usage`. It is appended as the turn proceeds, so a killed turn's
-last count is on disk: of the **63 rollouts** this machine holds from the gate Runs, **60 carry a
-token count** and **25 never reached `task_complete`** — turns that ended the way the streams say
-they ended.
+last count is on disk: over the **63 rollouts** under `state/codex/sessions/`, **60 carry a
+`token_count` payload** and **25 never reach a `task_complete`** — the same count of turns the four
+streams mark unmeasured.
 
 Recovering from it is the obvious fix and it is rejected, for three reasons that compound:
 
@@ -97,10 +104,11 @@ no judgement frozen in — nothing here is a rule calibration will move, and the
   `scripts/stream.py` keeps a second read for a stream that predates it: an invocation is the only
   Step a turn's tokens land on, so one carrying none was killed before any were reported. Both
   routes reach the same 25 turns.
-- **The eval tables now carry blanks and floors.** `eval_budget.py` prints an `unmeasured` column, a
-  bare number for a total, `1234+` for a floor and a blank where nothing was measured;
-  `eval_context.py`'s totals line says the token count is a floor and the rate over it a ceiling. A
-  reader has to learn three marks, and each query says what its own mean.
+- **The eval tables now carry blanks and floors.** A bare number is a total, `1234+` is a floor, a
+  blank is a group where nothing was measured, and `≤0.006` is a rate taken over a floor — which is
+  a ceiling, since tokens nobody counted can only push a rate down. `eval_budget.py` adds an
+  `unmeasured` column beside them. A reader has to learn three marks; `scripts/stream.py` renders
+  every one of them, so no two queries can spell them differently.
 - **Question 3 still cannot say what the killed turns cost**, and `L*` — the per-Attempt cap chosen
   off it — is still being chosen against a floor. What changes is that the floor announces itself
   rather than passing as a total.

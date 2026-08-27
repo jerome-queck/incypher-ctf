@@ -409,6 +409,15 @@ def test_a_ratio_over_no_checkpoint_at_all_is_blank_rather_than_zero():
     assert eval_context._ratio((6,), 12) == "0.50"
 
 
+def test_a_rate_taken_over_a_floor_is_marked_as_a_ceiling():
+    """The tokens nobody counted were spent, and every one of them can only push the rate down. A
+    bare `0.006` printed beside a `510638+` says the two numbers were measured to the same standard,
+    which is the row-level shape of the same claim the totals line makes."""
+    assert eval_context._rate(3, 510638, unmeasured=0) == "0.006"
+    assert eval_context._rate(3, 510638, unmeasured=25) == "≤0.006"
+    assert eval_context._rate(3, 0, unmeasured=1) == ""
+
+
 def test_a_killed_turn_reaches_the_queries_as_unmeasured_and_never_as_a_zero(tmp_path, capsys):
     """The other face of the ratio above, and the defect the four gate Runs surfaced: 22 of 27
     Attempts reported a spend nobody measured, and the per-Category table read Web, Pwn and

@@ -61,9 +61,17 @@ def _ratio(marks: Sequence[int], spent: int) -> str:
     return f"{max(marks) / spent:.2f}"
 
 
-def _rate(checkpoints: int, tokens: int) -> str:
-    """Checkpoints per thousand tokens, or blank where no turn of this Attempt was ever metered."""
-    return f"{checkpoints / (tokens / 1000):.3f}" if tokens else ""
+def _rate(checkpoints: int, tokens: int, unmeasured: int) -> str:
+    """Checkpoints per thousand tokens — blank where no turn was metered, `≤` where the denominator
+    is a floor.
+
+    A rate over a floor is a ceiling: the tokens nobody counted were spent, and every one of them
+    can only push the rate down. Marked in the row as well as in the totals, because a `128567+`
+    beside a bare `0.000` says the two numbers were measured to the same standard, and they were not.
+    """
+    if not tokens:
+        return ""
+    return f"{'≤' if unmeasured else ''}{checkpoints / (tokens / 1000):.3f}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -94,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max(marks) if marks else 0,
                     _ratio(marks, spent),
                     stream.counted(tokens, len(attempt.unmeasured)),
-                    _rate(len(marks), tokens),
+                    _rate(len(marks), tokens, len(attempt.unmeasured)),
                     attempt.cause or stream.NEVER_CLOSED,
                 ]
             )
@@ -111,9 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
 
-    rate = _rate(totals["checkpoints"], totals["tokens"]) or "no metered turn"
-    if totals["unmeasured"] and totals["tokens"]:
-        rate = f"at most {rate}"
+    rate = _rate(totals["checkpoints"], totals["tokens"], totals["unmeasured"]) or "no metered turn"
     print(
         f"\n{totals['checkpoints']} Checkpoint(s) over {totals['steps']} model Step(s) and "
         f"{stream.counted(totals['tokens'], totals['unmeasured']) or 'no'} token(s): {rate} per thousand"
