@@ -108,6 +108,13 @@ class Usage:
     Cost is tokens times a price table that lives outside the record and changes underneath it, so
     computing it at analysis time keeps the record true when prices move. Context size per Step
     needs no field either — it is `tokens_in + cache_read`.
+
+    `known` is the difference between **nothing was spent** and **nobody said what was spent**, and
+    it defaults true because every Step but one knows: a Step that ran no model spent nothing, and
+    a command inside a turn spends nothing of its own, since the vendor meters the turn and its
+    tokens ride the invocation's Step. The exception is a turn killed before the vendor reported
+    it, whose zeros are an absent measurement rather than an absent spend — and a zero standing in
+    for both is a record that is blindest about the Attempts that cost the most (#104).
     """
 
     model: str
@@ -115,6 +122,7 @@ class Usage:
     tokens_out: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    known: bool = True
 
 
 # A Step that invoked no model still names one, and the empty name is the fact rather than a
@@ -394,6 +402,7 @@ class Recorder:
                 "tokens_out": usage.tokens_out,
                 "cache_read": usage.cache_read,
                 "cache_write": usage.cache_write,
+                "usage_known": usage.known,
             },
         )
         return observation

@@ -21,6 +21,14 @@
 > Flag submission reads it. Nothing here changes — it is this record's own rule, *store the fact and
 > derive the judgement*, applied to a case it did not name. **`source` joins the `step-end` field
 > list in *The stream* below**, which is written as it was decided and does not name it.
+>
+> **Extended — not corrected — by
+> [ADR-0022](0022-an-unmeasured-turn-is-marked-and-never-guessed.md), for the same reason.** The
+> per-Step token fields below cannot tell *nothing was spent* from *nobody counted what was spent*,
+> and the vendor reports a turn's usage on one event that a killed turn never reaches — so 22 of the
+> 27 Attempts in the four gate Runs recorded a spend nobody measured, and questions 1 and 3 could not
+> answer over them. **`usage_known` joins the `step-end` field list in *The stream* below**; which
+> Steps are unmeasured stays derived, and nothing else here moves.
 
 v1 emits telemetry, and two earlier records already rest their weight on it.
 [ADR-0005](0005-the-stall-call-lives-outside-the-solving-model.md) leaves its three stall

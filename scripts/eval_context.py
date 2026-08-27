@@ -24,6 +24,12 @@ changes re-reads every past Run under the new one.
 `turn.completed`, so an Attempt whose every turn ran into the deadline carries zero tokens and no
 rate can be taken over it. Those Attempts are shown with a blank rate rather than a zero, because a
 rate nobody could measure and a rate that measured zero are opposite findings.
+
+**The same distinction reaches the totals**, which is where a blank row used to disappear into a
+sum. An Attempt that mixes metered turns with killed ones has a token count that is a floor and a
+rate that is therefore a ceiling, marked `+` here and named under the table
+([ADR-0022](../docs/adr/0022-an-unmeasured-turn-is-marked-and-never-guessed.md)) — a total that
+quietly counts an unmeasured turn as zero says the Checkpoints came cheaper than they did.
 """
 
 from __future__ import annotations
@@ -55,9 +61,17 @@ def _ratio(marks: Sequence[int], spent: int) -> str:
     return f"{max(marks) / spent:.2f}"
 
 
-def _rate(checkpoints: int, tokens: int) -> str:
-    """Checkpoints per thousand tokens, or blank where no turn of this Attempt was ever metered."""
-    return f"{checkpoints / (tokens / 1000):.3f}" if tokens else ""
+def _rate(checkpoints: int, tokens: int, unmeasured: int) -> str:
+    """Checkpoints per thousand tokens — blank where no turn was metered, `≤` where the denominator
+    is a floor.
+
+    A rate over a floor is a ceiling: the tokens nobody counted were spent, and every one of them
+    can only push the rate down. Marked in the row as well as in the totals, because a `128567+`
+    beside a bare `0.000` says the two numbers were measured to the same standard, and they were not.
+    """
+    if not tokens:
+        return ""
+    return f"{'≤' if unmeasured else ''}{checkpoints / (tokens / 1000):.3f}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -69,7 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(stream.heading(runs))
 
     live = Thresholds()
-    rows, totals = [], {"checkpoints": 0, "tokens": 0, "steps": 0, "unmetered": 0}
+    rows, totals = [], {"checkpoints": 0, "tokens": 0, "steps": 0, "unmeasured": 0, "blind": 0}
     for run in runs:
         for attempt in (one for one in run.attempts if one.opened):
             marks = replay(attempt, live, said=run.said(attempt)).checkpoints
@@ -77,7 +91,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             totals["checkpoints"] += len(marks)
             totals["tokens"] += tokens
             totals["steps"] += spent
-            totals["unmetered"] += 0 if tokens else 1
+            totals["unmeasured"] += len(attempt.unmeasured)
+            totals["blind"] += 1 if attempt.unmeasured and not tokens else 0
             rows.append(
                 [
                     attempt.ref,
@@ -86,8 +101,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     len(marks),
                     max(marks) if marks else 0,
                     _ratio(marks, spent),
-                    tokens or "",
-                    _rate(len(marks), tokens),
+                    stream.counted(tokens, len(attempt.unmeasured)),
+                    _rate(len(marks), tokens, len(attempt.unmeasured)),
                     attempt.cause or stream.NEVER_CLOSED,
                 ]
             )
@@ -104,13 +119,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
 
+    rate = _rate(totals["checkpoints"], totals["tokens"], totals["unmeasured"]) or "no metered turn"
     print(
-        f"\n{totals['checkpoints']} Checkpoint(s) over {totals['steps']} model Step(s) "
-        f"and {totals['tokens']} token(s): {_rate(totals['checkpoints'], totals['tokens']) or 'no metered turn'}"
-        " per thousand"
+        f"\n{totals['checkpoints']} Checkpoint(s) over {totals['steps']} model Step(s) and "
+        f"{stream.counted(totals['tokens'], totals['unmeasured']) or 'no'} token(s): {rate} per thousand"
     )
-    if totals["unmetered"]:
-        print(f"{totals['unmetered']} attempt(s) carry no tokens at all — every turn of theirs was killed mid-flight")
+    if totals["unmeasured"]:
+        print(
+            f"{totals['unmeasured']} turn(s) never reported what they cost, so that token count is a floor and "
+            f"the rate over it a ceiling — {totals['blind']} attempt(s) were never measured at all"
+        )
     if not totals["checkpoints"]:
         print("no Checkpoint anywhere in these Runs: the extension path never opened, and the ratio says nothing yet")
     return 0

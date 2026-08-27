@@ -19,9 +19,15 @@ the same prompt again.
 of an Attempt whose open line is written after it (`solver/run.py`), so measuring from the open
 would drop exactly the one operation most able to hang.
 
-**A turn killed at the deadline reports no tokens**, because the vendor meters a turn on completion.
-So an Attempt can show real minutes against zero tokens, and that pairing is a finding rather than a
-gap: it is the shape of a Run spending its budget on turns that never got to finish.
+**A turn killed at the deadline is counted as unmeasured, never as zero.** The vendor meters a turn
+on completion and on nothing earlier, so a turn the deadline killed reports nothing at all
+([ADR-0022](../docs/adr/0022-an-unmeasured-turn-is-marked-and-never-guessed.md)). Those are the
+turns that ran longest, so folding their silence into a zero makes this table blindest exactly where
+the budget went. The `unmeasured` column counts them, and the two token columns say what they are
+worth beside it: a bare number is a total, `1234+` is a floor with more spent that nobody counted,
+and a blank is a group where nothing was measured at all. A blank rather than a zero for the same
+reason `eval_context.py` blanks its rate — a spend nobody measured and a spend measured at zero are
+opposite findings.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ class Spend:
     seconds: float = 0.0
     tokens: int = 0
     cache_read: int = 0
+    unmeasured: int = 0
     model_steps: int = 0
     flags: int = 0
 
@@ -55,6 +62,7 @@ class Spend:
         self.seconds += attempt.seconds
         self.tokens += attempt.tokens
         self.cache_read += attempt.cache_read
+        self.unmeasured += len(attempt.unmeasured)
         self.model_steps += len(attempt.model_steps)
         self.flags += 1 if attempt.flag else 0
 
@@ -64,14 +72,15 @@ class Spend:
             self.attempts,
             f"{self.seconds / 60:.1f}",
             f"{self.seconds / 60 / self.attempts:.1f}" if self.attempts else "",
-            self.tokens,
-            self.cache_read,
+            stream.counted(self.tokens, self.unmeasured),
+            stream.counted(self.cache_read, self.unmeasured),
+            self.unmeasured or "",
             self.model_steps,
             self.flags or "",
         ]
 
 
-HEADERS = ["", "attempts", "minutes", "mean min", "tokens", "cache read", "model steps", "flags"]
+HEADERS = ["", "attempts", "minutes", "mean min", "tokens", "cache read", "unmeasured", "model steps", "flags"]
 
 
 @dataclass

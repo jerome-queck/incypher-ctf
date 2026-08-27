@@ -45,10 +45,15 @@ def test_the_reference_is_relative_to_the_run_directory(recorder):
 
 
 def test_the_line_stays_small_however_large_the_observation(recorder):
-    """The fixed-size claim, which is what makes the stream cheap to parse after a long Run."""
+    """The fixed-size claim, which is what makes the stream cheap to parse after a long Run.
+
+    The bound tracks the field list and nothing else — a body of any size leaves it where it is,
+    while a new field moves it by its own width. `usage_known` was the last, at 21 bytes
+    (ADR-0022).
+    """
     a_step(recorder).end(exit_code=0, output=b"z" * 2_000_000, usage=USAGE)
 
-    assert len(recorder.stream_path.read_text().splitlines()[-1]) < 600
+    assert len(recorder.stream_path.read_text().splitlines()[-1]) < 650
 
 
 def test_the_model_is_shown_an_elided_body_while_the_file_keeps_all_of_it(recorder):

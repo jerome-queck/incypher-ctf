@@ -15,6 +15,7 @@ reported as having cost one.
 """
 
 import datetime as dt
+import json
 
 import pytest
 
@@ -28,6 +29,7 @@ import eval_thresholds
 import eval_tier
 import stream
 from solver.record import (
+    CUT_BUDGET,
     CUT_INSTANCE_EXPIRED,
     CUT_NOVELTY,
     CUT_SELF_REPORTED_IMPOSSIBLE,
@@ -42,6 +44,9 @@ from solver.stall import Thresholds
 
 SPAWN = "codex exec --json --skip-git-repo-check --sandbox danger-full-access --model a-model -"
 TURN = Usage(model="a-model", tokens_in=4000, tokens_out=500, cache_read=20000, cache_write=4000)
+# A turn the deadline killed: the vendor meters a turn on completion, so this one reports nothing at
+# all and the record says so rather than writing the zeros down as a spend (ADR-0022).
+KILLED = Usage(model="a-model", known=False)
 NOTHING = Usage(model="")
 
 
@@ -147,7 +152,7 @@ class _Attempt:
         for command, output in commands:
             self.written._step(command, tool="shell", output=output, exit_code=0, seconds=seconds)
         self.written.clock.on(seconds)
-        spawn.end(exit_code=exit_code, output=b"[codex] the turn ended", usage=TURN if exit_code == 0 else NOTHING)
+        spawn.end(exit_code=exit_code, output=b"[codex] the turn ended", usage=TURN if exit_code == 0 else KILLED)
         return self
 
     def submitted(self, flag, *, accepted=True):
@@ -402,6 +407,81 @@ def test_a_ratio_over_no_checkpoint_at_all_is_blank_rather_than_zero():
     then went quiet. Those are opposite findings — the same reason the token rate blanks."""
     assert eval_context._ratio((), 12) == ""
     assert eval_context._ratio((6,), 12) == "0.50"
+
+
+def test_a_rate_taken_over_a_floor_is_marked_as_a_ceiling():
+    """The tokens nobody counted were spent, and every one of them can only push the rate down. A
+    bare `0.006` printed beside a `510638+` says the two numbers were measured to the same standard,
+    which is the row-level shape of the same claim the totals line makes."""
+    assert eval_context._rate(3, 510638, unmeasured=0) == "0.006"
+    assert eval_context._rate(3, 510638, unmeasured=25) == "≤0.006"
+    assert eval_context._rate(3, 0, unmeasured=1) == ""
+
+
+def test_a_killed_turn_reaches_the_queries_as_unmeasured_and_never_as_a_zero(tmp_path, capsys):
+    """The other face of the ratio above, and the defect the four gate Runs surfaced: 22 of 27
+    Attempts reported a spend nobody measured, and the per-Category table read Web, Pwn and
+    Forensics as having cost nothing over 226 model Steps (#104). The turns ran for minutes — what
+    is missing is the count, not the spend, and a table saying `0` states a fact it does not have."""
+    written = Written(tmp_path, run_id="killed").opened()
+    written.attempt("1-1", challenge_id=1, category="Pwn").turn(("ls", b"a"), exit_code=-9).over(CUT_BUDGET)
+    run = written.closed()
+    attempt = run.attempts[0]
+
+    spend = eval_budget.Spend()
+    spend.took(attempt)
+
+    assert [len(attempt.unmeasured), attempt.tokens] == [1, 0]
+    assert spend.row("Pwn")[4] == "", "a group nobody measured owes no total, and a zero is not one"
+
+    code, said = answer(eval_context, [run.path], capsys)
+
+    assert code == 0
+    assert "1 turn(s) never reported what they cost" in said
+
+
+def test_a_measured_total_beside_an_unmeasured_turn_is_marked_as_a_floor():
+    """An Attempt that mixes metered turns with killed ones is the case a blank would over-correct:
+    something *was* measured, and what it is not is the whole of what was spent. One renderer for
+    every column and every totals line, because a zero wearing a `+` is still a zero being read as
+    a fact — which is what a second copy of these three lines printed."""
+    assert stream.counted(0, unmeasured=2) == ""
+    assert stream.counted(4500, unmeasured=1) == "4500+"
+    assert stream.counted(4500, unmeasured=0) == "4500"
+
+
+def test_a_run_where_nothing_was_measured_says_so_in_its_totals_line(tmp_path, capsys):
+    """The whole-Run shape of the same finding: `brunner-gate-2` is five Attempts and not one
+    metered turn between them, so a totals line reading `0 token(s)` — with or without a marker —
+    reports a spend it never measured."""
+    written = Written(tmp_path, run_id="nothing-measured").opened()
+    written.attempt("1-1", challenge_id=1).turn(("ls", b"a"), exit_code=-9).over(CUT_BUDGET)
+    run = written.closed()
+
+    code, said = answer(eval_context, [run.path], capsys)
+    totals = next(line for line in said.splitlines() if "Checkpoint(s) over" in line)
+
+    assert code == 0
+    assert "no token(s)" in totals, totals
+    assert "0 token(s)" not in totals and "0+ token(s)" not in totals
+
+
+def test_a_stream_written_before_the_field_still_reads_a_killed_turn_as_unmeasured(tmp_path):
+    """The four promoted gate Runs predate `usage_known` and are committed as they were written, so
+    the reader reaches the same verdict without it: an invocation is the only Step a turn's tokens
+    ever land on, and one carrying none at all was killed before the vendor reported any."""
+    written = Written(tmp_path, run_id="before").opened()
+    written.attempt("1-1", challenge_id=1).turn(("ls", b"a"), exit_code=-9).over(CUT_BUDGET)
+    path = written.closed().path
+    older = (json.loads(line) for line in path.read_text().splitlines())
+    path.write_text(
+        "\n".join(json.dumps({key: value for key, value in one.items() if key != "usage_known"}) for one in older)
+    )
+
+    attempt = stream.read(path).attempts[0]
+
+    assert all(one.usage_known is None for one in attempt.steps), "the field must be gone, or this proves nothing"
+    assert [one.command_raw for one in attempt.unmeasured] == [SPAWN]
 
 
 def two_runs_sharing_an_attempt_id(tmp_path):
