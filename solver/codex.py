@@ -379,6 +379,7 @@ class _Transcript:
     _flights: dict[str, _Flight] = field(default_factory=dict)
     _said: list[str] = field(default_factory=list)
     _broke: bool = False
+    _spawned: bool = False
 
     def run(self, prompt: str, deadline: Deadline, chain: Sequence[Credential]) -> Iterator[Taken]:
         """Every rung in turn, until one of them ends the Attempt or the chain is spent."""
@@ -407,7 +408,8 @@ class _Transcript:
         of ADR-0009's begin/end — and it is where the turn's tokens land, since the vendor meters a
         turn and never a command.
         """
-        self._usage, self._flights, self._said, self._broke = {}, {}, [], False
+        self._usage, self._flights, self._said = {}, {}, []
+        self._broke, self._spawned = False, False
         argv = _argv(credential, self.invocation)
         flight = self._open(" ".join(argv), "codex")
         if refused := _could_not_make(credential.home):
@@ -417,6 +419,7 @@ class _Transcript:
         except OSError as error:
             broken = f"{MARK} {argv[0]} did not run — {error}"
             return FAILED, self._shut(flight, credential, None, broken.encode(), kind=CLOSE)
+        self._spawned = True
         cause = yield from self._watch(child, deadline, credential)
         if cause == KILLED:
             child.stop()
@@ -656,7 +659,14 @@ class _Transcript:
     def _spend(self, credential: Credential | None) -> Usage:
         """The turn's usage as the record wants it. The vendor counts cached input inside its input
         total where `tokens_in` is the part that was not cached, so the cached half is subtracted
-        rather than double-counted — `tokens_in + cache_read` is context size either way."""
+        rather than double-counted — `tokens_in + cache_read` is context size either way.
+
+        `known` is false where a turn ran and `turn.completed` never came, which is every turn the
+        deadline killed. The vendor states a turn's usage on that one event and on no earlier one
+        ([ADR-0022](../docs/adr/0022-an-unmeasured-turn-is-marked-and-never-guessed.md)), so the
+        zeros below are the absence of a measurement — and a Run that reported them as a spend of
+        zero was blindest about the turns that ran longest.
+        """
         cached = _count(self._usage, "cached_input_tokens")
         return Usage(
             model=credential.model if credential else "",
@@ -664,6 +674,7 @@ class _Transcript:
             tokens_out=_count(self._usage, "output_tokens"),
             cache_read=cached,
             cache_write=_count(self._usage, "cache_write_input_tokens"),
+            known=bool(self._usage) or not self._spawned,
         )
 
     def _cause(self, cause: str, exit_code: int | None) -> str:

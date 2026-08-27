@@ -369,6 +369,44 @@ def test_the_deadline_kills_the_cli_and_the_kill_is_ours(recorder):
     assert kind(taken, CLOSE)[0].shown.startswith("[codex] killed")
 
 
+def test_a_killed_turn_says_its_cost_is_unknown_rather_than_zero(recorder):
+    """The vendor meters a turn on `turn.completed` and on nothing before it, so a turn the deadline
+    killed reports nothing — and a record that wrote that down as a spend of zero was blindest about
+    the turns that ran longest (#104). The commands inside the turn keep their zeros, which are the
+    accounting rule rather than a gap: the turn's tokens ride the invocation's own Step."""
+    attempt(recorder, Launcher(Canned(CAPTURED.rsplit(b"\n", 2)[0], hangs=True)))
+
+    ended = [record for record in records(recorder) if record["record"] == "step-end"]
+    invocation = next(record for record in ended if record["tool"] == "codex" and record["step_index"] == 1)
+    assert (invocation["tokens_in"], invocation["tokens_out"]) == (0, 0)
+    assert invocation["usage_known"] is False
+    assert all(record["usage_known"] is True for record in ended if record is not invocation)
+
+
+def test_a_turn_the_vendor_reported_says_its_cost_is_known(recorder):
+    """The other half of the pair, and the one that makes the first mean anything: a turn that
+    reported is marked as reported, so `usage_known` never becomes a synonym for `killed`."""
+    attempt(recorder, Launcher(Canned(CAPTURED)))
+
+    ended = [record for record in records(recorder) if record["record"] == "step-end"]
+
+    assert all(record["usage_known"] is True for record in ended)
+
+
+def test_a_cli_that_never_started_spent_nothing_rather_than_an_unknown_amount(recorder):
+    """A binary that is not there ran no model, so its zeros are the fact. Marking them unknown
+    would put a failure to launch in the same column as an expensive turn nobody counted."""
+
+    def missing(*_):
+        raise OSError(2, "No such file or directory")
+
+    attempt(recorder, missing)
+
+    ended = [record for record in records(recorder) if record["record"] == "step-end"]
+
+    assert all(record["usage_known"] is True for record in ended)
+
+
 def test_a_command_in_flight_when_the_kill_lands_is_ended_as_killed(recorder):
     """Left dangling it would be indistinguishable from a crash. A Step that says it was killed is
     strictly more than one that says nothing."""

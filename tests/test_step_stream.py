@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from solver.record import SCHEMA_VERSION, Recorder, Usage
+from solver.record import NO_MODEL, SCHEMA_VERSION, Recorder, Usage
 from solver.redaction import Redactor
 
 TOKEN = "sk-ant-oat01-" + "y" * 24  # gitleaks:allow - shaped like the real thing, opens nothing
@@ -158,6 +158,7 @@ def test_the_field_set_of_every_record_is_pinned(recorder):
             "tokens_out",
             "cache_read",
             "cache_write",
+            "usage_known",
         },
         "attempt-close": {"attempt_id", "cause", "approach_label", "solves_at_close", "extensions_granted", "flag"},
         "run-close": {"cause", "write_failures"},
@@ -204,6 +205,20 @@ def test_tokens_are_recorded_and_cost_is_not(recorder):
 
     assert (end["tokens_in"], end["cache_read"]) == (1200, 8000)
     assert not [field for field in end if any(word in field for word in ("cost", "price", "usd", "dollar"))]
+
+
+def test_a_spend_nobody_measured_is_told_apart_from_a_spend_of_nothing(recorder):
+    """Both lines carry four zeros, and they are opposite findings: the first is a turn the deadline
+    killed before the vendor reported it, the second a Step that ran no model at all. Told apart by
+    a field rather than by reading a model name for emptiness, which is what left 22 of 27 Attempts
+    reporting a spend nobody measured (#104)."""
+    a_step(recorder, index=1).end(exit_code=None, output=b"", usage=Usage(model="gpt-5", known=False))
+    a_step(recorder, index=2).end(exit_code=0, output=b"", usage=NO_MODEL)
+
+    unmeasured, nothing = records(recorder)[1], records(recorder)[3]
+
+    assert (unmeasured["tokens_in"], unmeasured["tokens_out"]) == (nothing["tokens_in"], nothing["tokens_out"])
+    assert (unmeasured["usage_known"], nothing["usage_known"]) == (False, True)
 
 
 def test_attempt_open_carries_the_attempts_sequence_number_for_that_challenge(recorder):

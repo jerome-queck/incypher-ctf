@@ -108,6 +108,9 @@ class Step:
     tokens_out: int
     cache_read: int
     cache_write: int
+    # Whether the numbers above are the whole of what this Step spent, or `None` where the stream
+    # never said — the four promoted gate Runs predate the field and are never rewritten (ADR-0022).
+    usage_known: bool | None
     ended: bool
 
     @property
@@ -130,6 +133,19 @@ class Step:
         `[codex] ` mark (`solver/codex.py`).
         """
         return self.tool == ADAPTER and not self.command_raw.startswith("[")
+
+    @property
+    def unmeasured(self) -> bool:
+        """A turn ran here and what it cost was never stated, so these zeros are an absent
+        measurement rather than an absent spend.
+
+        `usage_known` says it outright, and a stream written before that field says it another way:
+        an invocation is the only Step a turn's tokens ever land on, so one carrying none at all is
+        one the deadline killed before the vendor reported any (ADR-0022).
+        """
+        if self.usage_known is not None:
+            return not self.usage_known
+        return self.spawn and not (self.tokens or self.cache_read or self.cache_write)
 
 
 @dataclass(frozen=True)
@@ -250,11 +266,19 @@ class Attempt:
 
     @property
     def tokens(self) -> int:
+        """What this Attempt was **measured** spending. It is a floor wherever `unmeasured` is not
+        empty, and a query that prints it as a total without saying so reports a fact it does not
+        have (ADR-0022)."""
         return sum(step.tokens for step in self.steps)
 
     @property
     def cache_read(self) -> int:
         return sum(step.cache_read for step in self.steps)
+
+    @property
+    def unmeasured(self) -> list[Step]:
+        """The turns of this Attempt that ran and never reported what they cost."""
+        return [step for step in self.steps if step.unmeasured]
 
     def spent(self, tool: str) -> list[Step]:
         return [step for step in self.steps if step.tool == tool]
@@ -365,6 +389,7 @@ def _step(record: dict[str, Any], *, ended: bool) -> Step:
         tokens_out=int(record.get("tokens_out", 0)),
         cache_read=int(record.get("cache_read", 0)),
         cache_write=int(record.get("cache_write", 0)),
+        usage_known=known if isinstance(known := record.get("usage_known"), bool) else None,
         ended=ended,
     )
 

@@ -48,7 +48,7 @@ def test_the_line_stays_small_however_large_the_observation(recorder):
     """The fixed-size claim, which is what makes the stream cheap to parse after a long Run."""
     a_step(recorder).end(exit_code=0, output=b"z" * 2_000_000, usage=USAGE)
 
-    assert len(recorder.stream_path.read_text().splitlines()[-1]) < 600
+    assert len(recorder.stream_path.read_text().splitlines()[-1]) < 650
 
 
 def test_the_model_is_shown_an_elided_body_while_the_file_keeps_all_of_it(recorder):
