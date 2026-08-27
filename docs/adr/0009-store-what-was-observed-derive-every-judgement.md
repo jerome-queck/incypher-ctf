@@ -13,6 +13,13 @@
 > an empty Board, so a Board failing its control contributes *no* scoreboard rather than zero rows.
 > This record's *"a crowd-poller"* reasoning is untouched; the additions ride Intake's existing
 > cycle rather than adding a second poller.
+>
+> **Extended — not corrected — by
+> [ADR-0019](0019-the-boards-statement-of-a-challenge-is-not-evidence.md).** The Claim/Observation
+> split below is a pair, and a Challenge's description is neither half of it: the model did not
+> write it and nothing ran to produce it. A `source` on every Step says which, and what authorises a
+> Flag submission reads it. Nothing here changes — it is this record's own rule, *store the fact and
+> derive the judgement*, applied to a case it did not name.
 
 v1 emits telemetry, and two earlier records already rest their weight on it.
 [ADR-0005](0005-the-stall-call-lives-outside-the-solving-model.md) leaves its three stall

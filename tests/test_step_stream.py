@@ -127,7 +127,7 @@ def test_the_field_set_of_every_record_is_pinned(recorder):
     recorder.run_close(cause="window-closed")
 
     envelope = {"schema_version", "seq", "ts", "mono", "record", "run_id"}
-    step = {"attempt_id", "step_index", "command_raw", "command_normalised", "tool"}
+    step = {"attempt_id", "step_index", "command_raw", "command_normalised", "tool", "source"}
     expected = {
         "run-open": {"board_profile"},
         "attempt-open": {

@@ -251,7 +251,9 @@ _Avoid_: turn, iteration, action
 **Observation**:
 Real output from a real command, inseparable from the command that produced it. The model does not
 write Observations; it only causes them. A tool that fails produces one too — the failure *is* the
-output, and recording silence instead would leave the model to narrate what it thinks happened.
+output, and recording silence instead would leave the model to narrate what it thinks happened. Not
+everything the record keeps in that channel is one: a Step carries a `source` saying whether its
+bytes are the Solver's own work or a Board statement (ADR-0019).
 _Avoid_: finding, output, result, tool response
 
 **Claim**:
@@ -261,6 +263,16 @@ the most load-bearing pair here: it is what stops the model's account of what ha
 mistaken for what happened (ADR-0005).
 _Avoid_: note, assertion, conclusion-as-fact — and not *observation*, which is the other half of
 the pair and deliberately a different word
+
+**Board statement**:
+The Board's own words about a Challenge — its description — as opposed to anything the Solver did.
+The third thing beside Claim and Observation, and the one the pair could not name: the model did not
+write it, and nothing ran to produce it. It is recorded, because 22 of 74 Brunner Challenges ship no
+file at all and a password or a second download host lives nowhere else, and it **authorises
+nothing** — nearly every Board's prose ends in a flag-format section, so a Flag-shaped string there
+is the Board showing the wrapper's shape (ADR-0019).
+_Avoid_: prose alone (the Solver's own `[recon]` lines are prose too), and not *Observation* — the
+record keeps both in one channel and tells them apart by `source`
 
 **Candidate**:
 A string that might be a Challenge's Flag, and **how strongly it is known** — which is the whole of

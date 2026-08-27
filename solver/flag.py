@@ -1,4 +1,4 @@
-"""Flag verification and submission: an Observation authorises, a Claim does not.
+"""Flag verification and submission: the Solver's own work authorises, nothing it was told does.
 
 The point of the whole exercise, and where the Claim/Observation split earns its keep. **A Flag the
 model states is a Claim. The same string in real command output is an Observation, and the
@@ -12,6 +12,14 @@ That is structural rather than careful: a Claim's record carries `claim_ref` and
 model wrote. Two more lines are skipped for the same reason — a derived record, which carries
 `carry.DERIVED` and holds a model-authored approach label, and this module's own reports, since a
 sweep that read its last report would authorise a candidate on the strength of having mentioned it.
+
+A fourth is skipped, and it is the one the Claim/Observation pair could not name
+([ADR-0019](../docs/adr/0019-the-boards-statement-of-a-challenge-is-not-evidence.md)): a Challenge's
+**description** and the flag-scan over it are recorded as Observations because the recon cascade
+records everything it does uniformly, not because anything ran. Nearly every Board's prose ends in a
+flag-format section and some of them show an example, so the string a sweep finds there is the
+Board's own statement of the wrapper's shape. The record says which Steps those are — `source` —
+and this module reads it.
 
 How strongly a candidate is known is the whole of the policy below, and there are four answers:
 
@@ -49,7 +57,7 @@ from pathlib import Path
 from solver.board import Board, Verdict
 from solver.carry import DERIVED
 from solver.instance import Instances, Lease, submission_shape
-from solver.record import NO_MODEL, Recorder
+from solver.record import NO_MODEL, SOURCE_SOLVER, Recorder
 from solver.shell import run
 from solver.stall import replayable
 
@@ -310,7 +318,14 @@ class Flags:
             return ()
         found: dict[str, Candidate] = {}
         swept = 0
-        for command, ref in _observations(self._recorder.stream_path, attempt_id):
+        stated = 0
+        for command, ref, source in _observations(self._recorder.stream_path, attempt_id):
+            # ADR-0019: only what the Solver's own work produced authorises. Required rather than
+            # `SOURCE_BOARD` refused, so a source nobody has thought of yet arrives non-authorising
+            # — which is the direction a wrong guess is cheap in.
+            if source != SOURCE_SOLVER:
+                stated += 1
+                continue
             swept += 1
             for text in _in_body(self._recorder.run_dir / ref, matcher):
                 found.setdefault(text, Candidate(text, OBSERVED, command=command, ref=ref))
@@ -320,7 +335,10 @@ class Flags:
         self._record(
             SWEEP,
             f"{MARK} sweep {self._pattern}",
-            f"{MARK} swept {swept} observation(s) and no claim\n{_listed(ordered)}".encode(),
+            (
+                f"{MARK} swept {swept} observation(s), passed over {stated} the Board stated, "
+                f"and no claim\n{_listed(ordered)}"
+            ).encode(),
             attempt_id,
             ok=True,
         )
@@ -491,8 +509,9 @@ def _refuses(candidate: Candidate, slots: Slots, spent_here: int, *, last_call: 
     return ""
 
 
-def _observations(stream: Path, attempt_id: str) -> Iterator[tuple[str, str]]:
-    """Every Observation this Attempt produced: the command that emitted it, and where its body is.
+def _observations(stream: Path, attempt_id: str) -> Iterator[tuple[str, str, str]]:
+    """Every Observation this Attempt produced: the command that emitted it, where its body is, and
+    where its bytes came from. What that last one *entitles* a candidate to is the caller's rule.
 
     Reading the record rather than the live Steps is what makes verification recomputable offline
     from a stored stream, which is ADR-0009's whole trade. It is also what makes *never sweeping a
@@ -500,7 +519,8 @@ def _observations(stream: Path, attempt_id: str) -> Iterator[tuple[str, str]]:
     does not exist on the half of the record the model wrote.
 
     Access is by name with a default, per the record's third stability rule — a line a later schema
-    wrote, or a crash's truncated last one, is skipped rather than fatal.
+    wrote, or a crash's truncated last one, is skipped rather than fatal. An absent source is the
+    Solver's own work, so a Run promoted before that field existed replays exactly as it behaved.
     """
     if not stream.exists():
         return
@@ -513,7 +533,7 @@ def _observations(stream: Path, attempt_id: str) -> Iterator[tuple[str, str]]:
             continue
         if record.get("tool") in NEVER_SWEPT or not (ref := record.get("observation_ref")):
             continue
-        yield str(record.get("command_raw", "")), str(ref)
+        yield str(record.get("command_raw", "")), str(ref), str(record.get("source", SOURCE_SOLVER))
 
 
 def _in_body(body: Path, matcher: re.Pattern[bytes]) -> Iterator[str]:
