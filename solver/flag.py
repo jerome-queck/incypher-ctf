@@ -9,9 +9,12 @@ believed what it was told would spend its submission slots on strings nothing ev
 The sweep therefore runs over the Step stream and reads `observations/` alone (`solver/record.py`).
 That is structural rather than careful: a Claim's record carries `claim_ref` and no
 `observation_ref`, so the field this module reads does not exist on the half of the record the
-model wrote. Two more lines are skipped for the same reason — a derived record, which carries
-`carry.DERIVED` and holds a model-authored approach label, and this module's own reports, since a
-sweep that read its last report would authorise a candidate on the strength of having mentioned it.
+model wrote. Two more Observations are skipped for the same reason — a body line carrying
+`carry.DERIVED`, which holds a model-authored approach label the model can print back out, and this
+module's own reports, since a sweep that read its last report would authorise a candidate on the
+strength of having mentioned it. Both are rules about a **body**: the model's own prose goes through
+neither, because a Flag that appeared only there is `unverified` already and refusing it would drop a
+nomination rather than protect anything.
 
 A fourth is skipped, and it is the one the Claim/Observation pair could not name
 ([ADR-0019](../docs/adr/0019-the-boards-statement-of-a-challenge-is-not-evidence.md)): a Challenge's
@@ -328,7 +331,7 @@ class Flags:
             swept += 1
             for text in _in_body(self._recorder.run_dir / ref, matcher):
                 found.setdefault(text, Candidate(text, OBSERVED, command=command, ref=ref))
-        for text in (match for prose in said for match in _in_line(prose.encode(), matcher)):
+        for text in (match for prose in said for match in _matches(prose.encode(), matcher)):
             found.setdefault(text, Candidate(text, UNVERIFIED))
         ordered = tuple(sorted(found.values(), key=lambda candidate: candidate.rank))
         self._record(
@@ -536,25 +539,33 @@ def _bodies_of(stream: Path, attempt_id: str) -> Iterator[tuple[str, str, str]]:
 
 
 def _in_body(body: Path, matcher: re.Pattern[bytes]) -> Iterator[str]:
+    """Every wrapper match in one Observation's body, minus any derived record the body carries.
+
+    `carry.DERIVED` marks the one line per Attempt holding a model-authored approach label. That
+    label crosses into the next Attempt's prompt, so the model can print it back out — into a note
+    file it was invited to leave in the working directory, say — and a Flag it had written into its
+    own label would then be swept in as `observed`, replayed to `reproduced` off that same `cat`,
+    and spend the attempt the gate reserves.
+
+    **It is a body rule, and lives here rather than in `_matches`**, which the model's own prose
+    also goes through. A Flag that appeared only in prose is `unverified` by construction — the
+    body loop runs first — and `unverified` is exactly the answer this rule wants. Refusing to
+    match it there protects nothing and drops the nomination instead, on a Board reporting
+    `max_attempts` 0 where an unverified candidate would have been submitted.
+    """
     try:
         for line in _lines(body):
-            yield from _in_line(line, matcher)
+            if DERIVED.encode() not in line:
+                yield from _matches(line, matcher)
     except OSError:
         # A body file that has been deleted under us costs the candidates it held and nothing more:
         # `/state` is deletable mid-Run by design, and a Run that died sweeping is the worse trade.
         return
 
 
-def _in_line(line: bytes, matcher: re.Pattern[bytes]) -> Iterator[str]:
-    """The wrapper's matches in one line, unless the line is a derived record.
-
-    `carry.DERIVED` marks the one line per Attempt that carries a model-authored field, and a model
-    that wrote a plausible Flag into its own approach label must not have it swept back in as
-    something a command produced.
-    """
-    if DERIVED.encode() in line:
-        return
-    for match in matcher.finditer(line):
+def _matches(text: bytes, matcher: re.Pattern[bytes]) -> Iterator[str]:
+    """The wrapper's matches in some bytes — one line of a body, or one whole model message."""
+    for match in matcher.finditer(text):
         yield match.group(0).decode("utf-8", "replace")
 
 
