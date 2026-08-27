@@ -21,6 +21,7 @@ from solver.flag import (
     GUESSED,
     OBSERVED,
     REPRODUCED,
+    STATED,
     UNVERIFIED,
     Candidate,
     Flags,
@@ -178,15 +179,20 @@ def test_a_flag_the_board_stated_in_its_own_prose_is_never_a_candidate(recorder)
 
 def test_a_board_stated_flag_the_model_repeats_is_nominated_and_never_authorised(recorder):
     """The one case a Flag really does live in the prose — a freebie — is not lost by the rule
-    above: the model reads the description in its opening frame and states it, which is exactly
-    what `unverified` is for. What it may never be is `observed`."""
+    above: the model reads the description in its opening frame and states it, and it reaches the
+    gate. What it may never be is `observed`.
+
+    It arrives `stated` rather than `unverified`: ADR-0019 reasoned that `unverified` was the
+    strength it deserved, and ADR-0021 supersedes that — on a Board reporting `max_attempts` 0 an
+    `unverified` candidate is submitted outright, which spent a live slot on the Board's own example.
+    """
     observe(
         recorder, "[recon] the description as the Board gave it", f"the flag is {FLAG}".encode(), source=SOURCE_BOARD
     )
 
     found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID, said=[f"the flag is {FLAG}"])
 
-    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, UNVERIFIED)]
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, STATED)]
 
 
 def test_a_stream_written_before_the_source_field_existed_still_authorises(recorder):
@@ -247,6 +253,59 @@ def test_a_model_that_quotes_its_carried_line_still_nominates_the_flag_it_states
     found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID, said=said)
 
     assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, UNVERIFIED)]
+
+
+def test_a_model_repeating_the_boards_own_example_is_stated_rather_than_unverified(recorder):
+    """#98 closed the sweep's route to the flag-format example. This is the model's.
+
+    The description reaches the model verbatim, so a model narrating what it tried can restate the
+    example — and on a Board reporting `max_attempts` 0 an `unverified` candidate is submitted
+    outright. What separates it from a Flag the model alone states is that the Board stated it too
+    ([#111](https://github.com/jerome-queck/incypher-ctf/issues/111)).
+    """
+    observe(
+        recorder, "[recon] the description as the Board gave it", f"Flag format: {FLAG}".encode(), source=SOURCE_BOARD
+    )
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID, said=[f"the flag format is {FLAG}"])
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, STATED)]
+
+
+def test_a_stated_candidate_is_held_back_even_where_the_board_states_unlimited_attempts(recorder):
+    """The one strength `slots.unlimited` does not wave through. Every wrong submission counts
+    against the Board-wide limiter, which is every *other* Challenge's budget — and this is the one
+    candidate we have positive evidence against."""
+    wire = Wire()
+
+    outcome = spend(flags_of(recorder, wire), [Candidate(FLAG, STATED)], slots=Slots(max_attempts=0))
+
+    assert outcome.graded == ()
+    assert [candidate.text for candidate in outcome.held] == [FLAG]
+    assert wire.submitted == [], "the Board was asked to grade a string it had stated itself"
+
+
+def test_the_reserved_tail_submits_a_stated_candidate_rather_than_carrying_it_out_of_the_run(recorder):
+    """A freebie Challenge whose Flag really is in the prose is not lost by the rule above: at
+    `last_call` there is no later Attempt for the slot to be saved for, so the held candidate is
+    spent rather than dropped."""
+    outcome = spend(flags_of(recorder, Wire(graded(CORRECT))), [Candidate(FLAG, STATED)], last_call=True)
+
+    assert outcome.solved
+    assert submitted(recorder) == [f"[flag] submit {FLAG}"]
+
+
+def test_a_stated_string_a_real_command_also_produced_stays_observed(recorder):
+    """The Board stating a string says nothing about whether a command later produced it. An
+    Observation outranks the Board's own prose, and the ladder already says so."""
+    observe(
+        recorder, "[recon] the description as the Board gave it", f"Flag format: {FLAG}".encode(), source=SOURCE_BOARD
+    )
+    observe(recorder, "cat note.txt", FLAG.encode(), attempt_id=ATTEMPT_ID)
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID, said=[f"the flag is {FLAG}"])
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
 
 
 def test_this_modules_own_report_never_authorises_a_candidate(recorder):

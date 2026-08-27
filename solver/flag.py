@@ -24,7 +24,7 @@ descriptions our Runs persisted end in a flag-format section, and **all four spe
 out** — so wherever that section exists the sweep finds a decoy, every time. The record says which
 Steps those are — `source` — and this module reads it.
 
-How strongly a candidate is known is the whole of the policy below, and there are four answers:
+How strongly a candidate is known is the whole of the policy below, and there are five answers:
 
 - **reproduced** — the exact command that emitted it was replayed once and the same string came
   back. This is the only strength that may spend a Board's last attempt.
@@ -34,6 +34,9 @@ How strongly a candidate is known is the whole of the policy below, and there ar
   submitted while attempts remain, and recorded as what it is — a per-model number worth having.
 - **guessed** — it *was* authorised by an Observation, and then the Instance that minted it expired
   underneath it. Known from our own clock rather than from a rejected Flag.
+- **stated** — the Board's own prose carried it and the model repeated it. The only strength with
+  positive evidence *against* it, so it is the only one an unlimited Board does not wave through: it
+  waits for the reserved tail, where the slot it spends has nothing else to be spent on (ADR-0021).
 
 Two submission branches follow, and only the first has ever been exercised on a real Board:
 
@@ -75,7 +78,11 @@ REPRODUCED = "reproduced"
 OBSERVED = "observed"
 UNVERIFIED = "unverified"
 GUESSED = "guessed"
-STRENGTHS = (REPRODUCED, OBSERVED, UNVERIFIED, GUESSED)
+# The Board's own prose carried it and the model repeated it. Weakest of the five, because it is the
+# only one there is positive evidence *against*: a Flag-shaped string in a Challenge's statement is
+# the Board showing the wrapper's shape far more often than it is the Flag (ADR-0021).
+STATED = "stated"
+STRENGTHS = (REPRODUCED, OBSERVED, UNVERIFIED, GUESSED, STATED)
 
 # The three tools this module spends Steps on. The first and the last are the Solver talking *about*
 # candidates rather than a command producing one, so the sweep never reads their bodies; the replay
@@ -154,7 +161,7 @@ class Candidate:
     @property
     def rank(self) -> int:
         """Where it sorts against the others: strongest first, which is the order slots are spent
-        in and the reason `STRENGTHS` is written as a sequence rather than as four constants."""
+        in and the reason `STRENGTHS` is written as a sequence rather than as five constants."""
         return STRENGTHS.index(self.strength)
 
 
@@ -322,6 +329,7 @@ class Flags:
             self._record(SWEEP, f"{MARK} sweep {shapes}", told.encode(), attempt_id, ok=False)
             return ()
         found: dict[str, Candidate] = {}
+        by_the_board: set[str] = set()
         swept = 0
         stated = 0
         for command, ref, source in _bodies_of(self._recorder.stream_path, attempt_id):
@@ -329,12 +337,17 @@ class Flags:
             # thought of yet arrives non-authorising (ADR-0019).
             if source != SOURCE_SOLVER:
                 stated += 1
+                # Read rather than skipped, because *which* strings the Board stated is what tells a
+                # model repeating one from a model that found it (ADR-0021).
+                by_the_board.update(_in_body(self._recorder.run_dir / ref, matchers))
                 continue
             swept += 1
             for text in _in_body(self._recorder.run_dir / ref, matchers):
                 found.setdefault(text, Candidate(text, OBSERVED, command=command, ref=ref))
         for text in (match for prose in said for match in _matches(prose.encode(), matchers)):
-            found.setdefault(text, Candidate(text, UNVERIFIED))
+            # A string a command produced is already here and outranks both — the Board having also
+            # stated it says nothing about whether the Solver later found it.
+            found.setdefault(text, Candidate(text, STATED if text in by_the_board else UNVERIFIED))
         ordered = tuple(sorted(found.values(), key=lambda candidate: candidate.rank))
         self._record(
             SWEEP,
@@ -485,9 +498,21 @@ def _refuses(candidate: Candidate, slots: Slots, spent_here: int, *, last_call: 
     wrong however many attempts remain. It is also the one refusal `last_call` overrides outright —
     a homoglyph submitted at the end of a Run spends a slot nothing else will ever use, where one
     held back is a Flag the Solver found and never submitted.
+
+    A `stated` candidate is refused next, and **above the unlimited branch**, which is the one place
+    this module does not let speed win. An unlimited Board still has the Board-wide
+    `incorrect_submissions_per_min` limiter, and that is every *other* Challenge's budget — so a
+    string the Board itself showed us waits for the tail, where the slot has nothing else to be spent
+    on. It is not sandbagging: the candidate is submitted, at the one moment holding it costs nobody
+    anything (ADR-0021).
     """
     if not last_call and (wrong := confusables(candidate.text)):
         return f"the confusable-character guard held it back — {'; '.join(wrong)}"
+    if not last_call and candidate.strength == STATED:
+        return (
+            "the Board stated this string itself and the model repeated it, so it waits for the "
+            "reserved tail, where the slot it spends has nothing else to be spent on"
+        )
     if slots.unlimited:
         return ""
     left = slots.left
