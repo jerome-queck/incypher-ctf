@@ -1,5 +1,11 @@
 # One image for every Board, and two seams instead of one
 
+> **The package list is extended by
+> [ADR-0024](0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md).** Every
+> rule this record sets for it still holds — one package per line, no metapackage, nothing installed
+> at run time — and what is added is a second list beside the first, measured off what a Run reached
+> for rather than designed from ADR-0005's cascade.
+
 The Solver has to play several Boards — BrunnerCTF or COMPFEST for v1, a local fixture for v2,
 PatriotCTF for v3, the IN-CYPHER arena for v4, and the scored Board on 22 September — and the
 obvious way to absorb that is a branch per event, cut from a `vN` tag, holding that event's

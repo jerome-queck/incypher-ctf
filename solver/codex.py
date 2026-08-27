@@ -250,6 +250,7 @@ def run_attempt(
     attempt_id: str,
     chain: Sequence[Credential],
     invocation: Invocation = Invocation(),
+    images: Sequence[Path] = (),
     first_step: int = 1,
     launch: Launch | None = None,
     now: Callable[[], dt.datetime] | None = None,
@@ -265,6 +266,11 @@ def run_attempt(
     child is already running: a Checkpoint buys the kill deadline and never a Step, since the
     vendor's agent takes its next turn without asking (ADR-0005 as ADR-0014 amends it). It is read
     on every pass of the loop below and computed nowhere here.
+
+    `images` are attached to the turn with the CLI's own `-i`, and are recon's answer rather than
+    this module's guess (`solver/recon.py`, at `Recon.pictures`). It is a keyword and not a fourth
+    positional for the reason the rest of them are: ADR-0014's seam is three parameters wide and
+    this is plumbing. Empty is the common case and builds the argv it always built.
 
     `first_step` continues the Attempt's numbering rather than restarting it: recon opened this
     Attempt and its probes were its first Steps.
@@ -282,6 +288,7 @@ def run_attempt(
         attempt_id=attempt_id,
         workdir=Path(workdir),
         invocation=invocation,
+        images=tuple(images),
         step=first_step - 1,
         launch=launch or _spawn,
         now=now or _utcnow,
@@ -372,6 +379,7 @@ class _Transcript:
     attempt_id: str
     workdir: Path
     invocation: Invocation
+    images: tuple[Path, ...]
     step: int
     launch: Launch
     now: Callable[[], dt.datetime]
@@ -411,7 +419,7 @@ class _Transcript:
         """
         self._usage, self._flights, self._said = {}, {}, []
         self._broke, self._spawned = False, False
-        argv = _argv(credential, self.invocation)
+        argv = _argv(credential, self.invocation, self.images)
         flight = self._open(" ".join(argv), "codex")
         if refused := _could_not_make(credential.home):
             return UNUSABLE, self._shut(flight, credential, None, refused.encode(), kind=CLOSE)
@@ -693,12 +701,19 @@ class _Transcript:
         return STOPPED
 
 
-def _argv(credential: Credential, invocation: Invocation) -> tuple[str, ...]:
+def _argv(credential: Credential, invocation: Invocation, images: Sequence[Path]) -> tuple[str, ...]:
     """The one command line this module knows how to build.
 
     The prompt is not on it: it goes over stdin, so a working directory full of challenge-supplied
     code cannot read an Attempt's whole frame out of `/proc`, and so a long recon block can never
     meet `ARG_MAX`. `-` is how the CLI is told to expect it there.
+
+    A picture *is* on it, one `-i` each. The paths are the staged artefacts the Board shipped, so
+    they are already inside the working directory the model may read — `-i` hands the model what it
+    could otherwise only infer, and adds no reach it did not have. It is safe against every
+    degenerate input measured on 27 August 2026 — a text file, a truncated zip, three at once, a
+    4000x4000 PNG and a path that does not exist all left the CLI exiting 0 with the turn intact —
+    so a misjudged picture costs context and never the Attempt.
     """
     network = "true" if invocation.network else "false"
     argv = [
@@ -716,6 +731,8 @@ def _argv(credential: Credential, invocation: Invocation) -> tuple[str, ...]:
     ]
     argv += ["-c", f"model_reasoning_effort={invocation.reasoning_effort}"]
     argv += ["-c", f"tools.web_search={'true' if invocation.web_search else 'false'}"]
+    for picture in images:
+        argv += ["-i", str(picture)]
     return (*argv, "-")
 
 

@@ -159,6 +159,11 @@ class _Held:
     flag: str = ""
     approach: str = ""
     artefacts: tuple[Path, ...] = ()
+    # The subset of them `file` called a picture — recon's answer, attached to every turn of this
+    # Attempt (`solver/recon.py`, at `Recon.pictures`). Every turn and not just the first: a turn is
+    # a fresh spawn with no memory of the last (ADR-0023), so a picture attached once would leave
+    # every turn after it inferring the drawing again, which is the failure being fixed.
+    pictures: tuple[Path, ...] = ()
 
 
 class Run:
@@ -305,7 +310,8 @@ class Run:
         )
         self._in_flight = held.deadline
         try:
-            held.recon_block = self._recon(held, challenge)
+            found = self._recon(held, challenge)
+            held.recon_block, held.pictures = found.block(), found.pictures
             while not self._turn(held, challenge):
                 self._renew(held)
         except Exception as broken:
@@ -358,6 +364,7 @@ class Run:
             attempt_id=held.attempt_id,
             chain=self._chain,
             invocation=self._invocation,
+            images=held.pictures,
             first_step=self._steps.next_index(),
             launch=self._launch,
             now=self._now,
@@ -459,7 +466,9 @@ class Run:
                 staged.append(landing)
         return workdir, tuple(staged)
 
-    def _recon(self, held: _Held, challenge: Sighting) -> str:
+    def _recon(self, held: _Held, challenge: Sighting) -> recon.Recon:
+        """What the cascade observed, whole rather than rendered: the Attempt wants the block *and*
+        the pictures, and a method answering only the string would have thrown the second away."""
         found = recon.recon(
             challenge.description,
             held.artefacts,
@@ -469,7 +478,7 @@ class Run:
             first_step=self._steps.next_index(),
         )
         self._steps.reached(self._steps.spent + len(found.probes))
-        return found.block()
+        return found
 
     def _deploy(self, held: _Held) -> None:
         """Take a Lease where this Challenge needs one, and narrow the Attempt's clock to it.

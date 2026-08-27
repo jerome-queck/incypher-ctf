@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 from solver import shell as shell_module
-from solver.recon import BRANCHES, DISPATCH, OD, STRINGS, Limits, recon
+from solver.recon import BRANCHES, DISPATCH, OD, PICTURES, STRINGS, Limits, recon
 from solver.record import SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.redaction import Redactor
 
@@ -379,3 +379,42 @@ def test_the_cascade_only_reaches_for_tools_the_image_installs():
 
     for command in (DISPATCH, STRINGS, OD, *chain.from_iterable(BRANCHES.values())):
         assert command[0] in named, f"{command[0]} is invoked by the cascade and installed by nothing"
+
+
+def test_an_artefact_that_is_a_picture_is_named_as_one(recorder, tmp_path):
+    """The cascade already dispatches on `file -b --mime-type`, so which artefacts are pictures is
+    a fact it has computed and thrown away. Naming it is what lets the Attempt attach them
+    (`solver/codex.py`), and it is read off the tool's answer rather than off the extension for
+    the same reason every other branch is."""
+    picture = tmp_path / "cipher.png"
+    picture.write_bytes(PNG)
+
+    found = scout(recorder, artefacts=[picture])
+
+    assert found.pictures == (picture,)
+
+
+def test_an_artefact_that_only_looks_like_a_picture_is_not_one(recorder, tmp_path):
+    """A `.png` that is really a zip is not attached, and a zip named anything is not either. The
+    whole point of dispatching on content is that the name is never the answer."""
+    liar = tmp_path / "cipher.png"
+    with zipfile.ZipFile(liar, "w") as archive:
+        archive.writestr("inside.txt", "brunner{not_a_picture}")
+
+    found = scout(recorder, artefacts=[liar])
+
+    assert found.pictures == ()
+
+
+def test_the_pictures_attached_are_capped_however_many_a_challenge_ships(recorder, tmp_path):
+    """Every attached picture is spent context on a 5.5-hour clock, and a Challenge shipping a
+    directory of frames would spend an Attempt's whole frame on them before the model read a word."""
+    pictures = []
+    for number in range(PICTURES + 3):
+        picture = tmp_path / f"frame-{number:02d}.png"
+        picture.write_bytes(PNG)
+        pictures.append(picture)
+
+    found = scout(recorder, artefacts=pictures)
+
+    assert found.pictures == tuple(pictures[:PICTURES])
