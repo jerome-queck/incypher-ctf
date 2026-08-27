@@ -16,6 +16,14 @@
 > between them would keep the 1:1 and buy a fresh TTL, at the cost of any foothold on the Target and
 > of mana, which is the concurrency cap. `CONTEXT.md` gains **Lease** accordingly: this is the
 > condition the word was parked for.
+>
+> **That amendment's premise is withdrawn by
+> [ADR-0023](0023-an-attempt-holds-the-turn-loop-and-order-is-not-asked-between-turns.md), and its
+> conclusion is not.** The re-invocation is a Turn inside the Attempt, so the hold spans exactly one
+> Attempt after all and `_end_lease` releases it at every close — **the 1:1 this record wrote down
+> was right, and was never actually overtaken.** `Lease` still earns its entry, on the ground
+> ADR-0023 gives: a hold is a resource and an Attempt is work, and one-to-one in span is not
+> one-to-one in meaning.
 
 Forty-three per cent of a Brunner-shaped Board cannot be reconned at all without a running
 Instance — `connection_info` is empty on every `dynamic` Challenge and absent from every

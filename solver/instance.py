@@ -142,9 +142,9 @@ class Terms:
 class Lease:
     """Our hold on one Instance — the address it answers at, and the moment it stops answering.
 
-    Not the same span as an Attempt (`CONTEXT.md`, *Lease*): when the solving agent ends its turn
-    with budget left, the re-invocation is a new Attempt on the same Challenge and the hold carries
-    across it. The deadline is the deploy response's `until` and nothing else ever writes it.
+    A hold is a resource and an Attempt is work, which is why it has a word of its own even though
+    the two now share a span (`CONTEXT.md`, *Lease*; ADR-0023). The deadline is the deploy response's
+    `until` and nothing else ever writes it.
     """
 
     challenge_id: int | str

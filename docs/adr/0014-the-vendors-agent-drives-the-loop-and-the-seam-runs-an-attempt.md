@@ -1,5 +1,17 @@
 # The vendor's agent drives the loop, and the seam runs an Attempt
 
+> **One section is superseded by
+> [ADR-0023](0023-an-attempt-holds-the-turn-loop-and-order-is-not-asked-between-turns.md):
+> *An early stop is a new Attempt, not a give-up*, below.** Its mechanism never ran — the
+> orchestrator re-invokes *inside* the same Attempt, so the re-invocation is a **Turn** and Order is
+> not asked between them. The concept this record declined to coin was coined anyway. Two of its
+> claims are wrong rather than merely overtaken: repeated early stops do **not** feed the novelty
+> counter (a new Attempt would reset every counter it has), and Order would not have gone on ranking
+> the Challenge first (ADR-0015's spend term ranks it away by the sixth). **Everything else here
+> stands** — the vendor's agent driving its own loop, the workdir as the memory, the rejection of
+> `codex exec resume`, and the rule that an early stop must never become the give-up button ADR-0005
+> removed. That last one is exactly what the turn loop delivers; only its location moves.
+
 [#17](https://github.com/jerome-queck/incypher-ctf/issues/17) was chartered to pick v1's default
 model and design a provider-abstraction seam behind it. It assumed the seam would be a completion
 endpoint — [ADR-0011](0011-the-sanctioned-path-is-the-only-path.md) had already written the shape

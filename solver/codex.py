@@ -82,8 +82,9 @@ CLOSE = "close"
 
 # Why one invocation of the CLI ended. **Not** Cut causes — a Cut is the orchestrator's decision
 # over a whole Attempt and its vocabulary is closed in `CONTEXT.md`. `STOPPED` in particular is not
-# an ending: the vendor's agent ending its turn with budget left is a new Attempt (ADR-0014), and
-# treating it as the end of one would hand the model the give-up button ADR-0005 removed.
+# an ending: the vendor's agent ending its turn with budget left is answered by another turn inside
+# the same Attempt (ADR-0023), and treating it as the end of one would hand the model the give-up
+# button ADR-0005 removed.
 STOPPED = "stopped"
 KILLED = "killed"
 FAILED = "failed"
