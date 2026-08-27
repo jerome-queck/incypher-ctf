@@ -17,12 +17,13 @@ Start here: `README.md`, then `AGENTS.md`.
 | Credentials | Every secret, where it comes from, and how it reaches the container | `docs/credentials.md` |
 | The Solver | The agent's own code — what it refuses to start without, the Board profile it discovers, the seams it reaches the outside world through, the sync that keeps its copy of a moving Board current, the Tier it reads off what that Board states, the ranking and the clock that choose what to work next and for how long, the recon every Attempt opens with, the prompt it is worked under, the stall call that ends one, the Flag it submits only where a command produced one, the record it leaves behind, and the reserved tail it ends on | `solver/`, starting at `__main__.py` |
 | The image | The container the Solver ships as — the pinned base, the package list every recon step assumes, the pinned Codex CLI the adapter spawns, and the allowlist that keeps a secret out of a layer | `Dockerfile`, `.dockerignore` |
-| Scripts | Setup and pre-flight checks run by hand — the runtime this repo pins, the live board read through `solver/`, whether the model we would spend a Run on answers, and which credentials this machine holds | `scripts/` |
+| Scripts | Setup, pre-flight checks and the eval queries, all run by hand — the runtime this repo pins, the live board read through `solver/`, whether the model we would spend a Run on answers, which credentials this machine holds, the seven questions asked of a finished Run, and the promotion that puts one in `runs/` | `scripts/`, the seven queries at `eval_*.py` |
 | Tests | What CI runs over `solver/` and `scripts/` — the seams that decide offline | `tests/`, configured in `pyproject.toml` |
 | Installed skills | The mattpocock engineering skills, copied in for Claude and Codex | `.claude/skills/`, `.agents/skills/` |
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
 | Tool caches | Disposable ruff and pytest scratch — gitignored, safe to delete | `.cache/` |
 | Container state | The host mount a running container writes through — one `runs/<run_id>/` per Run, and the Codex credential the container mints for itself — gitignored, never committed | `state/` |
+| Promoted Runs | The Step stream of every Run that reached an Attempt, committed as written and one file per Run — data, so excluded from lint, outside the conformance checker's reach, and deliberately **not** excluded from the secret scan | `runs/`, written by `scripts/promote_run.py` |
 
 Update this file in the same pull request whenever a top-level area is added, moved, or removed.
