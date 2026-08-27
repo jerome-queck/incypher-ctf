@@ -153,7 +153,7 @@ class Turn:
     """One invocation of the vendor's agent, and everything that happened inside it.
 
     An Attempt is many turns: the vendor's agent ending its turn with budget left is a new turn over
-    the same working directory and never the end of the Attempt (ADR-0014), so the turn is the unit
+    the same working directory and never the end of the Attempt (ADR-0023), so the turn is the unit
     a premature quit is about and the Attempt is the unit a Cut is about.
 
     `spawn` is `None` for a tail of Steps with no invocation after them, which is what a Run that

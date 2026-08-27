@@ -10,10 +10,12 @@ close, and this is the query that says whether it worked.
 
 Three things it reads, in rising order of how much they prove:
 
-- **Deploys against terminates**, per Attempt and per Challenge. Per Challenge as well as per
-  Attempt because a Lease legitimately spans consecutive Attempts on one Challenge
-  ([ADR-0014](../docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)),
-  so a deploy in Attempt 1 released in Attempt 3 is correct and reads as a leak per Attempt.
+- **Deploys against terminates**, per Attempt and per Challenge. **Per Attempt is the verdict**: a
+  hold is released at the close of every Attempt
+  ([ADR-0023](../docs/adr/0023-an-attempt-holds-the-turn-loop-and-order-is-not-asked-between-turns.md)),
+  so a deploy in one Attempt and its terminate in a later one is a leak and not a span. The
+  per-Challenge view is kept as the cross-check that finds it — a Challenge whose two columns
+  balance while one of its Attempts does not is where the hold was carried.
 - **`instance_until` on the Attempt's open line**, which is the Board's own deadline and therefore
   the one field that says a Lease was really taken rather than a deploy merely attempted.
 - **The sweep's exit code**, which is the verdict. `solver/instance.py` records a sweep as exit 0
@@ -105,7 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
 
-    print("\nper Challenge — where a Lease spanning consecutive Attempts is correct rather than a leak:\n")
+    print("\nper Challenge — a hold carried out of the Attempt that took it is a leak, not a span:\n")
     print(
         stream.table(
             ["run", "challenge", "deploys", "terminates", "attempts with a lease"],
