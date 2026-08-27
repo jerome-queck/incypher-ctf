@@ -159,6 +159,139 @@ RUN set -eu; \
     codex-code-mode-host --version >/dev/null 2>&1 || codex-code-mode-host --help >/dev/null 2>&1; \
     rm "$probe"
 
+# The second list, and it has a different provenance from the one above: those tools were designed
+# in from ADR-0005's cascade, these were **measured** — every one is a binary or a module the model
+# itself reached for and did not find, across the 121 `shell` Steps of the `brunner-gate-2` and
+# `brunner-gate-3` Runs on 26 August 2026 (#99). Eighteen of those Steps ended `command not found`.
+# ADR-0024 is the per-line argument and the list of what was declined.
+#
+# It sits **after** the probe above rather than beside the floor list, for one reason that is pure
+# build mechanics: the `codex` layer downloads ~100 MB pinned by digest, and a package added above
+# it invalidates that download on every edit to this list. Nothing here is needed before that point.
+#
+# `imagemagick-7.q16`, and **not `imagemagick`** — that name is a metapackage whose entire content
+# is a dependency on this one, so naming it would put the ban in ADR-0008 one indirection away from
+# being true. `identify` and `montage` are this package's, on `/usr/bin`, with no alternatives dance.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends -o Acquire::Retries=5 \
+      # `fc-list`. Worth a line only because the fonts are already in the image and nothing could
+      # name them: DejaVu ships in the base, and without this the model cannot find a font file to
+      # render text with — which is what PIL's `ImageFont.truetype` wants and its default cannot do.
+      fontconfig \
+      # A leaked `.git` is a whole genre of Web Challenge, and the model reached for it 5 times —
+      # more than any other missing binary. 6 packages on top of what is already here. This is the
+      # one line that reverses a decision rather than filling a gap: ADR-0009 kept "the Solver never
+      # commits" by leaving the binary out, and ADR-0024 moves that enforcement to the test that was
+      # always the one about it (`tests/test_two_homes.py`).
+      git \
+      # **`imagemagick-7.q16` is broken without this, and the probe below is how we found out.**
+      # With DejaVu alone ImageMagick knows 8 fonts and resolves *none* of them as its default, so
+      # every invocation that draws text — `-annotate`, `-label`, and `montage`'s own default tiling
+      # — dies at `unable to read font ''` and exits 1 while still writing a plausible file.
+      # `gsfonts` is the URW base-35 set its built-in default names; with it the font list is 76 and
+      # the same commands exit 0. 6 packages, measured in this image on 27 August 2026.
+      gsfonts \
+      # `identify` and `montage`, reached for 3 times between them. The Challenge shape is an image
+      # that has to be measured or tiled before it can be read.
+      imagemagick-7.q16 \
+      # 3 packages, and the model asked once. The cheapness is the argument: `jq` is how anything
+      # reads a Board's JSON or a Challenge's config without writing a parser first.
+      jq \
+      # `pdftotext`, and the clearest single loss in the two Runs: `gate-3 / 69-1` paid an
+      # `apt-get update` for it mid-Attempt and went on to solve, while `gate-2 / 69-1` met
+      # `pdftotext: command not found`, spent five `web_search` Steps and closed `cut:novelty`.
+      poppler-utils \
+      # `python`. One package that is a symlink, and the model typed the bare name once. The base
+      # ships `python3` only, so `python foo.py` — which is most of the internet's example code —
+      # fails on a container that has a perfectly good interpreter.
+      python-is-python3 \
+      # PIL, reached for twice and the most-wanted module of the seven. Image work is Forensics and
+      # Stego's floor, and `zsteg` above only answers PNG and BMP LSB.
+      python3-pil \
+      # `pip` itself. ADR-0024 argues the line; the marker removed below is what makes it true.
+      python3-pip \
+      # 1 package on top of what is here. The model reached for it once, and a PDF that `pdftotext`
+      # renders as nothing is often one whose text is in an object `pypdf` will hand over.
+      python3-pypdf \
+      # 6 packages, and the module every piece of example HTTP code on the internet imports. The
+      # stdlib `urllib` does the same job, which is again a Step spent finding out.
+      python3-requests \
+      # One package, no dependencies, and 4 reaches. `grep` is present and does the same job, but a
+      # Step spent discovering that is a Step, and this is the cheapest line in the list.
+      ripgrep \
+ && rm -rf /var/lib/apt/lists/*
+
+# **`pip` without this line is `pip` that does not install anything.** Debian marks its system
+# Python externally-managed (PEP 668), so `pip install pillow` stops at
+# `error: externally-managed-environment` *before* it opens a socket — which is the same Step lost
+# that shipping `pip` was meant to buy back, just with a different message on it. Measured in this
+# image on 27 August 2026, both ways.
+#
+# The marker exists to stop `pip` from breaking a system someone else depends on. Nobody depends on
+# this one: it is rebuilt from this file and thrown away after a Run, and the alternative it asks
+# for — a virtualenv per install — is two more Steps in the place we are trying to remove one.
+# Glob rather than a version, because the base ships 3.13 and 3.14 side by side and which one
+# `python3` points at is upstream's decision, not ours.
+RUN rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED
+
+# The second list exercised the way the first one is — on real input, never `command -v`, because a
+# binary that is present and cannot run is the failure this layer exists to catch. This is not
+# theoretical: the first draft went red on `montage`, which is how `gsfonts` came to be on the list.
+#
+# Every line here asserts *behaviour*, which for a library means output and never an import — an
+# `import requests` that succeeds proves the package unpacked and nothing about whether it works.
+#
+# The two PDFs are built by different routes on purpose, because the two readers disagree about how
+# broken a PDF may be. `pdftotext` reconstructs a missing xref, so a nine-line `printf` is enough
+# for it; `pypdf` raises `PdfStreamError` on the same bytes and wants a real one, so PIL writes that
+# one — which exercises a third thing for free, PIL's own PDF encoder. Neither needs the network.
+#
+# `pip` is asserted to get **past** PEP 668 and reach resolution, and the assertion is on the
+# sentence it prints when it does rather than on the absence of the one it prints when it cannot —
+# an absence also passes for a `pip` that died for some other reason. `--no-index` keeps it offline,
+# because a build that reaches PyPI goes red when PyPI is slow, which is the redirector problem at
+# the top of this file wearing a different hat. `pip3` is the name the Run actually reached for.
+RUN set -eu; \
+    work=$(mktemp -d); cd "$work"; \
+    printf 'flag{probe}' > plain.txt; \
+    printf '%s\n' '%PDF-1.4' \
+      '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj' \
+      '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj' \
+      '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj' \
+      '4 0 obj<</Length 43>>stream' \
+      'BT /F1 24 Tf 20 100 Td (flag{probe}) Tj ET' \
+      'endstream endobj' \
+      '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj' \
+      'trailer<</Root 1 0 R/Size 6>>' > text.pdf; \
+    test "$(rg -o 'flag\{probe\}' plain.txt)" = 'flag{probe}'; \
+    test "$(printf '{"f":"flag{probe}"}' | jq -r .f)" = 'flag{probe}'; \
+    test "$(python -c 'print("flag{probe}")')" = 'flag{probe}'; \
+    git init -q .; \
+    git -c user.email=probe@localhost -c user.name=probe add plain.txt; \
+    git -c user.email=probe@localhost -c user.name=probe commit -qm probe; \
+    test "$(git show HEAD:plain.txt)" = 'flag{probe}'; \
+    fc-list | grep -q DejaVu; \
+    python3 -c "from PIL import Image, ImageDraw, ImageFont; \
+i = Image.new('RGB', (240, 60), 'white'); \
+ImageDraw.Draw(i).text((10, 15), 'flag{probe}', fill='black', \
+font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 28)); \
+i.save('one.png'); i.save('drawn.pdf')"; \
+    test "$(identify -format '%wx%h' one.png)" = '240x60'; \
+    montage one.png one.png -tile 2x1 -geometry +0+0 two.png; \
+    test "$(identify -format '%wx%h' two.png)" = '480x60'; \
+    # No `-font`: this is `gsfonts` on trial and nothing else. Without it the default font resolves
+    # to nothing, this exits 1, and the tiling above would still have passed.
+    magick -size 200x50 xc:white -annotate +10+30 'flag{probe}' drawn.png; \
+    test "$(identify -format '%wx%h' drawn.png)" = '200x50'; \
+    pdftotext -layout text.pdf - | grep -qF 'flag{probe}'; \
+    python3 -c "import pypdf; page = pypdf.PdfReader('drawn.pdf').pages[0]; \
+assert (int(page.mediabox.width), int(page.mediabox.height)) == (240, 60), page.mediabox"; \
+    python3 -c "import requests; \
+assert requests.Request('GET', 'http://probe/x', params={'f': 'flag{probe}'}).prepare().url.endswith('f=flag%7Bprobe%7D')"; \
+    pip3 install --no-index --dry-run pypdf 2>&1 | grep -q 'Requirement already satisfied'; \
+    test "$(pip --version | cut -d' ' -f2)" = "$(pip3 --version | cut -d' ' -f2)"; \
+    cd /; rm -rf "$work"
+
 # Every gate Run is from a built image with **no source mount** (ADR-0008), so this is what a gate
 # proves. ADR-0008 bakes in three things and all three are here: the tools above, `solver/`, and
 # every event's `.board.json` — every event's rather than one, because which Board a Run plays is

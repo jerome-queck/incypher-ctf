@@ -637,3 +637,46 @@ def test_a_chain_with_no_rung_is_our_defect_and_arrives_as_one(recorder):
     taken = attempt(recorder, Launcher(), chain=())
 
     assert "no credential was configured" in kind(taken, CLOSE)[0].command
+
+
+def test_a_picture_is_attached_to_the_turn_rather_than_described_to_it(recorder, tmp_path):
+    """Measured on *Blackboard* (#99): the model decoded a Dancing Men cipher from the PNG's byte
+    structure, printed its answer through a command so it graded `reproduced` — the whole
+    verification ladder working — and was wrong, because it was inferring a drawing it could not
+    see. `-i` is the CLI's own door for that, and it is proven open: on 27 August 2026
+    `gpt-daybreak-blue-latest` read a rendered string off an attached PNG and returned it exactly,
+    having run no command at all."""
+    picture = tmp_path / "blackboard.png"
+    picture.write_bytes(b"\x89PNG\r\n\x1a\n")
+    launcher = Launcher(Canned(CAPTURED))
+
+    attempt(recorder, launcher, images=(picture,))
+
+    argv = launcher.argv[0]
+    assert ("-i", str(picture)) == argv[argv.index("-i") : argv.index("-i") + 2]
+    assert argv[-1] == "-", "the prompt still goes over stdin"
+
+
+def test_every_picture_gets_its_own_flag(recorder, tmp_path):
+    """The CLI takes `-i` repeatably and a Challenge that is a picture is often several of them —
+    a sequence of frames, a cipher split across sheets."""
+    pictures = tuple(tmp_path / f"sheet-{n}.png" for n in range(3))
+    for picture in pictures:
+        picture.write_bytes(b"\x89PNG\r\n\x1a\n")
+    launcher = Launcher(Canned(CAPTURED))
+
+    attempt(recorder, launcher, images=pictures)
+
+    argv = launcher.argv[0]
+    assert [argv[at + 1] for at, word in enumerate(argv) if word == "-i"] == [str(one) for one in pictures]
+
+
+def test_a_challenge_with_no_picture_is_spawned_exactly_as_it_always_was(recorder):
+    """Most Challenges are not pictures — 52 of 52 Brunner attachments are `.zip` — so the common
+    path has to be byte-identical to the one before this existed, or every Attempt pays for a
+    Category that is six Challenges in seventy-four."""
+    launcher = Launcher(Canned(CAPTURED))
+
+    attempt(recorder, launcher, images=())
+
+    assert "-i" not in launcher.argv[0]

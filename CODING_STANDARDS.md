@@ -173,7 +173,12 @@ both hold to it.
   [ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md) gives: one
   fewer top-level area, and a list is readable where it is used. A tool the Solver needs at run
   time is a line in that list and never a runtime install — the venue network at 14:00 is not a
-  dependency we get to have. Where two packages ship the same tool, the `Dockerfile` installs one
+  dependency we get to have. **That rule is about what a solve depends on, and `pip` does not
+  change it**: the image ships `pip` and the PEP 668 marker is removed
+  ([ADR-0024](docs/adr/0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md)),
+  so the model can reach PyPI for its own long tail mid-Attempt — but anything a Run is *entitled*
+  to find is still a line in the list, because a run-time install that the venue network refuses is
+  a Challenge lost with nobody there to notice. Where two packages ship the same tool, the `Dockerfile` installs one
   and says which, so nothing depends on whichever binary resolves first.
 - **`docs/competitions/` — three files per event.** Our reading of the event, beside a verbatim
   `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed —

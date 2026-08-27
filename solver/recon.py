@@ -68,6 +68,16 @@ MATCH_BYTES = 200
 
 EXIFTOOL = ("exiftool", "-a", "-G1", "-s")
 
+# How many pictures an Attempt may hand the model, at most. `codex exec` takes `-i` repeatably and
+# the model genuinely reads what it is given — proven in this image on 27 August 2026, where
+# `gpt-daybreak-blue-latest` returned a string rendered into a PNG exactly, having run no command
+# and with the string nowhere in the file's bytes. The cap is here rather than at the adapter
+# because *which artefacts are pictures* is this module's answer, and a number that bounds it
+# belongs beside the question it bounds. Four, because every attached picture is context spent
+# before the model has read a word, and a Challenge shipping a directory of frames would otherwise
+# spend the opening frame on them.
+PICTURES = 4
+
 # Keyed by the full mime type, then by its major part, then by nothing at all — which is the
 # unknown branch and is empty by design. Every entry is argv without the artefact, which is
 # appended last. An archive is **listed and never extracted**: extraction moves the environment,
@@ -121,6 +131,14 @@ class Recon:
     cross an Attempt boundary, because all of it is Observation and none of it is Claim."""
 
     probes: tuple[Probe, ...]
+    # The artefacts `file` called a picture, capped at `PICTURES` and in the order the Board listed
+    # them. **Picture** and not *image* on purpose, and it is the one piece of vocabulary this
+    # module invents: *the image* already means the container everything here runs inside, and a
+    # field called `images` beside a `Dockerfile` is a sentence that has to be read twice. `CONTEXT.md`
+    # has no entry because this is not a domain concept — it is a mime type's major part, named. Attached to the turn by `solver/codex.py` rather than described to it: a Challenge that
+    # *is* a drawing reaches a text stream however much tooling the image gains, and the model then
+    # infers the drawing rather than reading it (#99).
+    pictures: tuple[Path, ...] = ()
 
     def block(self) -> str:
         return "\n\n".join(_rendered(probe) for probe in self.probes)
@@ -152,7 +170,7 @@ def recon(
     cascade.read(description)
     for artefact in artefacts:
         cascade.work(Path(artefact))
-    return Recon(tuple(cascade.probes))
+    return Recon(tuple(cascade.probes), tuple(cascade.pictures[:PICTURES]))
 
 
 class _Cascade:
@@ -169,6 +187,7 @@ class _Cascade:
         self._deadline = time.monotonic() + limits.cascade_seconds
         self._step = spent
         self.probes: list[Probe] = []
+        self.pictures: list[Path] = []
 
     def read(self, description: str) -> None:
         """The one input that is the Board *stating* the Challenge rather than the Solver working
@@ -190,6 +209,8 @@ class _Cascade:
         cascade's remaining budget."""
         subject = artefact.name
         mime = self._dispatch(subject, artefact)
+        if _major(mime) == "image":
+            self.pictures.append(artefact)
         self._floor(subject, artefact)
         for command in _branch_for(mime):
             self._command(subject, (*command, str(artefact)))
@@ -284,8 +305,15 @@ class _Cascade:
 
 
 def _branch_for(mime: str) -> tuple[tuple[str, ...], ...]:
-    major = mime.split("/")[0]
-    return BRANCHES.get(mime) or BRANCHES.get(major) or ()
+    return BRANCHES.get(mime) or BRANCHES.get(_major(mime)) or ()
+
+
+def _major(mime: str) -> str:
+    """The half of a mime type before the slash — `image` out of `image/png`.
+
+    One function rather than the same split written wherever it is wanted, because the two callers
+    below disagree by one character otherwise and neither would fail loudly."""
+    return mime.split("/")[0]
 
 
 def _rendered(probe: Probe) -> str:

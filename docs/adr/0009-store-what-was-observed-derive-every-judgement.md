@@ -1,5 +1,12 @@
 # Store what was observed, derive every judgement
 
+> **One enforcement in *Two homes* is moved by
+> [ADR-0024](0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md).** The rule
+> below is unchanged — the Solver never commits mid-Run — but "the Solver has no git binary" is no
+> longer how it is kept: `git` is in the image for the *model*, which reached for it more than any
+> other binary it could not find, and the guard that binds our own code is the AST test over every
+> `solver/` module (`tests/test_two_homes.py`).
+
 > **Corrected in three places by
 > [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md), and one of those
 > narrowed again by [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md).** The principle and

@@ -5,12 +5,17 @@ commit mid-Run costs resources during the scored 5.5 hours and writes outside th
 ADR-0008 established. Promotion to `runs/<run_id>.jsonl` is a separate step afterwards, run by a
 human against a container that is already dead.
 
-The rule is kept mechanically at the image — a binary that is not installed cannot be invoked at
-14:00 — and structurally in the package, so a module cannot acquire the habit before someone
-notices the `Dockerfile` never gave it the tool.
+The rule had two enforcements and now has one.
+[ADR-0024](../docs/adr/0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md)
+put `git` in the image for the **model**, which reached for it more often than any other binary it
+could not find, so the mechanical half — a binary that is not installed cannot be invoked at 14:00
+— is gone. What is left is the structural half below, and it is the half that was ever about this
+rule: ADR-0009's sentence is about what *the Solver* does, and a Challenge shipping a leaked `.git`
+neither commits our record nor writes outside `/state`.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -20,12 +25,31 @@ SOLVER_MODULES = sorted((REPO_ROOT / "solver").glob("*.py"))
 _CAN_BE_DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
-def test_the_image_installs_no_version_control():
-    """The package list is the whole inventory — nothing is installed at run time, because the
-    venue network at 14:00 is not a dependency this repository gets to have."""
-    installed = REPO_ROOT / "Dockerfile"
+def _packages_installed() -> list[str]:
+    """Every package name the `Dockerfile` hands to `apt-get install`, read off the continuation
+    lines rather than matched as a literal — a test that pins six spaces and a backslash goes red
+    the day somebody reindents the file, which teaches nobody anything."""
+    listed = (REPO_ROOT / "Dockerfile").read_text().splitlines()
+    return [word for line in listed if (word := line.strip().removesuffix("\\").strip()) and _is_package(line, word)]
 
-    assert "git" not in installed.read_text().split(), "the Dockerfile named a git package"
+
+def _is_package(line: str, word: str) -> bool:
+    return (
+        line.startswith("      ")
+        and not word.startswith("#")
+        and re.fullmatch(r"[a-z0-9][a-z0-9.+-]*", word) is not None
+    )
+
+
+def test_the_image_gives_git_to_the_model_and_never_to_the_solver():
+    """The inverse of what this file asserted until ADR-0024, and the reversal is pinned rather
+    than merely allowed: `git` is on the list on purpose, so a later tidy-up that drops it argues
+    with a red test instead of quietly closing a Challenge genre again. What still binds *us* is
+    the AST guard below, which is the half of ADR-0009's rule that was ever about the Solver.
+
+    The package list is still the whole inventory — nothing is installed at run time, because the
+    venue network at 14:00 is not a dependency this repository gets to have."""
+    assert "git" in _packages_installed(), "the Dockerfile no longer names the git package"
 
 
 def _would_run_git(literal: str) -> bool:
