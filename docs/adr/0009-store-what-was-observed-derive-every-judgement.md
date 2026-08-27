@@ -19,7 +19,8 @@
 > split below is a pair, and a Challenge's description is neither half of it: the model did not
 > write it and nothing ran to produce it. A `source` on every Step says which, and what authorises a
 > Flag submission reads it. Nothing here changes — it is this record's own rule, *store the fact and
-> derive the judgement*, applied to a case it did not name.
+> derive the judgement*, applied to a case it did not name. **`source` joins the `step-end` field
+> list in *The stream* below**, which is written as it was decided and does not name it.
 
 v1 emits telemetry, and two earlier records already rest their weight on it.
 [ADR-0005](0005-the-stall-call-lives-outside-the-solving-model.md) leaves its three stall

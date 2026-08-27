@@ -319,10 +319,9 @@ class Flags:
         found: dict[str, Candidate] = {}
         swept = 0
         stated = 0
-        for command, ref, source in _observations(self._recorder.stream_path, attempt_id):
-            # ADR-0019: only what the Solver's own work produced authorises. Required rather than
-            # `SOURCE_BOARD` refused, so a source nobody has thought of yet arrives non-authorising
-            # — which is the direction a wrong guess is cheap in.
+        for command, ref, source in _bodies_of(self._recorder.stream_path, attempt_id):
+            # An allowlist rather than a refusal of `SOURCE_BOARD`, so a source nobody has
+            # thought of yet arrives non-authorising (ADR-0019).
             if source != SOURCE_SOLVER:
                 stated += 1
                 continue
@@ -509,7 +508,7 @@ def _refuses(candidate: Candidate, slots: Slots, spent_here: int, *, last_call: 
     return ""
 
 
-def _observations(stream: Path, attempt_id: str) -> Iterator[tuple[str, str, str]]:
+def _bodies_of(stream: Path, attempt_id: str) -> Iterator[tuple[str, str, str]]:
     """Every Observation this Attempt produced: the command that emitted it, where its body is, and
     where its bytes came from. What that last one *entitles* a candidate to is the caller's rule.
 

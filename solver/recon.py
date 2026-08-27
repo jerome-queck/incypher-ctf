@@ -218,12 +218,12 @@ class _Cascade:
             self._command(subject, (*OD, "-j", str(size - OD_EDGE_BYTES), "-N", str(OD_EDGE_BYTES), str(artefact)))
         self._scan(subject, artefact, str(artefact))
 
-    def _scan(self, subject: str, over: Path | bytes, where: str, *, source: str = SOURCE_SOLVER) -> None:
+    def _scan(self, subject: str, read_from: Path | bytes, where: str, *, source: str = SOURCE_SOLVER) -> None:
         self._probe(
             subject,
             f"{MARK} flag-scan for {self._pattern} — {where}",
             "flag-scan",
-            lambda budget: _scanned(over, where, self._pattern, self._limits.artefact_bytes, budget),
+            lambda budget: _scanned(read_from, where, self._pattern, self._limits.artefact_bytes, budget),
             source=source,
         )
 
@@ -241,6 +241,7 @@ class _Cascade:
         command: str,
         tool: str,
         produce: Callable[[float], tuple[int | None, bytes]],
+        *,
         source: str = SOURCE_SOLVER,
     ) -> tuple[int | None, bytes]:
         """Record one probe, whatever it turned out to be — including one the budget left no room
@@ -335,7 +336,7 @@ def _shannon(window: bytes) -> float:
     return sum(-(share := window.count(value) / len(window)) * math.log2(share) for value in set(window))
 
 
-def _scanned(source: Path | bytes, where: str, pattern: str, cap: int, budget: float) -> tuple[int | None, bytes]:
+def _scanned(read_from: Path | bytes, where: str, pattern: str, cap: int, budget: float) -> tuple[int | None, bytes]:
     """The Board's own Flag wrapper, over as much of the artefact as the caps allow.
 
     The pattern comes from the Board profile at runtime, so a wrapper this code has never seen
@@ -352,7 +353,7 @@ def _scanned(source: Path | bytes, where: str, pattern: str, cap: int, budget: f
     carried = b""
     stopped = ""
     try:
-        for block in _blocks(source, cap):
+        for block in _blocks(read_from, cap):
             read += len(block)
             for match in matcher.finditer(carried + block):
                 if match.group(0) not in found:
@@ -376,11 +377,11 @@ def _scan_report(found: list[bytes], read: int, stopped: str) -> bytes:
     return f"{MARK} scanned {read} bytes{stopped}\n{len(found)} match(es): ".encode() + shown + more.encode()
 
 
-def _blocks(source: Path | bytes, cap: int) -> Iterator[bytes]:
-    if isinstance(source, bytes):
-        yield source[:cap]
+def _blocks(read_from: Path | bytes, cap: int) -> Iterator[bytes]:
+    if isinstance(read_from, bytes):
+        yield read_from[:cap]
         return
-    with source.open("rb") as reading:
+    with read_from.open("rb") as reading:
         while cap > 0 and (block := reading.read(min(SCAN_BLOCK_BYTES, cap))):
             cap -= len(block)
             yield block
