@@ -165,10 +165,20 @@ class Attempt:
     """One Attempt, reassembled — what it was opened with, what it spent, and what ended it."""
 
     attempt_id: str
+    # Which Run wrote it. `attempt_id` is `<challenge_id>-<attempt_sequence>` and is unique **within**
+    # a Run and nowhere else — every Run of one Board reuses the same strings — so an Attempt that
+    # did not know its Run could be keyed on by mistake, and was: over the four gate Runs the 27
+    # attempts carry 11 distinct ids between them.
+    run_id: str = ""
     opened: dict[str, Any] = field(default_factory=dict)
     closed: dict[str, Any] | None = None
     steps: list[Step] = field(default_factory=list)
     claims: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def ref(self) -> str:
+        """This Attempt's name across every Run there is — the only safe key for a table."""
+        return f"{self.run_id}/{self.attempt_id}" if self.run_id else self.attempt_id
 
     @property
     def cause(self) -> str:
@@ -384,21 +394,21 @@ def read(path: Path) -> Run:
         kind, attempt_id = record.get("record"), str(record.get("attempt_id", ""))
 
         if kind == ATTEMPT_OPEN:
-            attempts.setdefault(attempt_id, Attempt(attempt_id)).opened = record
+            attempts.setdefault(attempt_id, Attempt(attempt_id, run.run_id)).opened = record
             continue
         if kind == ATTEMPT_CLOSE:
-            attempts.setdefault(attempt_id, Attempt(attempt_id)).closed = record
+            attempts.setdefault(attempt_id, Attempt(attempt_id, run.run_id)).closed = record
             continue
         if kind == CLAIMED:
-            attempts.setdefault(attempt_id, Attempt(attempt_id)).claims.append(record)
+            attempts.setdefault(attempt_id, Attempt(attempt_id, run.run_id)).claims.append(record)
             continue
         if kind == STEP_BEGIN:
-            attempt = attempts.setdefault(attempt_id, Attempt(attempt_id))
+            attempt = attempts.setdefault(attempt_id, Attempt(attempt_id, run.run_id))
             in_flight[attempt_id, int(record.get("step_index", 0))] = len(attempt.steps)
             attempt.steps.append(_step(record, ended=False))
             continue
         if kind == STEP_END:
-            attempt = attempts.setdefault(attempt_id, Attempt(attempt_id))
+            attempt = attempts.setdefault(attempt_id, Attempt(attempt_id, run.run_id))
             at = in_flight.pop((attempt_id, int(record.get("step_index", 0))), None)
             if at is None:
                 attempt.steps.append(_step(record, ended=True))

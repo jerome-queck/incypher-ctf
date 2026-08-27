@@ -80,7 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             totals["unmetered"] += 0 if tokens else 1
             rows.append(
                 [
-                    attempt.attempt_id,
+                    attempt.ref,
                     attempt.category,
                     spent,
                     len(marks),

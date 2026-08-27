@@ -103,7 +103,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     per_attempt, per_category, per_cause, whole = Grouped(), Grouped(), Grouped(), Spend()
     for attempt in attempts:
-        per_attempt.took(f"{attempt.attempt_id} {attempt.opened.get('challenge_name', '')}".strip(), attempt)
+        # `ref` rather than `attempt_id`: one Board's Runs reuse ids, and keying on the bare id
+        # merged three separate `13-1` attempts from three Runs into one row of summed minutes.
+        per_attempt.took(f"{attempt.ref} {attempt.opened.get('challenge_name', '')}".strip(), attempt)
         per_category.took(attempt.category, attempt)
         per_cause.took(attempt.cause or stream.NEVER_CLOSED, attempt)
         whole.took(attempt)
