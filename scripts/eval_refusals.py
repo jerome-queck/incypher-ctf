@@ -1,6 +1,6 @@
 """Refusal and premature quit, derived offline and joined to Category — never fields, never Cuts.
 
-    python3 scripts/eval_refusals.py [stream ...] [--saying "i can't help with,…"]
+    python3 scripts/eval_refusals.py [--event <name>] [stream ...] [--saying "i can't help with,…"]
 
 [ADR-0014](../docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)
 settles where these two live: *"the Step carries the response text, the model and the credential
@@ -39,7 +39,6 @@ ran is printed rather than assumed.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -116,8 +115,7 @@ def _refused(said: Sequence[str], saying: Sequence[str]) -> bool:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     parser.add_argument(
         "--saying",
         type=lambda given: tuple(part.strip().lower() for part in given.split(",") if part.strip()),
@@ -126,8 +124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     by_category, by_model, whole = {}, {}, Conduct()
     for run in runs:

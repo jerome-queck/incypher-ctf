@@ -1,6 +1,6 @@
 """Eval question 2 — **do the stall thresholds cut early or late?** Replayed, at any value.
 
-    python3 scripts/eval_thresholds.py [stream ...] [--repeats 1,2] [--novelty 3,5,8] [--cliff 15,25,40]
+    python3 scripts/eval_thresholds.py [--event <name>] [stream ...] [--repeats 1,2] [--novelty 3,5,8] [--cliff 15,25,40]
 
 [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md) asks for a replay at
 N thresholds against known outcomes, and this is it. Every number in `solver/stall.py` is
@@ -38,7 +38,6 @@ marked `live` is the setting the code ships with today.
 
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import sys
 from collections.abc import Sequence
@@ -166,15 +165,14 @@ def _numbers(given: str) -> list[int]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     parser.add_argument("--repeats", type=_numbers, default=[1, 2], help="repetition thresholds to replay at")
     parser.add_argument("--novelty", type=_numbers, default=[3, 5, 8], help="novelty thresholds to replay at")
     parser.add_argument("--cliff", type=_numbers, default=[15, 25, 40], help="step cliffs to replay at")
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs, said = stream.answering(arguments)
+    print(said)
     attempts = [(run, attempt) for run in runs for attempt in run.attempts if attempt.opened]
     if not attempts:
         print("\nno Attempt in these streams — nothing to replay")

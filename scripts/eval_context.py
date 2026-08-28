@@ -1,6 +1,6 @@
 """Eval question 1 — **is the context system helping?** Steps to the last Checkpoint, and the rate.
 
-    python3 scripts/eval_context.py [stream ...]
+    python3 scripts/eval_context.py [--event <name>] [stream ...]
 
 [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md) asks it as two
 numbers: **Steps-to-last-Checkpoint over Steps-spent**, per Attempt, and **Checkpoints per thousand
@@ -34,7 +34,6 @@ quietly counts an unmeasured turn as zero says the Checkpoints came cheaper than
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -75,12 +74,11 @@ def _rate(checkpoints: int, tokens: int, unmeasured: int) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     live = Thresholds()
     rows, totals = [], {"checkpoints": 0, "tokens": 0, "steps": 0, "unmeasured": 0, "blind": 0}

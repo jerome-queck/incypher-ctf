@@ -209,9 +209,9 @@ def run(tmp_path):
     return written.closed()
 
 
-def answer(query, paths, capsys):
+def answer(query, paths, capsys, *flags):
     """Run one query the way a person runs it, and hand back what it printed and what it exited."""
-    code = query.main([str(path) for path in paths])
+    code = query.main([*(str(path) for path in paths), *flags])
     return code, capsys.readouterr().out
 
 
@@ -527,3 +527,90 @@ def test_the_budget_does_not_merge_two_runs_attempts_into_one_row(tmp_path, caps
     assert code == 0
     assert len(rows) == 2, f"expected one row per Run, got {len(rows)}"
     assert any("gate-a" in row for row in rows) and any("gate-b" in row for row in rows)
+
+
+def two_boards(tmp_path):
+    """Two Runs at two Boards, each numbering a Challenge 94 — what `runs/` holds the moment the
+    first COMPFEST Run is promoted beside the four Brunner gate Runs.
+
+    `challenge_id` is a per-installation auto-increment integer (ADR-0025), so both Boards have a
+    Challenge 94 and they are different Challenges. The provenances differ so that a query keying on
+    the bare id is caught filing one Board's Triage against the other's Attempt.
+    """
+    boards = (("gate-a", "brunnerctf-2026-global", "extracted"), ("compfest-1", "compfest-2026", "judged"))
+    for run_id, event, provenance in boards:
+        written = Written(tmp_path / run_id, run_id=run_id).opened(event=event)
+        written.triaged({"challenge_id": 94, "name": "challenge 94", "tier": 1, "provenance": provenance})
+        written.attempt("94-1", challenge_id=94, category="Web").turn(("ls", b"a")).over(CUT_NOVELTY)
+        written.closed()
+    return [tmp_path / run_id / "runs" / run_id / "stream.jsonl" for run_id, _, _ in boards]
+
+
+def test_a_second_board_in_the_directory_does_not_rewrite_the_first_ones_numbers(tmp_path, capsys):
+    """The defect: every query reads all of `runs/`, so the first COMPFEST Run lands beside the four
+    gate Runs and every number in #105's table changes with no query edited and no reader told."""
+    paths = two_boards(tmp_path)
+
+    code, spanning = answer(eval_refusals, paths, capsys)
+    scoped_code, scoped = answer(eval_refusals, paths, capsys, "--event", "brunnerctf-2026-global")
+
+    assert [code, scoped_code] == [0, 0]
+    assert next(line.split() for line in spanning.splitlines() if line.strip().startswith("everything"))[1] == "2"
+    assert next(line.split() for line in scoped.splitlines() if line.strip().startswith("everything"))[1] == "1"
+    assert "compfest-1" not in scoped
+
+
+def test_an_unscoped_query_says_which_boards_its_numbers_span(tmp_path, capsys):
+    """An aggregate over two Boards is a defensible answer to some questions and a meaningless one
+    to others — but only if it says it is one. A reader cannot check what nothing declared."""
+    paths = two_boards(tmp_path)
+
+    code, said = answer(eval_budget, paths, capsys)
+
+    assert code == 0
+    assert "brunnerctf-2026-global" in said and "compfest-2026" in said
+
+
+def test_the_scope_is_read_off_the_stream_and_never_off_the_filename(tmp_path):
+    """A promoted stream is named for its `run_id` and no Board appears in that name, so a filename
+    convention would be a convention nothing enforces. The `run-open` line is the record."""
+    misnamed = tmp_path / "compfest-2026.jsonl"
+    misnamed.write_bytes(two_boards(tmp_path)[0].read_bytes())
+
+    assert stream.load([str(misnamed)], event="compfest-2026") == []
+    assert [one.run_id for one in stream.load([str(misnamed)], event="brunnerctf-2026-global")] == ["gate-a"]
+
+
+def test_a_scope_matching_no_run_says_so_rather_than_answering_over_nothing(tmp_path, capsys):
+    """A mistyped event name is a query that reports an empty Board rather than a missed one, and
+    every table below it would read as a finding. The Boards that *were* read are named, because
+    the name being wrong is the likeliest thing that happened."""
+    paths = two_boards(tmp_path)
+
+    code, said = answer(eval_tier, paths, capsys, "--event", "compfest")
+
+    assert code == 0
+    assert "no Run at compfest" in said
+    assert "2 stream(s) read, at brunnerctf-2026-global, compfest-2026" in said
+
+
+def test_a_path_that_found_nothing_is_never_reported_as_an_empty_board(tmp_path, capsys):
+    """The inverse silence, and the one a scope introduces: `locate()` steps over a path that is not
+    there, so a query given a typo'd path *and* an event would blame the Board for the empty table.
+    Only what was read before the scope knows which of the two happened."""
+    code, said = answer(eval_tier, [tmp_path / "not-a-directory"], capsys, "--event", "brunnerctf-2026-global")
+
+    assert code == 0
+    assert "no stream found" in said
+    assert "no Run at" not in said
+
+
+def test_two_boards_numbering_one_challenge_keep_their_own_provenance(tmp_path, capsys):
+    """`eval_tier` is the one query that joins a Triage line to an Attempt, and Challenge 94 exists
+    at both Boards — so a bare id files COMPFEST's judgement against Brunner's Attempt."""
+    paths = two_boards(tmp_path)
+
+    code, said = answer(eval_tier, paths, capsys)
+
+    assert code == 0
+    assert "extracted" in said and "judged" in said

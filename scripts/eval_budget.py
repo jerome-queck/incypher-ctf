@@ -1,6 +1,6 @@
 """Eval question 3 — **where did the budget go?** Tokens and wall-clock, three ways.
 
-    python3 scripts/eval_budget.py [stream ...]
+    python3 scripts/eval_budget.py [--event <name>] [stream ...]
 
 [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md) asks for it per
 Attempt, per Category and per cause, and all three are here because they answer different questions
@@ -32,7 +32,6 @@ opposite findings.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -98,12 +97,11 @@ class Grouped:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     attempts = [attempt for run in runs for attempt in run.attempts if attempt.opened]
     if not attempts:

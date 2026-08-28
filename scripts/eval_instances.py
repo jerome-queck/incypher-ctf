@@ -1,6 +1,6 @@
 """Eval question 7 — **are Instances leaking?** Deploys against terminates, per Attempt.
 
-    python3 scripts/eval_instances.py [stream ...]
+    python3 scripts/eval_instances.py [--event <name>] [stream ...]
 
 [ADR-0007](../docs/adr/0007-truth-about-an-instance-lives-on-the-board.md) puts the truth about an
 Instance on the Board and never in a dictionary of ours, and chall-manager **never evicts**: an
@@ -31,7 +31,6 @@ which is which needs the Observation body, which a promoted stream does not carr
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -57,18 +56,15 @@ def _ledger(run: stream.Run) -> str:
     A Board with no plugin has no ledger to read, and `solver/run.py` skips the sweep entirely
     there — so "no sweep" means two opposite things and only the profile tells them apart.
     """
-    opened = next(iter(run.of(stream.RUN_OPEN)), {})
-    profile = opened.get("board_profile")
-    return str(profile.get("chall_manager", "")) if isinstance(profile, dict) else ""
+    return str(run.profile.get("chall_manager", ""))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     attempts = [(run, one) for run in runs for one in run.attempts if one.opened]
     if not attempts:

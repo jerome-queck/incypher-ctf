@@ -1,6 +1,6 @@
 """Eval question 5 — **is Order banking Flags early?** Cumulative Flags against elapsed Run time.
 
-    python3 scripts/eval_banking.py [stream ...]
+    python3 scripts/eval_banking.py [--event <name>] [stream ...]
 
 [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md) asks it as a curve,
 and the shape of that curve is the whole verdict on Order. The Run is 5.5 hours and it can be cut
@@ -19,7 +19,6 @@ Flags all sit above 0.5 banked nothing early, whatever the total says.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -97,12 +96,11 @@ def _banked(run: stream.Run) -> list[Banked]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     banked = [flag for run in runs for flag in _banked(run)]
     first_half = sum(1 for flag in banked if flag.early)
