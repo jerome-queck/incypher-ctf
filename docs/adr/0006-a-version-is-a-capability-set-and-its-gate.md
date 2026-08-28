@@ -4,6 +4,12 @@
 > The roadmap, the gates and the venue bindings below all stand. Only the Consequence that the ADK
 > "integrates behind the same seam the Board sits behind" is overtaken: there are two seams, and the
 > ADK sits behind the one that reaches a Challenge's service, never the one that talks to the Board.
+
+> **Amended by [ADR-0026](0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md).**
+> The two verdicts below — a gate passes, or it fails and re-scopes the next version — gain a third.
+> A clause no binding of its version could produce evidence for is **Pending**: the gate closes
+> without it, the first Board that can prove it discharges it, and it expires at v5's gate. v1's
+> gate is closed on exactly that basis, with its Instance clause Pending.
 Five versions stand between an empty repository and a container that must solve capture-the-flag
 challenges for five and a half hours with nobody watching. The obvious way to write that down is a
 calendar — v1 this weekend, v2 the next — and the calendar is the part that broke first. The plan
@@ -37,7 +43,7 @@ information without spending the dates.
 
 | | Capability set | Gate | Bound to |
 |---|---|---|---|
-| **v1** | Intake, Triage, ReAct solve loop, flag verification, submission with rate-limit discipline, Instance deploy/terminate within an Attempt, telemetry, clean termination on an externally-derived stall signal | One unattended run, zero keystrokes: re-read and triage a live Board, complete Attempts on **≥5 distinct Challenges** including **≥1 Instance it deployed and terminated itself**, cut and requeue without deadlocking, submit **≥1 correct Flag**, terminate cleanly | BrunnerCTF Global if ready by 23 Aug 20:00 SGT, else COMPFEST 29–30 Aug |
+| **v1** | Intake, Triage, ReAct solve loop, flag verification, submission with rate-limit discipline, Instance deploy/terminate within an Attempt, telemetry, clean termination on an externally-derived stall signal | One unattended run, zero keystrokes: re-read and triage a live Board, complete Attempts on **≥5 distinct Challenges** including **≥1 Instance it deployed and terminated itself**, cut and requeue without deadlocking, submit **≥1 correct Flag**, terminate cleanly — the Instance clause is **Pending** ([ADR-0026](0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)) | BrunnerCTF Global if ready by 23 Aug 20:00 SGT, else COMPFEST 29–30 Aug |
 | **v2** | PID-1 supervision, crash-restart, endurance, per-Challenge timeboxes, the anti-derailment suite, mana-aware Instance lifecycle | Survives a mid-run crash; completes **5.5h unattended**; never deadlocks on mana | A local CTFd fixture seeded from the real Brunner Board |
 | **v3** | Reasoning/execution concurrency, Category tool inventory, model roster and routing, eval harness, scoreboard-driven Triage | Clears an easy Board fast under a hard deadline | PatriotCTF 11–13 Sep |
 | **v4** | ADK behind the platform-adapter seam, PoW gate, healthcare-scenario knowledge, held-out eval | Solves real IN-CYPHER Challenges | IN-CYPHER online batch, opens 14 Sep |
