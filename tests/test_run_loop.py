@@ -67,7 +67,14 @@ class Wire:
     """A CTFd with a handful of Challenges and one Flag each, remembering what it was sent."""
 
     def __init__(
-        self, *, count: int = 6, mana=None, ledger=None, ships_files: bool = False, artefact: bytes = ARTEFACT
+        self,
+        *,
+        count: int = 6,
+        mana=None,
+        ledger=None,
+        ships_files: bool = False,
+        artefact: bytes = ARTEFACT,
+        twin: bytes | None = None,
     ):
         self.listed = [
             {"id": one, "name": f"challenge-{one}", "type": "standard", "value": 100, "solves": one, "position": one}
@@ -80,6 +87,10 @@ class Wire:
         # which is the whole shape the step cliff must not be charged for.
         self.ships_files = ships_files
         self.artefact = artefact
+        # A second file under the *same basename*, which a Board is free to ship and which used to
+        # overwrite the first on the way to disk (#128). Its bytes are the parameter, because a
+        # twin holding the same content as the original is the case that separates them least.
+        self.twin = twin
         self.submitted: list[tuple[int, str]] = []
 
     def transport(self, request):
@@ -91,11 +102,15 @@ class Wire:
         if path.startswith("/api/v1/challenges/"):
             found = next(one for one in self.listed if str(one["id"]) == path.rsplit("/", 1)[1])
             files = [f"files/aa{found['id']}/clue-{found['id']}.txt?token=signed"] if self.ships_files else []
+            if self.twin is not None:
+                files.append(f"files/bb{found['id']}/clue-{found['id']}.txt?token=signed")
             return self._answer({**found, "description": self.described(found), "max_attempts": 0, "files": files})
         if path == "/api/v1/challenges":
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
+        if path.startswith("/files/bb"):
+            return (200, self.twin or b"", "")
         if path.startswith("/files/"):
             return (200, self.artefact, "")
         if path.endswith("/mana"):
@@ -644,6 +659,50 @@ def test_a_same_named_file_that_is_not_the_boards_is_never_worked_as_though_it_w
     assert landed, "the Board's file never reached the working directory at all"
     reconned = [one["command_raw"] for one in records(recorder, "step-begin") if str(landed[0]) in one["command_raw"]]
     assert reconned, "recon never opened onto the Board's own file"
+
+
+def test_two_board_files_under_one_name_reach_the_model_as_two(tmp_path):
+    """The whole of [#128](https://github.com/jerome-queck/incypher-ctf/issues/128), driven end to
+    end: Intake gives each of the Board's files its own address, staging lands the second beside the
+    first, and the prompt names both.
+
+    What would be wrong is the record. #119's branch exists for a file standing *in front of* the
+    Board's, and it closes its Step non-zero — the filter an eval query uses to ask whether that
+    happened. A Challenge whose Board names two files alike is not that.
+    """
+    clock = Clock()
+    twin = b"a second file the Board calls the same thing\n"
+    wire = Wire(count=1, ships_files=True, twin=twin)
+    agent = Agent(clock, wire=wire)
+    run, recorder = solver(tmp_path, wire, agent, clock, work_root=tmp_path / "work")
+
+    run.work()
+
+    workdir = tmp_path / "work" / RULES.event / "1"
+    assert sorted(one.read_bytes() for one in workdir.iterdir()) == sorted([ARTEFACT, twin])
+    told = [one for one in records(recorder, "step-end") if one["tool"] == STAGE]
+    assert told, "staging said nothing about a name the Board uses twice"
+    assert told[0]["exit_code"] == 0, "the Challenge's own second file was recorded as a stranger"
+    assert "more than one file it calls clue-1.txt" in (recorder.run_dir / told[0]["observation_ref"]).read_text()
+    assert all(str(one) in agent.prompts[0] for one in workdir.iterdir()), "the prompt named only one of them"
+
+
+def test_two_board_files_alike_in_name_and_in_content_are_still_two(tmp_path):
+    """The case the bytes cannot separate. Two of the Board's files under one name may hold the same
+    content, and then the copy staging made moments earlier is *equal* to the one it is placing — so
+    a rule that asks only the digests keeps one, drops the other, and calls what it kept a copy an
+    earlier Attempt staged, on an Attempt that has none."""
+    clock = Clock()
+    wire = Wire(count=1, ships_files=True, twin=ARTEFACT)
+    run, recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock, work_root=tmp_path / "work")
+
+    run.work()
+
+    landed = list((tmp_path / "work" / RULES.event / "1").iterdir())
+    assert len(landed) == 2, "the Board ships two files and the working directory holds one"
+    assert [one.read_bytes() for one in landed] == [ARTEFACT, ARTEFACT]
+    told = [one for one in records(recorder, "step-end") if one["tool"] == STAGE]
+    assert told and "more than one file it calls" in (recorder.run_dir / told[0]["observation_ref"]).read_text()
 
 
 def test_the_prompt_names_the_landing_the_boards_file_actually_reached(tmp_path):

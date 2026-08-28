@@ -25,6 +25,9 @@ BOARD = "https://board.example"
 COVER = "files/1a1a1a/cover.png?token=signed-at-10-00"
 COVER_RE_SIGNED = "files/1a1a1a/cover.png?token=signed-at-10-05"
 COVER_REPLACED = "files/2b2b2b/cover.png?token=signed-at-10-05"
+# A *second* file the Board ships under the same basename — not the same file replaced, which is
+# what the constant above means. The two shapes are one string apart and opposite in meaning.
+COVER_SECOND = "files/3c3c3c/cover.png?token=signed"
 
 CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "value is not a valid enumeration member"}}')
 CONTROL_AGREEABLE = (200, b'{"success": true, "data": []}')
@@ -526,6 +529,63 @@ def test_a_board_supplied_filename_cannot_reach_out_of_the_run_directory(recorde
     written = [one.path for one in held if one.held]
     assert [path.name for path in written] == ["auth.json", UNNAMED]
     assert all(path.is_relative_to(recorder.run_dir / "intake") for path in written)
+
+
+def test_two_files_with_one_basename_do_not_overwrite_each_other(recorder):
+    """`_identity` keeps the whole listing, so `files/1a1a1a/cover.png` and `files/2b2b2b/cover.png`
+    are two files the Board ships — and taking the last path segment made both of them `cover.png`,
+    so the second `write_bytes` landed on the first. Both Attachments went on saying we held one
+    ([#128](https://github.com/jerome-queck/incypher-ctf/issues/128)).
+    """
+    wire = Wire(
+        listed=[listing(1)],
+        detail={"1": detail(1, files=[COVER, COVER_SECOND])},
+        files={"files/1a1a1a/cover.png": b"the first cover", "files/3c3c3c/cover.png": b"a second, longer cover"},
+    )
+
+    held = intake_over(wire, recorder).sync().challenges[0].attachments
+
+    assert len({one.path for one in held}) == 2, "both files were written to one path"
+    assert [one.path.read_bytes() for one in held] == [b"the first cover", b"a second, longer cover"]
+    # The pair that made it silent: an Attachment describing a file it does not point at.
+    assert all(one.nbytes == len(one.path.read_bytes()) for one in held)
+
+
+def test_two_listings_that_name_nothing_at_all_are_still_two_files(recorder):
+    """The same collision through the other door. A listing whose last segment is empty or `..` is
+    refused a name and falls back to one — so two of them shared it, and the fallback that exists to
+    stop a traversal quietly cost a file instead."""
+    wire = Wire(
+        listed=[listing(1)],
+        detail={"1": detail(1, files=["files/1a1a1a/..", "files/2b2b2b/.."])},
+        files={"files/1a1a1a/..": b"the first nameless", "files/2b2b2b/..": b"the second nameless"},
+    )
+
+    held = intake_over(wire, recorder).sync().challenges[0].attachments
+
+    assert [one.name for one in held] == [UNNAMED, UNNAMED], "the fallback is still the fallback"
+    assert len({one.path for one in held}) == 2
+    assert [one.path.read_bytes() for one in held] == [b"the first nameless", b"the second nameless"]
+
+
+def test_reordering_the_boards_file_list_moves_nothing(recorder):
+    """The address is a function of the file's identity and of nothing else — not of where the Board
+    happened to list it. `_attachments` reuses a stored Attachment while its copy is on disk, so an
+    address that depended on position would move a file we already hold, and the cycle after a
+    reorder would re-download the Board."""
+    wire = Wire(
+        listed=[listing(1)],
+        detail={"1": detail(1, files=[COVER, COVER_SECOND])},
+        files={"files/1a1a1a/cover.png": b"the first cover", "files/3c3c3c/cover.png": b"a second cover"},
+    )
+    intake = intake_over(wire, recorder)
+    before = {one.identity: one.path for one in intake.sync().challenges[0].attachments}
+
+    wire.detail["1"] = detail(1, files=[COVER_SECOND, COVER])
+    after = {one.identity: one.path for one in intake.sync().challenges[0].attachments}
+
+    assert before == after
+    assert wire.fetched() == ["/files/1a1a1a/cover.png", "/files/3c3c3c/cover.png"], "a reorder re-fetched"
 
 
 def test_a_file_deleted_from_state_mid_run_is_fetched_again(recorder):
