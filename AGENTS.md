@@ -70,6 +70,13 @@ verdict by clock. It cost turning FileVault off; ADR-0013 records what that expo
 placement and small cohesive units carry the *what*, and docs carry only the *why*. `MAP.md` is
 required at the root and updated in the same pull request as any top-level change.
 
+**`README.md` moves on a different clock, and it is the one document no rule named.** It is the
+front door, so its **Status** is updated when a version lands or a gate moves — not per change,
+because a rule firing on every pull request is one that gets ignored, and most changes have nothing
+to say to a newcomer. It went 48 commits claiming there was no Solver code
+([#130](https://github.com/jerome-queck/incypher-ctf/issues/130)); the conformance check asserts it
+exists and keeps its headings, never that it is true.
+
 ## How work flows
 
 `CONTRIBUTING.md` here is the full version, and it is self-contained — this repository has no
