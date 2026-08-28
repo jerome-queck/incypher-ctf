@@ -16,7 +16,8 @@ from solver.carry import SECTIONS, Boundary
 from solver.instance import Lease, Terms
 from solver.intake import Attachment, Sighting
 from solver.profile import Rules
-from solver.prompt import APPROACH, DERIVATION, compose
+from solver.prompt import APPROACH, DERIVATION, NAME_TAKEN, compose
+from solver.staging import Staged
 
 RULES = Rules(
     event="somewhere",
@@ -27,6 +28,10 @@ RULES = Rules(
 )
 
 TERMS = Terms(challenge_id=7, challenge_type="dynamic_iac", timeout=600)
+
+# Where the model is standing, and — on `CHALLENGE` below — the path it must never be sent to:
+# `Attachment.path` is Intake's copy inside the Run's own record, which is what #126 is about.
+WORKDIR = Path("/state/work/brunnerctf-2026-global/7")
 
 CHALLENGE = Sighting(
     challenge_id=7,
@@ -51,7 +56,8 @@ def prompt_for(**overrides):
         "rules": RULES,
         "boundary": Boundary(),
         "recon": "[recon] file door.zip → Zip archive",
-        "workdir": Path("/state/work/brunnerctf-2026-global/7"),
+        "workdir": WORKDIR,
+        "staged": (Staged("door.zip", 512, WORKDIR / "door.zip"),),
         "budget_s": 600,
         **overrides,
     }
@@ -138,3 +144,78 @@ def test_the_budget_is_stated_once_as_a_size_and_not_as_a_countdown():
 
     assert "15 minute(s)" in text
     assert text.count("minute(s)") == 1
+
+
+def test_a_held_file_is_named_where_the_model_is_standing():
+    """The prompt says the working directory already holds this Challenge's files and then has to
+    name them there: the model works in that directory, and a path anywhere else is one it has to
+    be told twice about."""
+    text = prompt_for()
+
+    assert str(WORKDIR / "door.zip") in text
+    assert "512 bytes as downloaded" in text
+
+
+def test_nothing_in_the_prompt_names_a_path_inside_the_runs_own_record():
+    """`CHALLENGE`'s attachment still carries Intake's copy at `/state/runs/x/intake/7/door.zip`,
+    which is the fixture's whole job now. The Solver has no reason to send the model into the
+    directory holding the stream its own stall is judged from — `solver/codex.py` already refuses
+    to let the working directory *contain* that record, and this is the same rule from the other
+    side."""
+    assert "/state/runs" not in prompt_for()
+
+
+def test_a_landing_that_could_not_take_the_boards_name_says_whose_name_it_is():
+    """Since [#119](https://github.com/jerome-queck/incypher-ctf/issues/119) the Board's file lands
+    beside a stranger under a name minted from its own digest. Recon opens onto the right one and
+    the record says so — and a model that runs `ls`, sees the name the Board's prose uses, and
+    opens it would still be reading the stranger."""
+    landing = WORKDIR / "door.aa11bb22cc33.zip"
+
+    text = prompt_for(staged=(Staged("door.zip", 512, landing),))
+
+    assert str(landing) in text
+    assert NAME_TAKEN.format(name="door.zip") in text
+    # The tense is the load-bearing half, pinned the way `DERIVATION` is pinned above: a
+    # present-tense claim about the directory is one the model's own `mv` falsifies next turn.
+    assert "already had that name" in NAME_TAKEN
+
+
+def test_a_landing_under_the_boards_own_name_says_nothing_about_a_taken_name():
+    """The clause is the rare branch. Firing it on every Challenge would spend the opening frame
+    explaining a thing that did not happen.
+
+    The whole line is pinned rather than the clause's absence: asserting that some wording is *not*
+    there is an assertion a reworded clause passes while firing on every Challenge.
+    """
+    lines = prompt_for().splitlines()
+
+    listed = lines[lines.index("Files already downloaded for you:") + 1]
+
+    assert listed == f"- {WORKDIR / 'door.zip'} (512 bytes as downloaded)"
+
+
+def test_the_size_is_dated_rather_than_stated_as_the_file_now():
+    """`nbytes` is what Intake downloaded, frozen when the Attempt staged its files — and this
+    prompt is recomposed every turn over a directory the model has been working in. The bare
+    `(512 bytes)` this replaces is a present-tense claim the model's own first `unzip` can break,
+    and on a forensics Challenge a stated size is something a model reasons from.
+
+    Counted rather than matched, so the number cannot appear undated anywhere: an assertion that the
+    dated form is *present* is one that a second, bare mention alongside it would still pass.
+    """
+    text = prompt_for()
+
+    assert text.count("512 bytes") == 1
+    assert text.count("512 bytes as downloaded") == 1
+
+
+def test_the_prompt_is_composed_from_what_it_is_handed_and_never_from_disk():
+    """Nothing here touches the filesystem, and the fixture's paths do not exist. A size or an
+    existence check read off disk would make the prompt a function of the working directory at the
+    moment it was composed, which is a second source of truth for what an Attempt was handed."""
+    absent = Path("/state/work/nowhere-at-all/7/door.zip")
+
+    text = prompt_for(staged=(Staged("door.zip", 512, absent),))
+
+    assert str(absent) in text

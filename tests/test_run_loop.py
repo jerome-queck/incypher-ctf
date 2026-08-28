@@ -17,6 +17,7 @@ from solver.flag import Flags, Pace, ReplayLimits
 from solver.instance import Instances
 from solver.intake import Intake, Limits
 from solver.profile import Rules, discovered
+from solver.prompt import NAME_TAKEN
 from solver.record import CUT_BUDGET, FLAG, Recorder
 from solver.redaction import Redactor
 from solver.run import STAGE, WINDOW_CLOSED, Run, Steps
@@ -643,6 +644,39 @@ def test_a_same_named_file_that_is_not_the_boards_is_never_worked_as_though_it_w
     assert landed, "the Board's file never reached the working directory at all"
     reconned = [one["command_raw"] for one in records(recorder, "step-begin") if str(landed[0]) in one["command_raw"]]
     assert reconned, "recon never opened onto the Board's own file"
+
+
+def test_the_prompt_names_the_landing_the_boards_file_actually_reached(tmp_path):
+    """The end-to-end half of [#126](https://github.com/jerome-queck/incypher-ctf/issues/126), and
+    the reason it is here rather than beside the other prompt tests: this drives the real
+    `Run._staged`, so it proves the Board's name, its byte count and the landing were paired by the
+    one place that knows — not by a fixture restating the pairing.
+
+    The Attempt is opened on the #119 shape above, where the two disagree: the Board calls the file
+    `clue-1.txt` and a stranger holds that name, so the landing is the digest-named one. A prompt
+    that named Intake's copy would send the model into the Run's own record, and one that named
+    only the landing would leave a model reaching for the Board's name to find the stranger.
+    """
+    clock = Clock()
+    wire = Wire(count=1, ships_files=True)
+    root = tmp_path / "work"
+    workdir = root / RULES.event / "1"
+    workdir.mkdir(parents=True)
+    (workdir / "clue-1.txt").write_bytes(b"a hypothesis the model wrote down, under the Board's own name\n")
+    agent = Agent(clock, wire=wire)
+
+    run, recorder = solver(tmp_path, wire, agent, clock, work_root=root)
+    run.work()
+
+    assert agent.prompts, "the model was never invoked, so this proves nothing"
+    text = agent.prompts[0]
+    landed = [one for one in workdir.iterdir() if one.read_bytes() == ARTEFACT]
+    assert landed, "the Board's file never reached the working directory at all"
+    assert str(landed[0]) in text, "the prompt does not name the file the Attempt actually staged"
+    assert NAME_TAKEN.format(name="clue-1.txt") in text
+    # Stronger than the unit test's `/state/runs`, and the reason this one is worth its cost: the
+    # record's directory is where Intake writes, so this is the live path that must not appear.
+    assert str(recorder.run_dir) not in text
 
 
 def test_what_the_solver_did_about_a_taken_name_is_in_the_record(tmp_path):

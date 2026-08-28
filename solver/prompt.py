@@ -15,12 +15,14 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from pathlib import Path
 
 from solver.carry import Boundary
 from solver.instance import Lease
 from solver.intake import Sighting
 from solver.profile import Rules
+from solver.staging import Staged
 
 # The one line the model writes that survives the Attempt (`solver/carry.py`). Asked for by an
 # explicit marker rather than inferred from the prose, so a label is something the model chose to
@@ -39,6 +41,23 @@ DERIVATION = (
 
 NO_PROHIBITIONS = "— this Board's rules name none beyond ordinary competition conduct"
 
+# What the model is told where staging could not use the Board's own name for a file (#119).
+#
+# Three things it has to do at once. It says what the Board calls the file, because a model
+# reaching for that name is otherwise left to infer why it is not there. It says the staging was
+# **ours**, because an unexplained same-named twin in a CTF working directory reads as a decoy
+# and is worth a turn to a model that thinks so. And it stays in the past tense, about what was
+# already true when the Attempt opened rather than about the directory now: this prompt is
+# recomposed every turn from one tuple minted once, so a present-tense claim is one the model's
+# own `mv` falsifies — and it would then point away from the Board's bytes rather than at them.
+#
+# No verdict about *whose* the other file is. That is a judgement a reader derives from the two
+# digests `Run._record` wrote (ADR-0009), never one the Solver freezes into a prompt.
+NAME_TAKEN = (
+    "the Board calls this file {name}, and another file already had that name, so this is where "
+    "the Board's copy was staged"
+)
+
 
 def compose(
     *,
@@ -47,6 +66,7 @@ def compose(
     boundary: Boundary,
     recon: str,
     workdir: Path,
+    staged: Sequence[Staged],
     budget_s: int,
     lease: Lease | None = None,
 ) -> str:
@@ -62,7 +82,7 @@ def compose(
             _opening(challenge, rules, workdir, budget_s),
             _forbidden(rules),
             _finding_the_flag(rules),
-            boundary.carried(facts=_facts(challenge, lease), recon=recon),
+            boundary.carried(facts=_facts(challenge, staged, lease), recon=recon),
             _closing(),
         ]
     )
@@ -98,26 +118,44 @@ def _finding_the_flag(rules: Rules) -> str:
     )
 
 
-def _facts(challenge: Sighting, lease: Lease | None) -> str:
+def _facts(challenge: Sighting, staged: Sequence[Staged], lease: Lease | None) -> str:
     """The Board-given facts, which are the first of the five things that cross a boundary.
 
     Held together in one block rather than spread through the header because that is what makes them
     re-composable at the next Attempt: a fact the Board gave us is not ours to forget, and a header
     sentence is not something `solver/carry.py` can carry.
+
+    `staged` is handed in rather than filtered out of the manifest here: `Run._staged` decides once
+    which files an Attempt holds, so the Board's name, its byte count and the landing can never be
+    paired with each other's file — and the landing is the only path this module can name, which is
+    what keeps the Run's own record out of a prompt (#126). The line below it asks the manifest a
+    different question, and answers it with names rather than paths.
     """
     lines = [
         f"{challenge.name} · {challenge.category or 'uncategorised'} · {challenge.value} points",
         challenge.description.strip() or "— the Board gives this Challenge no description",
     ]
-    held = [one for one in challenge.attachments if one.held]
-    if held:
+    if staged:
         lines.append("Files already downloaded for you:")
-        lines += [f"- {one.path} ({one.nbytes} bytes)" for one in held]
+        lines += [_held_file(one) for one in staged]
     if unfetched := [one for one in challenge.attachments if not one.held]:
         lines.append("Files the Board lists that we do not hold: " + ", ".join(one.name for one in unfetched))
     if lease is not None:
         lines.append(_instance(lease))
     return "\n".join(lines)
+
+
+def _held_file(staged: Staged) -> str:
+    """One line the model can act on: where the file is, and how big it was when we downloaded it.
+
+    *As downloaded* rather than a bare byte count, because the count is frozen when the Attempt
+    stages its files while this line is recomposed every turn — and `compose` reads no filesystem to
+    notice that the model has since unpacked or truncated the thing. Two words, and they are chosen
+    to date the number rather than to hedge it: a size hinted at as *possibly wrong* is a stego hunt
+    on a plain text file.
+    """
+    line = f"- {staged.landing} ({staged.nbytes} bytes as downloaded)"
+    return line if staged.under_the_boards_name else f"{line} — {NAME_TAKEN.format(name=staged.name)}"
 
 
 def _instance(lease: Lease) -> str:

@@ -39,6 +39,7 @@ from solver.profile import Profile
 from solver.prompt import APPROACH
 from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder
 from solver.schedule import Ended, Pick, Scheduler
+from solver.staging import Staged
 from solver.stall import Breaker, Deadline, Watch
 
 MARK = "[run]"
@@ -173,7 +174,9 @@ class _Held:
     cause: str = ""
     flag: str = ""
     approach: str = ""
-    artefacts: tuple[Path, ...] = ()
+    # What this Attempt holds of the Board's files: one tuple with two consumers, the prompt's
+    # file list and the recon cascade, so neither re-derives which files those are.
+    staged: tuple[Staged, ...] = ()
     # The subset of them `file` called a picture — recon's answer, attached to every turn of this
     # Attempt (`solver/recon.py`, at `Recon.pictures`). Every turn and not just the first: a turn is
     # a fresh spawn with no memory of the last (ADR-0023), so a picture attached once would leave
@@ -300,7 +303,7 @@ class Run:
         # to say about a name already taken is a Step of the Attempt it opens, and a counter still
         # holding the last Attempt's total would number it into that one.
         self._steps.restart()
-        workdir, artefacts = self._staged(challenge, attempt_id)
+        workdir, staged = self._staged(challenge, attempt_id)
         held = _Held(
             pick=pick,
             workdir=workdir,
@@ -308,7 +311,7 @@ class Run:
             deadline=Deadline(budget=pick.deadline),
             attempt_id=attempt_id,
             began=self._now(),
-            artefacts=artefacts,
+            staged=staged,
         )
         # Before the open, and it has to be: `attempt_open` records the Instance this Attempt was
         # given, and there is no Instance to record until the deploy has answered. So the deploy is
@@ -374,6 +377,7 @@ class Run:
             boundary=held.boundary,
             recon=held.recon_block,
             workdir=held.workdir,
+            staged=held.staged,
             budget_s=held.pick.budget_s,
             lease=held.lease,
         )
@@ -464,7 +468,7 @@ class Run:
                 self._won.append(outcome.flag)
         return outcome
 
-    def _staged(self, challenge: Sighting, attempt_id: str) -> tuple[Path, tuple[Path, ...]]:
+    def _staged(self, challenge: Sighting, attempt_id: str) -> tuple[Path, tuple[Staged, ...]]:
         """The Challenge's working directory and the Board's own files inside it.
 
         A copy rather than the Intake original: the model unpacks archives and edits what it finds,
@@ -472,17 +476,20 @@ class Run:
         The directory is the memory that crosses an Attempt boundary, so it is keyed by event and
         Challenge and never cleared between Attempts.
 
-        The artefacts are answered separately rather than read back off the directory, because by
-        the second Attempt the directory also holds whatever the model made — and a recon cascade
-        over the model's own output is recon over a Claim.
+        What the Board shipped is answered separately rather than read back off the directory,
+        because by the second Attempt the directory also holds whatever the model made — and a recon
+        cascade over the model's own output is recon over a Claim. This is the one place
+        `Attachment.held` is asked on the way into an Attempt: the cascade and the prompt's file
+        list are both handed what this returns, so a name, a byte count and a landing can never be
+        paired with each other's file.
         """
         workdir = self._workdirs / str(challenge.challenge_id)
         workdir.mkdir(parents=True, exist_ok=True)
-        staged = []
-        for attachment in challenge.attachments:
-            if attachment.held and attachment.path is not None:
-                staged.append(self._landed(attachment.path, attachment.name, workdir, attempt_id))
-        return workdir, tuple(staged)
+        return workdir, tuple(
+            Staged(one.name, one.nbytes, self._landed(one.path, one.name, workdir, attempt_id))
+            for one in challenge.attachments
+            if one.held and one.path is not None
+        )
 
     def _landed(self, source: Path, name: str, workdir: Path, attempt_id: str) -> Path:
         """Where the Board's copy of one attachment is, once the directory has had its say.
@@ -553,7 +560,7 @@ class Run:
         the pictures, and a method answering only the string would have thrown the second away."""
         found = recon.recon(
             challenge.description,
-            held.artefacts,
+            [one.landing for one in held.staged],
             flag_wrappers=self.profile.rules.flag_wrappers,
             recorder=self._recorder,
             attempt_id=held.attempt_id,
