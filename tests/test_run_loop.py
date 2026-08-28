@@ -19,7 +19,7 @@ from solver.intake import Intake, Limits
 from solver.profile import Rules, discovered
 from solver.record import CUT_BUDGET, FLAG, Recorder
 from solver.redaction import Redactor
-from solver.run import WINDOW_CLOSED, Run, Steps
+from solver.run import STAGE, WINDOW_CLOSED, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 
 BOARD = "https://board.example"
@@ -617,3 +617,79 @@ def test_a_model_that_repeats_the_boards_flag_format_is_held_rather_than_submitt
 
     held = [one["command_raw"] for one in records(recorder, "step-end") if one["command_raw"].startswith("[flag] hold")]
     assert any("brunner{like_this}" in one for one in held), "the Board's own example went straight to the gate"
+
+
+def test_a_same_named_file_that_is_not_the_boards_is_never_worked_as_though_it_were(tmp_path):
+    """The working directory is the memory that crosses an Attempt boundary, so a landing that is
+    already there is skipped rather than re-copied — and the skip used to compare names and nothing
+    else. A model that wrote `clue-1.txt` into its own directory on Attempt 1, or a Board that
+    replaced the file mid-event, therefore handed recon and the model a stranger under a prompt
+    calling it this Challenge's own file, and every check downstream passed
+    ([#119](https://github.com/jerome-queck/incypher-ctf/issues/119)).
+    """
+    clock = Clock()
+    wire = Wire(count=1, ships_files=True)
+    root = tmp_path / "work"
+    workdir = root / RULES.event / "1"
+    workdir.mkdir(parents=True)
+    stranger = b"a hypothesis the model wrote down, under the Board's own name\n"
+    (workdir / "clue-1.txt").write_bytes(stranger)
+
+    run, recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock, work_root=root)
+    run.work()
+
+    assert (workdir / "clue-1.txt").read_bytes() == stranger, "the model's own file was clobbered"
+    landed = [one for one in workdir.iterdir() if one.read_bytes() == ARTEFACT]
+    assert landed, "the Board's file never reached the working directory at all"
+    reconned = [one["command_raw"] for one in records(recorder, "step-begin") if str(landed[0]) in one["command_raw"]]
+    assert reconned, "recon never opened onto the Board's own file"
+
+
+def test_what_the_solver_did_about_a_taken_name_is_in_the_record(tmp_path):
+    """It fails silently and in the direction of a wrong answer, which is what makes the record the
+    fix rather than a decoration on it: the Run exits clean, Intake reports a correct fetch, and a
+    reader of the stream has to be able to see that the name was taken and what was done about it.
+    """
+    clock = Clock()
+    wire = Wire(count=1, ships_files=True)
+    root = tmp_path / "work"
+    workdir = root / RULES.event / "1"
+    workdir.mkdir(parents=True)
+    (workdir / "clue-1.txt").write_bytes(b"not the Board's bytes\n")
+
+    run, recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock, work_root=root)
+    run.work()
+
+    staged = [one for one in records(recorder, "step-end") if one["tool"] == STAGE]
+    assert staged, "nothing in the stream says the working directory already held that name"
+    # The exit code is the operation's own verdict here as everywhere else, and it is what an eval
+    # query filters on — a Step that could not use the Board's own name reading as a clean one is
+    # the silence again, one layer further out.
+    assert staged[0]["exit_code"] == 1
+    said = (recorder.run_dir / staged[0]["observation_ref"]).read_text()
+    assert "clue-1.txt" in said and str(workdir) in said
+
+
+def test_the_copy_an_earlier_attempt_staged_is_kept_and_never_re_copied(tmp_path):
+    """The legitimate half of the same skip, which the fix must not cost: the directory is what
+    carries what was learned across a Turn's reset, so re-copying the Board's file over the archive
+    the model unpacked around it would clobber the memory the boundary exists to keep.
+    """
+    clock = Clock()
+    wire = Wire(count=1, ships_files=True)
+    agent = Agent(clock, wire=wire)
+    root = tmp_path / "work"
+    workdir = root / RULES.event / "1"
+
+    def unpacks(argv, launched_in, environment, prompt):
+        (launched_in / "unpacked.txt").write_text("what the model got out of it")
+        return agent(argv, launched_in, environment, prompt)
+
+    run, recorder = solver(tmp_path, wire, unpacks, clock, lasting=2000.0, work_root=root)
+    run.work()
+
+    assert len(records(recorder, "attempt-open")) > 1, "only one Attempt ran, so nothing was re-staged"
+    assert (workdir / "unpacked.txt").exists(), "the model's own work did not survive the boundary"
+    assert [one.name for one in workdir.iterdir() if one.read_bytes() == ARTEFACT] == ["clue-1.txt"]
+    kept = [one for one in records(recorder, "step-end") if one["tool"] == STAGE]
+    assert kept and {one["exit_code"] for one in kept} == {0}, "keeping the copy we staged is not a failed Step"
