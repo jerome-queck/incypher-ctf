@@ -485,28 +485,48 @@ class Run:
         """
         workdir = self._workdirs / str(challenge.challenge_id)
         workdir.mkdir(parents=True, exist_ok=True)
-        return workdir, tuple(
-            Staged(one.name, one.nbytes, self._landed(one.path, one.name, workdir, attempt_id))
-            for one in challenge.attachments
-            if one.held and one.path is not None
-        )
+        staged: list[Staged] = []
+        for one in challenge.attachments:
+            if one.held and one.path is not None:
+                # What this call has already put down is handed on, because a Challenge may ship two
+                # files the Board calls one name and the second would otherwise meet the first as a
+                # stranger (#128).
+                landing = self._landed(one.path, one.name, workdir, attempt_id, tuple(each.landing for each in staged))
+                staged.append(Staged(one.name, one.nbytes, landing))
+        return workdir, tuple(staged)
 
-    def _landed(self, source: Path, name: str, workdir: Path, attempt_id: str) -> Path:
+    def _landed(self, source: Path, name: str, workdir: Path, attempt_id: str, siblings: tuple[Path, ...]) -> Path:
         """Where the Board's copy of one attachment is, once the directory has had its say.
 
-        A free name is copied into, and that is the whole of it. A name already taken is two
-        situations wearing one shape, and only the bytes tell them apart: the copy an earlier
-        Attempt made — kept, because re-copying would clobber the archive the model unpacked around
-        it — and a name holding something else, which is the model's own file from an earlier
+        A free name is copied into, and that is the whole of it. A name already taken is three
+        situations wearing one shape: the copy an earlier Attempt made — kept, because re-copying
+        would clobber the archive the model unpacked around it — a file this same call staged
+        moments ago, which is this Challenge's *other* Board file under a name the Board uses twice
+        (#128) — and a name holding something else, which is the model's own file from an earlier
         Attempt, one it edited in place, or the Board's own replaced since we fetched it.
 
-        The second used to be kept like the first and handed over anyway, so recon and the model
+        The bytes alone do not separate them, which is why `siblings` is a parameter rather than a
+        digest comparison: two files the Board ships under one name may hold the same bytes, and then
+        the copy this call made moments ago is *equal* to the one being placed.
+
+        What that leaves: a beside-name is minted from the bytes, so two of the Board's files that
+        hold the same content and are both pushed off the plain name land on one path. Nothing is
+        lost and no line of the record is false — the path holds exactly those bytes — but the
+        working directory has one file where the Board listed two. A Board shipping duplicate
+        content under one name has not been seen; naming a Landing from the file's identity instead
+        is what would close it, and that is a change to how every Landing is named.
+
+        The last used to be kept like the first and handed over anyway, so recon and the model
         worked whatever held the name under a prompt calling it this Challenge's own file
         ([#119](https://github.com/jerome-queck/incypher-ctf/issues/119)). What happens instead is
         the rule recon already holds — an Attempt opens onto the Board's files and never onto the
         model's output: the taken name is left exactly as it is, and the Board's copy lands beside
         it under a name minted from its own digest, which is the Solver's own name for that file
         and the one this Attempt works.
+
+        `siblings` is what this call has already put down. The second and the third case land
+        identically and are recorded apart, because only one of them is something being stood in
+        front of the Board's file.
         """
         landing = workdir / name
         if not landing.exists():
@@ -516,22 +536,31 @@ class Run:
         # `is_file`, because a name can be taken by something with no bytes to compare at all — a
         # directory the model made under it is no more the Board's file than a stranger is.
         standing = _digest(landing) if landing.is_file() else ""
-        if standing == wanted:
+        # Asked before the digests are compared and not after: two files the Board ships under one
+        # name can hold the same bytes, and then the copy this call made moments ago is *equal* to
+        # this one. Kept on that alone, the Board's two files would collapse into one landing and
+        # the record would call it a copy an earlier Attempt staged, on an Attempt with none.
+        sibling = landing in siblings
+        if standing == wanted and not sibling:
             self._record(name, f"{landing} holds the copy an earlier Attempt staged — {wanted}", attempt_id, ok=True)
             return landing
         beside = landing.with_name(f"{landing.stem}.{wanted[:DIGEST_CHARS_IN_A_NAME]}{landing.suffix}")
         if not beside.is_file() or _digest(beside) != wanted:
             shutil.copy2(source, beside)
-        # The two digests and no verdict about them (ADR-0009). *Whose* file holds that name — the
-        # model's own, or the Board's from before it moved — is a judgement, and it is one a reader
-        # of the stream derives from these rather than one the Solver freezes into the record.
-        self._record(
-            name,
-            f"{landing} was already there and holds {standing or 'nothing with bytes to compare'}, where the "
-            f"Board's own copy is {wanted} — so it was left where it is, and this Attempt works {beside}",
-            attempt_id,
-            ok=False,
-        )
+        # Two digests and no verdict about them (ADR-0009) on the branch that has one to give:
+        # *whose* file holds that name — the model's own, or the Board's from before it moved — is a
+        # judgement a reader derives from these, never one the Solver freezes into the record.
+        if sibling:
+            told = (
+                f"the Board ships more than one file it calls {name}: {landing} holds {standing}, "
+                f"so this one is at {beside}"
+            )
+        else:
+            told = (
+                f"{landing} was already there and holds {standing or 'nothing with bytes to compare'}, where "
+                f"the Board's own copy is {wanted} — so it was left where it is, and this Attempt works {beside}"
+            )
+        self._record(name, told, attempt_id, ok=sibling)
         return beside
 
     def _record(self, subject: str, told: str, attempt_id: str, *, ok: bool) -> None:
@@ -542,8 +571,11 @@ class Run:
         is a fact no other record carries — the working directory is Run *input* (ADR-0025) and
         nothing else in the stream describes it.
 
-        `ok` is the operation's own verdict, as every other Step's exit code here is: staging came
-        away with the Board's file under the Board's own name, or it did not.
+        `ok` is the operation's own verdict, as every other Step's exit code here is: whether
+        everything under this file's name was the Board's own. A Challenge that ships two files
+        under one name is not a Solver that failed at anything — and an eval query filtering on a
+        non-zero exit is asking whether something stood in front of the Board's file, which is
+        #119's question and not the Board's naming.
         """
         command = f"{MARK} {STAGE} {subject}"
         step = self._recorder.step_begin(

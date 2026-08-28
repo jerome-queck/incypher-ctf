@@ -370,10 +370,11 @@ model cannot rewrite the file its own stall is judged from.
 
 **Landing**:
 Where an Artefact's copy sits in a Challenge's Working directory — the path the model is told about
-and the one it can open. It carries the Board's own name for the file, except where that name was
-already taken when the Attempt opened: the copy then lands under one minted from its own digest, and
-the Attempt prompt says whose name it is. Overwriting what holds the name is the one thing staging
-may not do — that is the memory the Working directory exists to keep.
+and the one it can open. It carries the Board's own name for the file. Where staging finds that name
+already taken by something that is not this same file — another file the Board ships under it, or
+whatever an earlier Attempt left there — the copy lands under a name minted from its own digest
+instead, and the Attempt prompt says whose name it is. Overwriting what holds the name is the one
+thing staging may not do — that is the memory the Working directory exists to keep.
 _Avoid_: destination, drop, staged file. Not *our copy* bare — Intake keeps one too, under
 `/state/runs/`, and that one is change detection's evidence rather than anything the model is
 pointed at. Not *Target* either: a Target is an Instance's address, not a file.

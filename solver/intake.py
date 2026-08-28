@@ -36,6 +36,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -72,6 +73,20 @@ UNCORROBORATED_SAYS = (
 # the one live credential on disk. The last path segment is taken and nothing else, and where that
 # leaves nothing this is what the file is called.
 UNNAMED = "attachment"
+
+# How much of the identity's digest names the directory one attachment is kept in.
+#
+# A directory for every attachment rather than one minted when a collision is noticed, because
+# the address has to be a function of the file's identity alone: `_attachments` reuses a stored
+# Attachment while its copy is still on disk, so a Board that reorders its `files` list between
+# cycles must not move a file we already hold.
+#
+# Sixteen hex characters, and the width is legibility rather than a safeguard: nothing parses
+# either this or the twelve `solver/run.py` mints a Landing's name from. That one is a digest over
+# a file's *bytes* and this is a digest over the Board's *address* for one; they sit a directory
+# apart under `/state`, and two answers to different questions should not read as one kind of
+# string.
+IDENTITY_CHARS_IN_A_DIRECTORY = 16
 
 # The two `/mana` answers that are facts rather than weather: the plugin answering, and a 404 saying
 # this Board does not have it. Everything else — the lock, a 403, an unreachable host — is asked
@@ -407,7 +422,7 @@ class Intake:
             return Attachment(identity, name, outcome=OVER_THE_CAP, detail=f"{MARK} {over}")
         except (BoardFailure, OSError) as fault:
             return Attachment(identity, name, outcome=UNFETCHED, detail=f"{MARK} {name} could not be fetched — {fault}")
-        destination = self.root / str(challenge_id) / name
+        destination = self.root / str(challenge_id) / _kept_under(identity) / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(payload)
         return Attachment(identity, name, destination, len(payload), tuple(hops))
@@ -508,7 +523,16 @@ def _as_record(sighting: Sighting) -> dict[str, Any]:
         "changed": sighting.changed,
         "stale": sighting.stale,
         "files": [
-            {"name": one.name, "bytes": one.nbytes, "hosts": list(one.hosts), "outcome": one.outcome}
+            # `identity` beside the name, because the name is not unique: a Challenge can ship two
+            # files the Board calls the same thing, and two rows differing only in `bytes` are two
+            # rows a reader cannot tell apart or match to a file on disk.
+            {
+                "identity": one.identity,
+                "name": one.name,
+                "bytes": one.nbytes,
+                "hosts": list(one.hosts),
+                "outcome": one.outcome,
+            }
             for one in sighting.attachments
         ],
     }
@@ -541,6 +565,22 @@ def _identity(listing: str) -> str:
     it in the identity would make every cycle re-download the Board.
     """
     return listing.split("?", 1)[0]
+
+
+def _kept_under(identity: str) -> str:
+    """The name of the directory one attachment is kept in, taken from the Board's own address for it.
+
+    Two files a Board ships can be one file to us. `_named` takes the last path segment, so
+    `files/1a1a1a/cover.png` and `files/2b2b2b/cover.png` are both `cover.png`, and the second was
+    written over the first while both Attachments went on saying we held them
+    ([#128](https://github.com/jerome-queck/incypher-ctf/issues/128)). The name is the Board's label
+    for a file and was never an address; this is the address.
+
+    Not the identity's own parent segment, which is CTFd's `files/<hash>/` shape and not every
+    Board's. Not the file's bytes, which are unknown until it is fetched and move when the Board
+    replaces it. Not its position in the list, which the Board is free to reorder under us.
+    """
+    return hashlib.sha256(identity.encode()).hexdigest()[:IDENTITY_CHARS_IN_A_DIRECTORY]
 
 
 def _named(listing: str) -> str:
