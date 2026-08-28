@@ -6,75 +6,63 @@
 ## What this repo is
 
 An autonomous CTF-solving agent for the IN-CYPHER Agents-vs-CTF hackathon (September 2026). The
-deliverable is a Docker container — the **Solver** — that receives a challenge and works it to a
-flag with no human intervention (intervention is penalised in scoring). This repository is that
-Solver and the conventions it is built under. It is not a place for interactive tooling: a code
-path that waits for a human has no use at competition time.
+deliverable is a Docker container — the **Solver** — pointed at a whole **Board** and left for the
+window: it syncs every Challenge (Intake), judges what each is worth (Triage), ranks what the
+remaining clock is committed to (Order), and works that working set to flags with no human
+intervention, which scoring penalises — [spec #63](https://github.com/jerome-queck/incypher-ctf/issues/63)
+is the shape and `CONTEXT.md` is the vocabulary. This repository is that Solver — whose own code
+paths wait for nobody — and the conventions it is built under.
 
-- **Visibility:** private
-- **Owner:** [jerome-queck](https://github.com/jerome-queck) — Jerome, sole admin
+- **Owner:** [jerome-queck](https://github.com/jerome-queck) — Jerome, sole admin; repo is private
 - **Team:** [nonsense00](https://github.com/nonsense00) — Elson · [aacceeOP](https://github.com/aacceeOP) — Aidan ·
-  [chareechard](https://github.com/chareechard) — Richard. All write access. `gh` takes the handle, so
-  the names are here to resolve "assign it to Richard" into one.
-- **Origin:** generated from the Jerome-Group private template, then adapted to stand alone
-  ([ADR-0002](docs/adr/0002-org-machinery-is-vendored-to-stand-alone.md))
+  [chareechard](https://github.com/chareechard) — Richard. All write access; `gh` takes the handle.
 
 ## Getting it running
 
 *(The commands an agent could not have guessed. To run the Solver: `docker build -t solver .`
 then `docker run --rm --env-file .env -v "$PWD/state:/state" solver` — it refuses loudly.)*
 
-**Neither tool this repository is linted and tested by is installed here.** `ruff` and `pytest`
-were settled in [#22](https://github.com/jerome-queck/incypher-ctf/issues/22), and `.github/workflows/ci.yml`
-installs them unversioned on the runner every run — deliberately, for the reason written beside
-that step. So `pyproject.toml` carries their settings and declares no dependency at all, and the
-tree reads as though the tools are here. Build them a throwaway virtualenv under `.cache/`, which
-is where their scratch already goes and is gitignored:
+**`ruff` and `pytest` are not installed here.** `pyproject.toml` carries their settings and
+declares no dependency at all, so the tree reads as though they are. Build them a throwaway
+virtualenv under `.cache/`, which is gitignored:
 
 ```
 python3 -m venv .cache/venv && .cache/venv/bin/pip install -q ruff pytest
 .cache/venv/bin/ruff check . && .cache/venv/bin/ruff format --check . && .cache/venv/bin/pytest
 ```
 
-They are CI-side tools and are in no image — ADR-0008's package list is CTF tooling, and nothing
-lints at 14:00 on competition day. **Two checks need no interpreter at all:**
-`sh conformance/check-conformance.sh .` and `sh conformance/check-trailers.sh main..HEAD`. Run
-both before you push, because the conformance workflow fires *after* the push — the same reason a
-caught credential is already burned (Conventions).
+They are CI-side tools and are in no image — the image's two package lists live in the `Dockerfile`
+itself, one package per line with the reason beside it (ADR-0024 amends them), and nothing lints at
+14:00 on competition day. **Three checks run before you push, because the workflows fire *after*
+it:** `sh conformance/check-conformance.sh .` and `sh conformance/check-trailers.sh main..HEAD`,
+which need no interpreter, and `docker build .`, which CI has run since #81 and which needs Colima.
 
-To point the Solver at a board, run `bash scripts/setup-board.sh` — it walks the human-only steps
-(register, join the team, mint the CTFd token), writes `.env`, and proves the API path with
-`scripts/ctfd_probe.py`. **What this machine actually holds is `python3 scripts/credentials_held.py`**
-— set/empty/absent per credential, never a value, and non-zero if one is empty. Ask it rather than
-inferring from the repository's silence: `.env.*` is gitignored, so a secret we hold leaves no trace
-in the tree at all. Every secret and where it comes from is `docs/credentials.md`; secrets
-are injected with `--env-file` at runtime and never built into an image layer. **Never commit the
-real values** — see Conventions.
+To point the Solver at a board, run `bash scripts/setup-board.sh`. **What this machine actually
+holds is `python3 scripts/credentials_held.py`** — ask it rather than inferring from the
+repository's silence: `.env.*` is gitignored, so a secret we hold leaves no trace in the tree at
+all. Every secret, where it comes from, and how it reaches the container is `docs/credentials.md`.
 
 The container runtime is **Colima**, pinned with the Docker CLI and the VM's allocation in
 `scripts/runtime.py`: `python3 scripts/runtime.py start` brings it up on the pin and `verify`
-reports every way this machine has drifted off it. `bash scripts/setup-runtime.sh` walks the parts
-that need a human — the reboot, the FileVault decision, the Codex login taken *inside* the
-container. Two constraints an agent will otherwise meet the hard way: **Colima mounts `$HOME` and
-nothing else**, so a `-v` from outside it silently hands the container an empty directory, and the
-repository must live under `$HOME` for the `/state` mount to reach. **An unattended reboot
-recovers in about 40 seconds** — proven, not assumed: `python3 scripts/restart_probe.py arm`
-before a reboot and `check` after one reaches a verdict by clock. It cost turning FileVault off,
-so the disk is unencrypted and the machine auto-logs in; ADR-0013 records what that exposes.
+reports every way this machine has drifted off it — and nothing builds an image while it is down.
+`bash scripts/setup-runtime.sh` walks the parts that need a human — the reboot, the FileVault
+decision, the Codex login taken *inside* the container. Two constraints an agent will otherwise
+meet the hard way: **Colima mounts `$HOME` and nothing else**, so a `-v` from outside it silently
+hands the container an empty directory, and the repository must live under `$HOME` for the
+`/state` mount to reach. **An unattended reboot recovers in about 40 seconds** — proven, not
+assumed: `python3 scripts/restart_probe.py arm` before a reboot and `check` after one reaches a
+verdict by clock. It cost turning FileVault off; ADR-0013 records what that exposes.
 
 ## Conventions
 
 - Default branch: `main`.
-- Domain glossary lives in `CONTEXT.md`; decisions are recorded as ADRs in `docs/adr/`.
+- Domain glossary is `CONTEXT.md`; decisions are ADRs in `docs/adr/` (`docs/agents/domain.md`).
 - Keep secrets out of the repo. **Never commit a token.** The conformance check scans every pull
-  request for one, and it fires *after* the push — so a caught credential is burned: rotate it
-  first, then clean up. The full response is in `CONTRIBUTING.md`. The two secrets this repository
-  most handles are the **team key** and the **LLM API keys**; both belong in an untracked env file,
-  never a commit — `.env` for the board in play, a `.env.<event>` overlay for any other, and the
-  team key in the overlay rather than `.env` so a run pointed elsewhere never holds it
-  (`docs/credentials.md`). "Rotate it first" has one exception, and it is the team key: the Board
-  shows that value rather than minting it and offers no way to replace it, so there is nothing to
-  rotate and the leak is not recoverable.
+  request for one and fires *after* the push, so a caught credential is burned: rotate it first,
+  then clean up. The **team key** and the **LLM API keys** belong in an untracked env file, `.env`
+  for the board in play and a `.env.<event>` overlay for any other. The full response, and the one
+  secret that **cannot be rotated** (the team key: the Board displays that value rather than
+  minting it), are in `CONTRIBUTING.md` and `docs/credentials.md`.
 
 ## Code standards
 
@@ -95,11 +83,9 @@ step is "commit your work" has described the middle of the job. It reaches file 
 nothing else: a session that changes no file owes no pull request, and the only other thing that
 stops you is the author saying, here, that they want the commit alone.
 
-**Protection here is by convention, not by mechanism.** On a free private repository GitHub does
-not enforce branch protection or required checks (ADR-0003), so nothing technically stops a push
-to `main` or a merge over a red check. The rules below are kept because they keep the repository
-reviewable, not because a ruleset forces them — which means it is on each contributor to hold to
-them. A red conformance or CI check is a stop, even though GitHub will let you merge past it.
+**Protection here is by convention, not by mechanism.** GitHub enforces neither branch protection
+nor required checks on a free private repository (ADR-0003), so nothing stops a push to `main` or
+a merge over red. A red conformance or CI check is a stop anyway.
 
 Before you stop, every acceptance criterion you satisfied is ticked on the issue and every one
 you did not is left unticked and explained — `docs/agents/acceptance-criteria.md`.
@@ -109,26 +95,21 @@ you did not is left unticked and explained — `docs/agents/acceptance-criteria.
 Every commit **you write**, and every pull-request body, ends with an `Assisted-by:` trailer —
 plus a `Co-authored-by:` for a model whose vendor address is verified — as its **last,
 contiguous** lines. Wrote it yourself? Then it is `Assisted-by: none`, never no trailer at all.
-The commits GitHub writes are not yours either: the squash on `main` and the merge the **Update
-branch** button makes are the platform's text, so the conformance check skips a merge commit and
-is never run over `main`. The full rule and the verified allowlist are in `CONTRIBUTING.md`; an
-effort suffix is recorded only when one is explicitly set, and a mode (Ultracode) is never
-recorded as one.
+Do not copy `main`'s own commits: the squash and the **Update branch** merge are the platform's
+text, and the check skips them. The full rule, the verified allowlist and the effort suffix are in
+`CONTRIBUTING.md`; a mode (Ultracode) is never recorded as one.
 
 ## Agent skills
 
 The Matt Pocock engineering skills are **installed in this repository** — `.claude/skills/` for
 Claude Code, `.agents/skills/` for Codex and other agents — so every teammate has the same set on
-clone, with no global install. **Use them; do not reinvent their routines.** When a task matches a
-skill — grilling a plan, modelling the domain, triaging an issue, implementing a ticket, reviewing
-a diff, resolving a merge — invoke the skill rather than improvising, and follow the route below.
-If you are unsure which one fits, start with `/ask-matt`. This instruction is the enforcement:
-skills are model-invoked, so a session that ignores them fails no check — it just does worse work.
+clone, with no global install. **Use them; do not reinvent their routines.** If you are unsure
+which one fits, start with `/ask-matt`. This instruction is the enforcement: skills are
+model-invoked, so a session that ignores them fails no check — it just does worse work.
 
-They are already configured for this repository — GitHub Issues as the tracker, the closed
-13-label set for triage, `docs/` for any artefacts — so **do not run `/setup-matt-pocock-skills`
-again**; those questions are already answered, in `docs/agents/`. If you change the installed set,
-`skills-lock.json` and both skill directories are updated together, in one pull request.
+They are already configured for this repository, and the answers are in `docs/agents/` — so **do
+not run `/setup-matt-pocock-skills` again**. If you change the installed set, `skills-lock.json`
+and both skill directories are updated together, in one pull request.
 
 ### The route through the skills — name it before you start
 
@@ -147,15 +128,10 @@ already encode these processes — reach for them rather than improvising one.
 | a branch or PR to review | `/code-review` |
 | unclear which | `/ask-matt` |
 
-**The build route:** once grilled, a multi-session change goes `/to-spec` → `/to-tickets` →
-`/implement` per ticket; a one-screen, one-sentence change skips straight to `/implement`.
-
-**Fresh sessions matter.** Hold one unbroken session from `/grill-with-docs` through `/to-tickets`,
-then `/clear` before each `/implement` — a ticket is self-contained, and carrying the last one's
-context is how a session builds against a decision superseded two tickets ago.
-
-`docs/agents/workflow.md` is the full route: the conditions, the exceptions, and where research and
-prototypes land.
+`/clear` before each `/implement`: a ticket is self-contained, and carrying the last one's context
+is how a session builds against a decision superseded two tickets ago. `docs/agents/workflow.md` is
+the full route — the build chain (`/to-spec` → `/to-tickets` → `/implement`), when to skip it, and
+where research and prototypes land.
 
 ### Issue tracker
 
@@ -164,36 +140,19 @@ operations, including wayfinding (`/wayfinder` falls back to local markdown with
 
 ### Labels and assignment
 
-Thirteen labels, and the set is closed — `docs/agents/triage-labels.md`. Every issue carries
-exactly one state and one category. There is no Terraform behind them here: the set was created by
-hand at repository setup, so a label added by hand *stays* until a human removes it — the
-discipline is yours to keep, not an apply's to enforce.
-
-Every `task`/`bug`/`decision` issue also carries **one assignee**, defaulted to its author by
-`.github/workflows/stamp-new-issue.yml` so none is ever unowned and two people never take the same
-one. Assign at creation with `--assignee @me`, reassign to whoever picks it up, and never leave one
-unassigned. Wayfinder tickets are the exception — they stay unassigned until claimed
-(`docs/agents/issue-tracker.md`).
-
-### Acceptance criteria
-
-Ticked on the issue, never falsely; what could not be done is a not-doing line in the pull-request
-body, and the drift block has a fixed shape. See `docs/agents/acceptance-criteria.md`.
-
-### Domain docs
-
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Thirteen labels, and the set is closed — `docs/agents/triage-labels.md`; no automation keeps it
+closed here, so a label added by hand *stays* until a human removes it. Every issue carries exactly
+one state, one category and one assignee (`docs/agents/issue-tracker.md`, which has the wayfinder
+exception).
 
 ### Dependency updates
 
 Surfaced at both ends of any session that touches a pull request — `docs/agents/dependencies.md`.
-Note that this repository auto-merges **nothing**: PR auto-merge is a paid feature on a private
-repository (ADR-0003), so every Dependabot bump is landed by hand on a green check.
+This repository auto-merges **nothing** (ADR-0003): every bump is landed by hand on a green check.
 
 ## Repository notes
 
-The Solver is being built now, against
-[spec #63](https://github.com/jerome-queck/incypher-ctf/issues/63): `solver/` runs from
-`__main__.py` and the root `Dockerfile` builds the image around it. The **ADK integration** is the
-one part still gated on an outside release — ADR-0008 expects it behind `Target` rather than
-`Board`, and names the kit's arrival as the date that expectation gets tested.
+v1 has landed against [spec #63](https://github.com/jerome-queck/incypher-ctf/issues/63) — tagged
+`v1`, with four gate Runs promoted under `runs/` and the layout in `MAP.md`. The **ADK
+integration** is the one part still gated on an outside release — ADR-0008 expects it behind
+`Target` rather than `Board`, and names the kit's arrival as the date that expectation gets tested.
