@@ -52,7 +52,11 @@ SIGNALLED = "stopped-on-signal"
 # Where the model writes, deliberately outside the Run's record: the sandbox makes the working
 # directory the one place the vendor's agent may write, and a Run whose stream sat in there would
 # be handing the model the file its own stall is judged from.
-WORKDIRS = Path("/state/work")
+#
+# The root of it: one directory per event beneath, then one per Challenge. Two segments rather than
+# one because a `challenge_id` is only unique on the Board that minted it, and this directory is
+# read back as input on a later Attempt rather than only written (ADR-0025).
+WORK_ROOT = Path("/state/work")
 
 # The tail's Steps belong to the Run rather than to any Attempt, and are addressed as such.
 TAIL = "run-tail"
@@ -186,7 +190,7 @@ class Run:
         steps: Steps,
         chain: tuple[Credential, ...],
         invocation: Invocation = Invocation(),
-        workdirs: Path = WORKDIRS,
+        work_root: Path = WORK_ROOT,
         launch: codex.Launch | None = None,
         idle_seconds: float = IDLE_SECONDS,
         now: Callable[[], dt.datetime] | None = None,
@@ -202,7 +206,9 @@ class Run:
         self._chain = chain
         self._invocation = invocation
         self._breaker = Breaker()
-        self._workdirs = Path(workdirs)
+        # The event, from the tracked profile, is the namespace: the root is one host mount across
+        # every Board this image plays, and only the event tells two of them apart (ADR-0025).
+        self._workdirs = Path(work_root) / profile.rules.event
         self._launch = launch
         self._idle_seconds = idle_seconds
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
@@ -448,8 +454,8 @@ class Run:
 
         A copy rather than the Intake original: the model unpacks archives and edits what it finds,
         and Intake's copy is change detection's evidence that we still hold what the Board listed.
-        The directory is the memory that crosses an Attempt boundary, so it is keyed by Challenge and
-        never cleared between Attempts.
+        The directory is the memory that crosses an Attempt boundary, so it is keyed by event and
+        Challenge and never cleared between Attempts.
 
         The artefacts are answered separately rather than read back off the directory, because by
         the second Attempt the directory also holds whatever the model made — and a recon cascade

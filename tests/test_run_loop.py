@@ -9,6 +9,7 @@ is every rule that would be invisible in a live Run because it never fired.
 import datetime as dt
 import json
 import re
+from dataclasses import replace
 
 from solver.board import Board
 from solver.codex import Credential, Child
@@ -33,6 +34,11 @@ RULES = Rules(
     window_seconds=3600,
     prohibitions=("no broad automated enumeration — an immediate ban",),
 )
+
+# What a Board serves when a Challenge ships a file. A parameter on `Wire` rather than a literal,
+# because a test about *whose* file the model was handed cannot make its point out of bytes every
+# Board serves alike.
+ARTEFACT = b"nothing to see, but a real artefact all the same\n"
 
 # Ours rather than the defaults, so a test can reason about the arithmetic: a 3600 s window buys
 # five 600 s Attempts above a 300 s tail, and the sixth is refused because it would eat into it.
@@ -59,7 +65,9 @@ class Clock:
 class Wire:
     """A CTFd with a handful of Challenges and one Flag each, remembering what it was sent."""
 
-    def __init__(self, *, count: int = 6, mana=None, ledger=None, ships_files: bool = False):
+    def __init__(
+        self, *, count: int = 6, mana=None, ledger=None, ships_files: bool = False, artefact: bytes = ARTEFACT
+    ):
         self.listed = [
             {"id": one, "name": f"challenge-{one}", "type": "standard", "value": 100, "solves": one, "position": one}
             for one in range(1, count + 1)
@@ -70,6 +78,7 @@ class Wire:
         # An attachment costs the recon cascade several Steps before the model has run anything,
         # which is the whole shape the step cliff must not be charged for.
         self.ships_files = ships_files
+        self.artefact = artefact
         self.submitted: list[tuple[int, str]] = []
 
     def transport(self, request):
@@ -87,7 +96,7 @@ class Wire:
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
         if path.startswith("/files/"):
-            return (200, b"nothing to see, but a real artefact all the same\n", "")
+            return (200, self.artefact, "")
         if path.endswith("/mana"):
             return (404, b'{"success": false}', "") if self.mana is None else self._answer(self.mana)
         return (404, b'{"success": false}', "")
@@ -206,11 +215,18 @@ class Agent:
         return Canned(wrote, self.clock, self.seconds)
 
 
-def solver(tmp_path, wire, agent, clock, *, lasting=3600.0, dials=DIALS, cycle_seconds=300.0):
-    """Everything `solver/__main__.py` composes, with the clock and the child under the test's hand."""
+def solver(
+    tmp_path, wire, agent, clock, *, lasting=3600.0, dials=DIALS, cycle_seconds=300.0, event=RULES.event, work_root=None
+):
+    """Everything `solver/__main__.py` composes, with the clock and the child under the test's hand.
+
+    `event` and `work_root` are separable because the real ones are: `/state/work` is one host
+    mount across every Board the image plays, and the event is the only thing under it that tells
+    two of them apart (ADR-0025).
+    """
     board = Board(BOARD, "token", wire.transport)
     recorder = Recorder(tmp_path / "state", "gate", Redactor({}), now=clock)
-    found = discovered(board, Board(BOARD, "", wire.transport), RULES)
+    found = discovered(board, Board(BOARD, "", wire.transport), replace(RULES, event=event))
     window = Window.opened(recorder.run_dir, lasting=lasting, now=clock())
     intake = Intake(board, recorder, limits=Limits(cycle_seconds=cycle_seconds), now=clock)
     intake.sync()
@@ -239,7 +255,7 @@ def solver(tmp_path, wire, agent, clock, *, lasting=3600.0, dials=DIALS, cycle_s
         instances=instances,
         steps=steps,
         chain=(Credential(slot="codex-subscription", model="gpt-5", home=tmp_path / "codex"),),
-        workdirs=tmp_path / "work",
+        work_root=work_root or tmp_path / "work",
         launch=agent,
         idle_seconds=30.0,
         now=clock,
@@ -346,7 +362,7 @@ def test_an_early_stop_with_budget_left_opens_another_turn_over_the_same_working
     opened = records(recorder, "attempt-open")
     assert len(agent.prompts) > len(opened), "a turn that stopped early bought no further turn"
     assert all("/state/work" not in text for text in agent.prompts)
-    assert all(str(tmp_path / "work" / "1") in text for text in agent.prompts)
+    assert all(str(tmp_path / "work" / RULES.event / "1") in text for text in agent.prompts)
 
 
 def test_a_correct_flag_is_submitted_and_closes_the_attempt_as_a_flag(tmp_path):
@@ -535,6 +551,31 @@ def test_the_step_cliff_is_charged_for_the_models_steps_and_not_for_reconning_a_
     assert len(reconned) > 2, "recon spent nothing, so this proves nothing about what it is charged"
     # The carried line is what the next turn is told, and it is the count the cliff reads.
     assert re.search(r"\b2 steps\b", agent.prompts[-1]), agent.prompts[-1].split("Earlier Attempts")[-1][:200]
+
+
+def test_two_boards_that_mint_the_same_challenge_id_do_not_share_a_working_directory(tmp_path):
+    """A `challenge_id` is a per-installation auto-increment integer, so Brunner's 13 and COMPFEST's
+    13 are one address holding two Challenges — and the working directory is the one thing under
+    `/state` a later Attempt reads back as input (ADR-0025). Keyed by the id alone, the second Board
+    is handed the first Board's files under a prompt telling the model they are its own, and every
+    check downstream passes: Intake fetched correctly, the Run exits clean, nothing is recorded.
+
+    Both Runs share one `work_root` here because the real ones do — `/state/work` is a single
+    host mount across every event this image plays, and only the event tells two of them apart.
+    """
+    root = tmp_path / "work"
+    boards = (("brunner-offline", b"brunner's own clue\n"), ("compfest-offline", b"compfest's own clue\n"))
+
+    for event, served in boards:
+        clock = Clock()
+        wire = Wire(count=1, ships_files=True, artefact=served)
+        run, _recorder = solver(tmp_path / event, wire, Agent(clock, wire=wire), clock, event=event, work_root=root)
+        run.work()
+
+    assert sorted(one.name for one in root.iterdir()) == ["brunner-offline", "compfest-offline"]
+    for event, served in boards:
+        landed = root / event / "1" / "clue-1.txt"
+        assert landed.read_bytes() == served, f"{event} was handed the other Board's file"
 
 
 def test_the_flag_format_example_in_the_boards_prose_is_never_submitted(tmp_path):

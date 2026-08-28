@@ -337,12 +337,28 @@ Everything one Run produces and the image could not contain, because none of it 
 Run happens: Intake's copy of the Board, every attachment downloaded, the Steps, Observations and
 Checkpoints of every Attempt, and the telemetry. It lives at `/state`, host-mounted, so it outlives
 the container that wrote it — a container's own filesystem dies with the container, taking the
-Run's whole history with it. **Run state is output, never input**: the Solver reads no code and no
-tool from it, so deleting it mid-run costs the record and not the ability
-([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
+Run's whole history with it. **The Solver reads no code and no tool from it**, so deleting it
+mid-run costs the record and not the ability
+([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)). It is output
+with **one exception, and the exception is deliberate**: a Challenge's Working directory — the entry
+below — is read back by the *model* on a later Attempt
+([ADR-0025](docs/adr/0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md)).
 _Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not what it is). Not
 "state" bare either — that reads as the Solver's in-memory state, which is a different thing and
 does not survive anything.
+
+**Working directory**:
+The one directory a Challenge's Attempts write in — `/state/work/<event>/<challenge_id>/`, holding
+the Board's own files copied in and everything the model makes beside them. The sandbox makes it the
+only path the vendor's agent may write, and it is **never cleared between Attempts**: a Turn is a
+fresh spawn with no memory of the last, so this directory is what carries what was learned across
+that reset. It is therefore the one part of Run state that is also Run *input*, and it is keyed by
+event rather than by `challenge_id` alone — that id is a per-installation auto-increment integer, so
+two Boards mint the same ones and one address would hold two Challenges
+([ADR-0025](docs/adr/0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md)).
+_Avoid_: workspace, scratch, sandbox (the sandbox is the container itself, ADR-0018). Not the Run's
+own record either: that lives under `/state/runs/`, deliberately outside this directory, so the
+model cannot rewrite the file its own stall is judged from.
 
 **Refusal**:
 The Solver declining to start, before anything is spent — a missing or empty credential, no tracked

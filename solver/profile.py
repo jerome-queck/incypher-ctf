@@ -38,6 +38,11 @@ MARK = "[profile]"
 BOARDS = Path("/opt/solver/boards")
 SUFFIX = ".board.json"
 
+# What an `event` may be, now that it names a directory under `/state/work` and not only a tracked
+# file (ADR-0025). A separator or a `..` in it would put a Board's memory outside the root that is
+# namespacing it, which is the failure the namespace exists to prevent.
+EVENT_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
 # CTFd's own default, assumed because `/api/v1/configs` is admin-only on every Board we hold a token
 # for. Named as an assumption rather than folded into a default argument, because the profile has to
 # be able to say which of the two it is.
@@ -247,7 +252,7 @@ def _read(path: Path) -> Rules:
     if float(document["window_seconds"]) <= 0:
         raise Refusal(f"{BOOT} {path} states a window of {document['window_seconds']}, which buys no Attempt at all")
     return Rules(
-        event=str(document["event"]),
+        event=_event(path, document["event"]),
         url=str(document["url"]).rstrip("/"),
         flag_wrappers=_wrappers(path, document["flag_wrappers"]),
         window_seconds=float(document["window_seconds"]),
@@ -256,6 +261,19 @@ def _read(path: Path) -> Rules:
         web_search=bool(document.get("web_search", True)),
         requires=_requires(path, document.get("requires") or ()),
     )
+
+
+def _event(path: Path, stated: Any) -> str:
+    """The event's name, which since ADR-0025 is also a path segment.
+
+    Checked here rather than where the path is built, because `Rules` is what leaves this module and
+    a name refused at boot costs a Run nothing — while a Board whose working directories landed
+    outside `/state/work/<event>/` is found afterwards, if at all.
+    """
+    name = str(stated)
+    if EVENT_SEGMENT.fullmatch(name) is None:
+        raise Refusal(f"{BOOT} {path} states the event {name!r}, which is not usable as a directory name (ADR-0025)")
+    return name
 
 
 def _wrappers(path: Path, stated: Any) -> tuple[str, ...]:

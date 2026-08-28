@@ -159,7 +159,7 @@ def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):
         instances=instances,
         steps=steps,
         chain=(Credential(slot="codex-subscription", model="gpt-5", home=tmp_path / "codex"),),
-        workdirs=tmp_path / "work",
+        work_root=tmp_path / "work",
         launch=agent,
         idle_seconds=30.0,
         now=clock,
@@ -312,7 +312,7 @@ def test_the_tail_reads_the_submission_budget_now_rather_than_remembering_it(tmp
     clock = Clock()
     wire = Wire(count=1, instanced=False, max_attempts=1)
     run, _recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock)
-    workdir = tmp_path / "work" / "1"
+    workdir = tmp_path / "work" / RULES.event / "1"
     workdir.mkdir(parents=True)
     run._pending[1] = Pending(1, workdir, (Candidate("brunner{held}", OBSERVED, command="cat flag"),))
 

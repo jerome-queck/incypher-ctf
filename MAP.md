@@ -23,7 +23,7 @@ Start here: `README.md`, then `AGENTS.md`.
 | Conformance | The vendored convention checker and the manifest it reads | `conformance/` |
 | Automation | The workflows that run on a pull request or on a new issue, and dependency updates | `.github/` |
 | Tool caches | Disposable ruff and pytest scratch — gitignored, safe to delete | `.cache/` |
-| Container state | The host mount a running container writes through — one `runs/<run_id>/` per Run, and the Codex credential the container mints for itself — gitignored, never committed | `state/` |
+| Container state | The host mount a running container writes through — one `runs/<run_id>/` per Run, one `work/<event>/<challenge_id>/` per Challenge worked, and the Codex credential the container mints for itself — gitignored, never committed | `state/` |
 | Promoted Runs | The Step stream of every Run that reached an Attempt, committed as written and one file per Run — data, so excluded from lint, outside the conformance checker's reach, and deliberately **not** excluded from the secret scan | `runs/`, written by `scripts/promote_run.py` |
 
 Update this file in the same pull request whenever a top-level area is added, moved, or removed.

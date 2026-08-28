@@ -189,6 +189,20 @@ def test_a_mistyped_key_is_refused_rather_than_silently_defaulted(tmp_path):
         rules_for(BOARD, tmp_path)
 
 
+@pytest.mark.parametrize("stated", ["../elsewhere", "two/parts", "", ".hidden"])
+def test_an_event_that_is_not_usable_as_a_directory_name_is_refused(tmp_path, stated):
+    """The event names the directory under `/state/work` this Board's working directories live in
+    (ADR-0025), so a separator or a `..` in it puts a Board's memory outside the root that is
+    namespacing it — which is the collision the namespace exists to prevent, arriving by another
+    door and just as silently."""
+    (tmp_path / "x.board.json").write_text(
+        json.dumps({"event": stated, "url": BOARD, "flag_wrappers": ["f"], "window_seconds": 1, "prohibitions": []})
+    )
+
+    with pytest.raises(Refusal, match="not usable as a directory name"):
+        rules_for(BOARD, tmp_path)
+
+
 def test_a_window_that_buys_no_attempt_is_refused_where_it_is_read(tmp_path):
     """So the close a Board's rules state is the one bound that can ever have run out, and the
     refusal at boot can name it rather than guessing between three."""
