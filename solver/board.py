@@ -131,6 +131,22 @@ class Verdict:
         """
         return self.outcome in (CORRECT, ALREADY_SOLVED)
 
+    @property
+    def spent_a_slot(self) -> bool:
+        """Whether this submission cost one of the Challenge's attempts — the Fail CTFd counts
+        `max_attempts` in and states back as `attempts`.
+
+        Read as *anything the Board did not refuse outright*, which puts `unread` on the counted
+        side: a submission no verdict could be read out of may well have reached CTFd and been
+        graded, and a caller keeping a floor under the Board's count has to assume it did. Only
+        `ratelimited` and `paused` are answers instead of gradings, and a solve is not a Fail.
+
+        It is a property here rather than a comparison at the call site for the reason the wire
+        words above it are not exported: the question is *did this cost a slot*, and a caller that
+        had to spell it as an outcome name would be a caller holding a wire format (ADR-0008).
+        """
+        return self.outcome not in (CORRECT, ALREADY_SOLVED, RATE_LIMITED, PAUSED)
+
 
 @dataclass(frozen=True)
 class Reply:

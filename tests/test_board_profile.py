@@ -7,6 +7,7 @@ never be read as either.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from solver import profile
@@ -97,6 +98,16 @@ def test_every_tracked_profile_in_the_repository_reads():
     events = {rules.event for rules in tracked(TRACKED)}
 
     assert {"brunnerctf-2026-global", "incypher-2026-hackathon"} <= events
+
+
+def test_every_tracked_board_answers_to_its_own_url_and_has_a_rules_snapshot():
+    """`scripts/setup-board.sh` finds the rulebook to diff by asking `rules_for` for the URL it was
+    pointed at and then reading `<event>.rules.txt` beside the profile. Nothing else joins those two
+    files, so an `event` that does not match its own basename — or a second profile claiming one
+    Board — is a rules page nobody ever diffs, and the wizard reports it by saying nothing."""
+    for known in tracked(TRACKED):
+        assert rules_for(known.url, TRACKED) == known
+        assert (Path(TRACKED) / f"{known.event}.rules.txt").is_file()
 
 
 def test_the_board_is_selected_by_the_url_ctfd_url_names():

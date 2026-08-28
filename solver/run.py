@@ -234,6 +234,12 @@ class Run:
         # and a Board-wide incorrect-submission limiter makes sending the same wrong Flag twice a
         # slot spent on every other Challenge's behalf.
         self._offered: dict[int | str, set[str]] = {}
+        # The lowest number of submissions the Board can be holding against each Challenge. The
+        # count is the Board's and it is re-read once an **Intake** cycle while a slot is spent once
+        # a **turn**, so between two Intakes this is the only record that a slot went — and without
+        # it every turn of an Attempt is handed the budget as it stood when the Challenge was picked
+        # and the reserve is never reached.
+        self._slots_spent: dict[int | str, int] = {}
         self._leases: dict[int | str, Lease] = {}
         self._won: list[str] = []
         self._attempts = 0
@@ -447,14 +453,25 @@ class Run:
         if not candidates:
             return Outcome()
         offered.update(one.text for one in candidates)
+        # Read now rather than remembered from the Pick, for the reason the reserved tail reads it
+        # now: the count is the Board's and moves under us. Here it is *this Run* that moves it —
+        # one turn's submission is the next turn's spent slot — and the gate's own `spent_here`
+        # resets with the turn, so a remembered count hands every turn the whole budget back and
+        # lets a candidate nothing authorised into the slot the reserve holds.
+        slots = self._slots_now(challenge.challenge_id)
         outcome = self._flags.submit(
             candidates,
             attempt_id=held.attempt_id,
             challenge_id=challenge.challenge_id,
-            slots=challenge.slots,
+            slots=slots,
             workdir=held.workdir,
             lease=held.lease,
         )
+        # Counted onto the number the gate was handed rather than onto the Board's own: that one is
+        # already the higher of the two, so the tally re-bases itself on every fresher reading and
+        # can only ever climb.
+        if spent := sum(1 for one in outcome.graded if one.verdict.spent_a_slot):
+            self._slots_spent[challenge.challenge_id] = slots.spent + spent
         if outcome.held:
             waiting = self._pending.get(challenge.challenge_id)
             carried = (waiting.candidates if waiting else ()) + outcome.held
@@ -665,11 +682,18 @@ class Run:
         return swept.still_held + swept.unresolved, ""
 
     def _slots_now(self, challenge_id: int | str) -> Slots:
-        """This Challenge's submission budget as the Board states it **now**. A Challenge that has
-        dropped off the Board answers unknown, which the gate reads as limited — and `last_call`
-        releases the reserve over it anyway, so nothing found is left unsent for want of a number."""
+        """This Challenge's submission budget as the Board states it **now**, floored by what this
+        Run has spent since it said so. A Challenge that has dropped off the Board answers unknown, which the
+        gate reads as limited — and `last_call` releases the reserve over it anyway, so nothing
+        found is left unsent for want of a number.
+
+        The Board's stated count is stale by construction — re-read once an Intake cycle and spent
+        once a turn — so on its own it says a budget nobody has touched. The reconciliation is
+        `Slots.floored` and lives with the budget rather than here.
+        """
         current = next((one for one in self._intake.snapshot.challenges if one.challenge_id == challenge_id), None)
-        return current.slots if current else Slots()
+        stated = current.slots if current else Slots()
+        return stated.floored(self._slots_spent.get(challenge_id, 0))
 
     def _solves_now(self, challenge: Sighting) -> int:
         current = next(
