@@ -2,9 +2,9 @@
 
 [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md) settles what the
 queries are: **eval is seven questions, not a harness.** Each question is a script beside this one,
-and each of them needs the same three things first — the records in sequence, the Attempts
-reassembled out of them, and one table shape so that eight answers read alike. That is this module,
-and it is the reason none of the seven contains a JSON parser.
+and each of them needs the same four things first — the arguments they are all asked with, the
+records in sequence, the Attempts reassembled out of them, and one table shape so that eight answers
+read alike. That is this module, and it is the reason none of the seven contains a JSON parser.
 
 **It is a reader, and a reader is where ADR-0009's third stability rule is spent.** Everything here
 accesses by name with a default and skips what it cannot parse, so a stream written by a schema
@@ -25,6 +25,7 @@ than reporting a zero it did not measure.
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 import sys
@@ -42,6 +43,12 @@ from solver.record import CLAIMS, FLAG, OBSERVATIONS, SOURCE_SOLVER  # noqa: E40
 # Where a promoted stream lands, and what every query reads when it is given no path of its own.
 # The live copy under `/state` is one argument away and carries the bodies with it.
 PROMOTED = "runs"
+
+# What a Run that never stated its event reads as. Every Run the Solver writes states one —
+# `solver/profile.py` requires the key — so this is what a hand-made stream reads as, and it is a
+# group of its own rather than a silence: a Run no Board can be attributed to is the row a reader
+# most needs to see before trusting an aggregate.
+UNSTATED = "(unstated)"
 
 # What a query prints where `Attempt.cause` is empty. Empty is the honest value — the stream never
 # said — and this is what that reads as in a table, held here so four queries cannot spell it three
@@ -316,6 +323,23 @@ class Run:
         return at(str(next(iter(self.of(RUN_OPEN)), {}).get("ts", "")))
 
     @property
+    def profile(self) -> dict[str, Any]:
+        """The Board profile as this Run discovered it, off its `run-open` line — `{}` where the
+        stream never said. Every question about the Board a Run played is asked of this."""
+        profile = next(iter(self.of(RUN_OPEN)), {}).get("board_profile")
+        return profile if isinstance(profile, dict) else {}
+
+    @property
+    def event(self) -> str:
+        """Which Board this Run played, or the empty string where the stream never said.
+
+        The one field that tells one Board's Runs from another's, and it is already in every stream
+        written — `solver/profile.py` requires the key. Nothing read it until the promotion
+        directory could hold two Boards at once (#121).
+        """
+        return str(self.profile.get("event", ""))
+
+    @property
     def closed(self) -> dict[str, Any] | None:
         return next(iter(self.of(RUN_CLOSE)), None)
 
@@ -465,10 +489,41 @@ def locate(paths: Sequence[str]) -> list[Path]:
     return found
 
 
-def load(paths: Sequence[str]) -> list[Run]:
-    """Every stream a caller named, read — Runs that reached no Attempt included, because a query
-    reporting nothing over a Run that never worked one is a different answer from a missing file."""
-    return [read(path) for path in locate(paths)]
+def load(paths: Sequence[str], event: str | None = None) -> list[Run]:
+    """Every stream a caller named, read — and only the Runs at one Board where they named one.
+
+    Runs that reached no Attempt are included, because a query reporting nothing over a Run that
+    never worked one is a different answer from a missing file.
+
+    **The scope is read off each stream and never off its name.** ADR-0009 promotes every Run that
+    reached an Attempt into one directory, so `runs/` holds every Board we have ever played and
+    `locate()` finds them by shape — `*.jsonl` and `*/stream.jsonl` — never by a Board appearing in
+    a filename, because none does: a promoted stream is named for its `run_id`. The `run-open` line
+    is what a Run cannot be renamed out of.
+    """
+    runs = [read(path) for path in locate(paths)]
+    return runs if event is None else [run for run in runs if run.event == event]
+
+
+def events(runs: Sequence[Run]) -> dict[str, int]:
+    """Which Boards these Runs played and how many Runs each, in the order they were read."""
+    tally: dict[str, int] = {}
+    for run in runs:
+        tally[run.event or UNSTATED] = tally.get(run.event or UNSTATED, 0) + 1
+    return tally
+
+
+def asking(description: str) -> argparse.ArgumentParser:
+    """The arguments every eval query takes, declared once.
+
+    A flag spelled eight times is a flag that will be spelled seven ways, and `--event` is the one
+    every future reading of these numbers depends on being the same flag
+    (`CODING_STANDARDS.md` §6). A query with more to ask adds its own to what this hands back.
+    """
+    parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser.add_argument("--event", help="answer over one Board alone, named as its stream states it")
+    return parser
 
 
 def table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> str:
@@ -499,14 +554,39 @@ def counted(tokens: int, unmeasured: int) -> str:
     return f"{tokens}+" if tokens else ""
 
 
-def heading(runs: Sequence[Run]) -> str:
+def heading(runs: Sequence[Run], *, event: str | None = None) -> str:
     """What was read, said once at the top of every query — including the Runs that carry no bodies,
-    since that is the difference between a query answering nothing and a query unable to ask."""
+    since that is the difference between a query answering nothing and a query unable to ask, and
+    which Boards the answer spans, since every number below is an aggregate over exactly these Runs.
+
+    An unscoped aggregate is a defensible answer to some of the seven questions and a meaningless
+    one to others, but only where it says it is one: #105's table was read as the gate Runs' numbers
+    because they were the only Runs there, and nothing in the output would have changed when they
+    stopped being.
+    """
     if not runs:
+        if event:
+            return f"no Run at {event} — nothing read carried it, and the name is the one a stream states"
         return "no stream found — name one, or promote a Run into runs/ first"
     return "\n".join(
-        f"{run.run_id}: {len(run.attempts)} attempt(s), {len(run.records)} record(s)"
-        + (f", {run.unreadable} unreadable line(s)" if run.unreadable else "")
-        + ("" if run.bodies else " — bodies not beside this stream")
-        for run in runs
+        [
+            *(
+                f"{run.run_id}: {len(run.attempts)} attempt(s), {len(run.records)} record(s)"
+                + (f", {run.unreadable} unreadable line(s)" if run.unreadable else "")
+                + ("" if run.bodies else " — bodies not beside this stream")
+                for run in runs
+            ),
+            _spanning(runs, event),
+        ]
     )
+
+
+def _spanning(runs: Sequence[Run], event: str | None) -> str:
+    """Which Boards the numbers below cover, in one line a reader cannot skip past."""
+    tally = events(runs)
+    if event:
+        return f"scoped to {event}: {len(runs)} Run(s) — every number below is that Board alone"
+    if len(tally) == 1:
+        return f"every Run read is at {next(iter(tally))} — every number below is that Board alone"
+    spanned = ", ".join(f"{name} ({count})" for name, count in tally.items())
+    return f"aggregating {len(tally)} events — {spanned} — every number below spans them; --event reads one alone"

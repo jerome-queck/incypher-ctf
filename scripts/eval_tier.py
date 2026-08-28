@@ -1,6 +1,6 @@
 """Eval question 4 — **is Tier predictive?** The Tier a Challenge was given, against how it ended.
 
-    python3 scripts/eval_tier.py [stream ...]
+    python3 scripts/eval_tier.py [--event <name>] [stream ...]
 
 [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md) asks for Tier against
 the cause an Attempt actually ended with, and the matrix below is that. Tier sets the Attempt budget
@@ -20,7 +20,6 @@ whose low Tiers end `flag` while its high ones end on a counter predicted exactl
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,18 +32,26 @@ import stream  # noqa: E402
 from solver.record import CAUSES  # noqa: E402
 
 
-def _provenance(runs: Sequence[stream.Run]) -> dict[str, str]:
-    """How each Challenge got its Tier, keyed by challenge id as a string.
+def _provenance(runs: Sequence[stream.Run]) -> dict[tuple[str, str], str]:
+    """How each Challenge got its Tier, keyed by the Run that judged it and the Challenge id.
 
-    Later Triage lines win: Triage runs again as the Board moves, and the Tier an Attempt was opened
-    under is the one it was picked with.
+    By the pair rather than the id alone, because `challenge_id` is a per-installation
+    auto-increment integer ([ADR-0025](../docs/adr/0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md)):
+    every Board numbers its Challenges from 1, so Challenge 94 at Brunner and Challenge 94 at
+    COMPFEST are two Challenges wearing one key. A bare id files one Board's Triage against the
+    other's Attempts, silently, in the one query that joins the two records.
+
+    Later Triage lines within a Run win: Triage runs again as the Board moves, and the Tier an
+    Attempt was opened under is the one it was picked with.
     """
-    how: dict[str, str] = {}
+    how: dict[tuple[str, str], str] = {}
     for run in runs:
         for record in run.of(stream.TRIAGE):
             for judged in record.get("tiers") or []:
                 if isinstance(judged, dict):
-                    how[str(judged.get("challenge_id"))] = str(judged.get("provenance", "")) or "(unstated)"
+                    how[run.run_id, str(judged.get("challenge_id"))] = (
+                        str(judged.get("provenance", "")) or stream.UNSTATED
+                    )
     return how
 
 
@@ -57,12 +64,11 @@ def _matrix(counts: dict[tuple[str, str], int], keys: Sequence[str], causes: Seq
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs = stream.load(arguments.paths, event=arguments.event)
+    print(stream.heading(runs, event=arguments.event))
 
     attempts = [attempt for run in runs for attempt in run.attempts if attempt.opened]
     if not attempts:
@@ -75,7 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for attempt in attempts:
         cause = attempt.cause or stream.NEVER_CLOSED
         tier = "(untiered)" if attempt.tier is None else f"tier {attempt.tier}"
-        origin = how.get(str(attempt.opened.get("challenge_id")), "(untriaged)")
+        origin = how.get((attempt.run_id, str(attempt.opened.get("challenge_id"))), "(untriaged)")
         by_tier[tier, cause] = by_tier.get((tier, cause), 0) + 1
         by_provenance[origin, cause] = by_provenance.get((origin, cause), 0) + 1
 

@@ -1,6 +1,6 @@
 """Eval question 6 — **is the alarm firing?** The count of `cut:self-reported-impossible`, target zero.
 
-    python3 scripts/eval_alarm.py [stream ...]
+    python3 scripts/eval_alarm.py [--event <name>] [stream ...]
 
 [ADR-0005](../docs/adr/0005-the-stall-call-lives-outside-the-solving-model.md) gives the model one
 door out of an Attempt and it only closes: a volunteered "impossible" shortens the budget and can
@@ -23,7 +23,6 @@ run this against `state/runs/<id>` when the answer matters.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -56,12 +55,11 @@ def _why(run: stream.Run, attempt: stream.Attempt) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
+    parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths)
-    print(stream.heading(runs))
+    runs = stream.load(arguments.paths, event=arguments.event)
+    print(stream.heading(runs, event=arguments.event))
 
     attempts = [(run, one) for run in runs for one in run.attempts if one.opened]
     fired = [(run, one) for run, one in attempts if one.cause == CUT_SELF_REPORTED_IMPOSSIBLE]
