@@ -1,0 +1,30 @@
+Source:    https://mirror-ctf.compfest.id/rules
+From:      During the competition, each team is prohibited from:
+To:        Flag format for each challenge will be
+Fetched:   2026-08-28 08:24 SGT (2026-08-28T00:24Z)
+Publisher: COMPFEST 18 / RISTEK — held here as this team's compliance record.
+
+Do not hand-edit. `sh scripts/check-rules-drift.sh <this file> --update` rewrites it, and the
+diff it prints is the red-line review.
+--------------------------------------------------------------------------------------------
+During the competition, each team is prohibited from:
+- Collaborating with anyone outside the team in any form (flag sharing, cross teaming, etc).
+- Discuss/ask about challenges in the Discord server. If you have a question, please open a ticket.
+- Using LLMs or other automated methods to create multiple accounts for the purpose of submitting flags through those accounts.
+- Using automated scanners or tools such as SQLMap, Burp Scanner, Dirb, or similar tools (unless explicitly permitted in the challenge description).
+- Causing any form of harm or disruption to other participants or the organizers. Examples include:
+- Deleting or modifying flag files,
+- Launching DDoS attacks against services or the competition platform,
+- Brute-forcing flags on the platform,
+- And other similar disruptive actions.
+- Engaging in flag hoarding (intentionally stockpiling flags and submitting them in bulk near the end of the competition).
+- Hints will be given only to challenges which have 0 solves. The organizer will notify when a hint is released, so please do not ask for hints in the Discord server, or anywhere else.
+AI Policy
+Human Division
+- No AI assistance is allowed besides browser AI overview and IDE code suggestions and autocomplete.
+- Even though AI overview is allowed, you are not allowed to prompt it. Only use it to help summarize the browser results.
+AI Assistant Division
+Use any AI/LLM you want.
+- If you want to switch from the Human Division to the AI-Assisted Division, open a ticket on our Discord server and we will review your case. Switching from the AI-Assisted Division to the Human Division is not allowed.
+Teams found to have violated these rules or engaged in cheating will be subject to penalties, including disqualification or point deductions.
+Flag format for each challenge will be COMPFEST18{[A-z0-9_-]+} unless specified otherwise.
