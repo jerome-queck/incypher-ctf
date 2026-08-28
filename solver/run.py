@@ -21,6 +21,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import shutil
 import time
 from collections.abc import Callable
@@ -36,11 +37,21 @@ from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
 from solver.profile import Profile
 from solver.prompt import APPROACH
-from solver.record import CUT_BUDGET, FLAG, Recorder
+from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder
 from solver.schedule import Ended, Pick, Scheduler
 from solver.stall import Breaker, Deadline, Watch
 
 MARK = "[run]"
+
+# The `tool` a staging Step carries. A name of the Solver's own, like recon's in-process probes:
+# nothing under it is a command a reader of the stream could replay in a shell.
+STAGE = "stage"
+
+# How much of the Board's file's digest names the copy that lands beside a stranger holding its
+# name. Long enough that two artefacts never pick the same name by accident, short enough that the
+# name stays one a model can type — and it is the Board's bytes rather than a counter, so the same
+# file picks the same name on every later Attempt instead of a second copy per Attempt.
+DIGEST_CHARS_IN_A_NAME = 12
 
 # Why the Run ended, written on the run-close line. Two endings, because there are only two: the
 # clock, and us. The third name is the clock brought forward by hand, kept apart so a post-mortem
@@ -284,20 +295,24 @@ class Run:
         because that is not something that ends anything.
         """
         challenge = pick.challenge
-        workdir, artefacts = self._staged(challenge)
+        attempt_id = f"{challenge.challenge_id}-{pick.attempt_sequence}"
+        # Restarted before the working directory is settled rather than after it: what staging has
+        # to say about a name already taken is a Step of the Attempt it opens, and a counter still
+        # holding the last Attempt's total would number it into that one.
+        self._steps.restart()
+        workdir, artefacts = self._staged(challenge, attempt_id)
         held = _Held(
             pick=pick,
             workdir=workdir,
             boundary=self._boundaries.setdefault(challenge.challenge_id, Boundary()),
             deadline=Deadline(budget=pick.deadline),
-            attempt_id=f"{challenge.challenge_id}-{pick.attempt_sequence}",
+            attempt_id=attempt_id,
             began=self._now(),
             artefacts=artefacts,
         )
-        self._steps.restart()
         # Before the open, and it has to be: `attempt_open` records the Instance this Attempt was
         # given, and there is no Instance to record until the deploy has answered. So the deploy is
-        # Step 1 of an Attempt whose `attempt-open` line comes after it — that line describes the
+        # a Step of an Attempt whose `attempt-open` line comes after it — that line describes the
         # Attempt rather than starting it, and a reader of the stream reconciles on `attempt_id`.
         self._deploy(held)
         self._recorder.attempt_open(
@@ -449,7 +464,7 @@ class Run:
                 self._won.append(outcome.flag)
         return outcome
 
-    def _staged(self, challenge: Sighting) -> tuple[Path, tuple[Path, ...]]:
+    def _staged(self, challenge: Sighting, attempt_id: str) -> tuple[Path, tuple[Path, ...]]:
         """The Challenge's working directory and the Board's own files inside it.
 
         A copy rather than the Intake original: the model unpacks archives and edits what it finds,
@@ -466,11 +481,72 @@ class Run:
         staged = []
         for attachment in challenge.attachments:
             if attachment.held and attachment.path is not None:
-                landing = workdir / attachment.name
-                if not landing.exists():
-                    shutil.copy2(attachment.path, landing)
-                staged.append(landing)
+                staged.append(self._landed(attachment.path, attachment.name, workdir, attempt_id))
         return workdir, tuple(staged)
+
+    def _landed(self, source: Path, name: str, workdir: Path, attempt_id: str) -> Path:
+        """Where the Board's copy of one attachment is, once the directory has had its say.
+
+        A free name is copied into, and that is the whole of it. A name already taken is two
+        situations wearing one shape, and only the bytes tell them apart: the copy an earlier
+        Attempt made — kept, because re-copying would clobber the archive the model unpacked around
+        it — and a name holding something else, which is the model's own file from an earlier
+        Attempt, one it edited in place, or the Board's own replaced since we fetched it.
+
+        The second used to be kept like the first and handed over anyway, so recon and the model
+        worked whatever held the name under a prompt calling it this Challenge's own file
+        ([#119](https://github.com/jerome-queck/incypher-ctf/issues/119)). What happens instead is
+        the rule recon already holds — an Attempt opens onto the Board's files and never onto the
+        model's output: the taken name is left exactly as it is, and the Board's copy lands beside
+        it under a name minted from its own digest, which is the Solver's own name for that file
+        and the one this Attempt works.
+        """
+        landing = workdir / name
+        if not landing.exists():
+            shutil.copy2(source, landing)
+            return landing
+        wanted = _digest(source)
+        # `is_file`, because a name can be taken by something with no bytes to compare at all — a
+        # directory the model made under it is no more the Board's file than a stranger is.
+        standing = _digest(landing) if landing.is_file() else ""
+        if standing == wanted:
+            self._record(name, f"{landing} holds the copy an earlier Attempt staged — {wanted}", attempt_id, ok=True)
+            return landing
+        beside = landing.with_name(f"{landing.stem}.{wanted[:DIGEST_CHARS_IN_A_NAME]}{landing.suffix}")
+        if not beside.is_file() or _digest(beside) != wanted:
+            shutil.copy2(source, beside)
+        # The two digests and no verdict about them (ADR-0009). *Whose* file holds that name — the
+        # model's own, or the Board's from before it moved — is a judgement, and it is one a reader
+        # of the stream derives from these rather than one the Solver freezes into the record.
+        self._record(
+            name,
+            f"{landing} was already there and holds {standing or 'nothing with bytes to compare'}, where the "
+            f"Board's own copy is {wanted} — so it was left where it is, and this Attempt works {beside}",
+            attempt_id,
+            ok=False,
+        )
+        return beside
+
+    def _record(self, subject: str, told: str, attempt_id: str, *, ok: bool) -> None:
+        """One staging decision, as a `step-begin` / `step-end` pair like any other.
+
+        Written down rather than done quietly, because the failure it is part of is a silent one:
+        the Run exits clean, Intake reports a correct fetch, and which bytes an Attempt was handed
+        is a fact no other record carries — the working directory is Run *input* (ADR-0025) and
+        nothing else in the stream describes it.
+
+        `ok` is the operation's own verdict, as every other Step's exit code here is: staging came
+        away with the Board's file under the Board's own name, or it did not.
+        """
+        command = f"{MARK} {STAGE} {subject}"
+        step = self._recorder.step_begin(
+            attempt_id=attempt_id,
+            step_index=self._steps.spend(),
+            command_raw=command,
+            command_normalised=" ".join(command.split()),
+            tool=STAGE,
+        )
+        step.end(exit_code=0 if ok else 1, output=f"{MARK} {told}".encode(), usage=NO_MODEL)
 
     def _recon(self, held: _Held, challenge: Sighting) -> recon.Recon:
         """What the cascade observed, whole rather than rendered: the Attempt wants the block *and*
@@ -616,6 +692,14 @@ class Run:
             self._instances.terminate(challenge_id, attempt_id=TAIL)
             self._leases.pop(challenge_id, None)
         return self._sweep(attempt_id=TAIL, keeping=None)
+
+
+def _digest(path: Path) -> str:
+    """A file's sha256, read in blocks — an attachment is capped at a quarter of a gigabyte
+    (`solver/board.py`), and a Run that held one in memory to answer a question about a *name*
+    would be spending the container's whole allowance on a check."""
+    with path.open("rb") as reading:
+        return hashlib.file_digest(reading, "sha256").hexdigest()
 
 
 def _approach(said: list[str]) -> str:
