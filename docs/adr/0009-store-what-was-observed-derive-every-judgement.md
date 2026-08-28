@@ -1,5 +1,17 @@
 # Store what was observed, derive every judgement
 
+> **Amended by
+> [ADR-0025](0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md).** *Two homes*
+> below rests on ADR-0008's *"one-way pipe for output"*, and there is one exception to it that was
+> written down nowhere: **a Challenge's working directory under `/state/work` is read back as Run
+> input.** It is the memory that crosses an Attempt boundary, so a later Attempt is handed the
+> half-unpacked archives, notes and scripts an earlier one left there — by design, and load-bearing
+> since ADR-0023 made every turn a fresh spawn. Nothing in this record moves: the read-back is the
+> **model's**, of the model's own prior output, and deleting `/state` mid-Run still costs the record
+> and not the ability. ADR-0025 also puts the event in the path —
+> `/state/work/<event>/<challenge_id>/` — because a `challenge_id` is a per-installation integer and
+> a second Board mints the same ones.
+
 > **One enforcement in *Two homes* is moved by
 > [ADR-0024](0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md).** The rule
 > below is unchanged — the Solver never commits mid-Run — but "the Solver has no git binary" is no

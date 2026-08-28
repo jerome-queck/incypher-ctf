@@ -221,6 +221,21 @@ case "$CTFD_URL" in
     confirm "Point the Solver there anyway?" || { say "Stopping. Re-run and take the default."; exit 1; } ;;
 esac
 write_env CTFD_URL "$CTFD_URL"
+
+# Working directories are namespaced by event since ADR-0025, so pointing the Solver at a second
+# board no longer needs a purge for correctness. What is left is disk: anything still keyed by a
+# bare integer under state/work was written before that layout and is now read by nothing.
+# Reported and never deleted here — it is the only copy of what a model built, and the volume it
+# sits on is the operator's call, not a wizard's.
+if [ -d state/work ]; then
+  orphans=$(find state/work -maxdepth 1 -type d -name '[0-9]*' | wc -l | tr -d ' ')
+  if [ "$orphans" -gt 0 ]; then
+    say ""
+    note "$orphans working director(ies) under state/work predate the per-event layout (ADR-0025)."
+    note "Nothing reads them, and no cutover needs them gone. Reclaim the space when you want it:"
+    note "  du -sh state/work && rm -rf state/work/[0-9]*"
+  fi
+fi
 pause
 
 # ── 2 ─────────────────────────────────────────────────────────────────────

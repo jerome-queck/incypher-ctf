@@ -51,7 +51,7 @@ def prompt_for(**overrides):
         "rules": RULES,
         "boundary": Boundary(),
         "recon": "[recon] file door.zip → Zip archive",
-        "workdir": Path("/state/work/7"),
+        "workdir": Path("/state/work/brunnerctf-2026-global/7"),
         "budget_s": 600,
         **overrides,
     }
