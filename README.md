@@ -19,11 +19,20 @@ and dropped.
 
 ## Status
 
-🚀 **v1 has landed**, tagged `v1` against spec #63. The Solver takes a Board, works a window
-unattended and leaves its whole Step stream behind, and the gate Runs are committed under
-[`runs/`](runs/) as the evidence rather than the claim.
+🚀 **v1 has landed**, tagged `v1` against spec #63, and **its gate is closed with one clause
+Pending**. The Solver takes a Board, works a window unattended and leaves its whole Step stream
+behind, and the gate Runs are committed under [`runs/`](runs/) as the evidence rather than the
+claim.
 
-One part is outstanding and it waits on somebody else. The competition's **Agent Development Kit**
+The Pending clause is *"≥1 Instance it deployed and terminated itself"*, and it is Pending rather
+than failed because **neither Board v1 was bound to runs `ctfd-chall-manager`** — Brunner has no
+instanced Challenge to deploy, so the Solver was never asked. The path ships complete and is
+tested against a fake transport; what is missing is a real one.
+[ADR-0026](docs/adr/0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)
+is the verdict and its two rules: the first Board that can prove it discharges it, and it expires
+at v5's gate.
+
+A second part is outstanding and it waits on somebody else. The competition's **Agent Development Kit**
 is released 14 September 2026, eight days before the scored run, and
 [ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md) puts it behind
 `Target` rather than `Board`. The Solver is built to *accept* it, never on top of it — one that
