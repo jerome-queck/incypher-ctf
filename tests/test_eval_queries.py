@@ -571,7 +571,7 @@ def test_an_unscoped_query_says_which_boards_its_numbers_span(tmp_path, capsys):
     assert "brunnerctf-2026-global" in said and "compfest-2026" in said
 
 
-def test_the_scope_is_read_off_the_stream_and_never_off_the_filename(tmp_path, capsys):
+def test_the_scope_is_read_off_the_stream_and_never_off_the_filename(tmp_path):
     """A promoted stream is named for its `run_id` and no Board appears in that name, so a filename
     convention would be a convention nothing enforces. The `run-open` line is the record."""
     misnamed = tmp_path / "compfest-2026.jsonl"
@@ -583,13 +583,26 @@ def test_the_scope_is_read_off_the_stream_and_never_off_the_filename(tmp_path, c
 
 def test_a_scope_matching_no_run_says_so_rather_than_answering_over_nothing(tmp_path, capsys):
     """A mistyped event name is a query that reports an empty Board rather than a missed one, and
-    every table below it would read as a finding."""
+    every table below it would read as a finding. The Boards that *were* read are named, because
+    the name being wrong is the likeliest thing that happened."""
     paths = two_boards(tmp_path)
 
     code, said = answer(eval_tier, paths, capsys, "--event", "compfest")
 
     assert code == 0
     assert "no Run at compfest" in said
+    assert "2 stream(s) read, at brunnerctf-2026-global, compfest-2026" in said
+
+
+def test_a_path_that_found_nothing_is_never_reported_as_an_empty_board(tmp_path, capsys):
+    """The inverse silence, and the one a scope introduces: `locate()` steps over a path that is not
+    there, so a query given a typo'd path *and* an event would blame the Board for the empty table.
+    Only what was read before the scope knows which of the two happened."""
+    code, said = answer(eval_tier, [tmp_path / "not-a-directory"], capsys, "--event", "brunnerctf-2026-global")
+
+    assert code == 0
+    assert "no stream found" in said
+    assert "no Run at" not in said
 
 
 def test_two_boards_numbering_one_challenge_keep_their_own_provenance(tmp_path, capsys):

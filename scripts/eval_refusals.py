@@ -124,8 +124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths, event=arguments.event)
-    print(stream.heading(runs, event=arguments.event))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     by_category, by_model, whole = {}, {}, Conduct()
     for run in runs:

@@ -489,7 +489,7 @@ def locate(paths: Sequence[str]) -> list[Path]:
     return found
 
 
-def load(paths: Sequence[str], event: str | None = None) -> list[Run]:
+def load(paths: Sequence[str], *, event: str | None = None) -> list[Run]:
     """Every stream a caller named, read — and only the Runs at one Board where they named one.
 
     Runs that reached no Attempt are included, because a query reporting nothing over a Run that
@@ -501,29 +501,47 @@ def load(paths: Sequence[str], event: str | None = None) -> list[Run]:
     a filename, because none does: a promoted stream is named for its `run_id`. The `run-open` line
     is what a Run cannot be renamed out of.
     """
-    runs = [read(path) for path in locate(paths)]
-    return runs if event is None else [run for run in runs if run.event == event]
+    return scoped([read(path) for path in locate(paths)], event)
+
+
+def scoped(runs: Sequence[Run], event: str | None) -> list[Run]:
+    """The Runs that played one Board, or all of them where no Board was named."""
+    return list(runs) if event is None else [run for run in runs if run.event == event]
 
 
 def events(runs: Sequence[Run]) -> dict[str, int]:
     """Which Boards these Runs played and how many Runs each, in the order they were read."""
     tally: dict[str, int] = {}
     for run in runs:
-        tally[run.event or UNSTATED] = tally.get(run.event or UNSTATED, 0) + 1
+        played = run.event or UNSTATED
+        tally[played] = tally.get(played, 0) + 1
     return tally
 
 
 def asking(description: str) -> argparse.ArgumentParser:
     """The arguments every eval query takes, declared once.
 
-    A flag spelled eight times is a flag that will be spelled seven ways, and `--event` is the one
-    every future reading of these numbers depends on being the same flag
-    (`CODING_STANDARDS.md` §6). A query with more to ask adds its own to what this hands back.
+    A flag spelled eight times is a flag that will be spelled seven ways, and every future reading
+    of these numbers depends on `--event` being the same flag at all eight. A query with more to
+    ask adds its own to what this hands back.
     """
     parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paths", nargs="*", help="streams, or directories of them (default: runs/)")
     parser.add_argument("--event", help="answer over one Board alone, named as its stream states it")
     return parser
+
+
+def answering(arguments: argparse.Namespace) -> tuple[list[Run], str]:
+    """The Runs one query answers over, and the heading that says what they are.
+
+    One call rather than two, because they are one fact: which Runs, and what a reader has to know
+    about them before reading a number off any table below. It also keeps the two apart that a
+    query cannot tell apart once the scope has been applied — a path that found nothing, and a
+    Board that no Run played — since only what was read *before* the scope knows which happened.
+    """
+    read_back = load(arguments.paths)
+    runs = scoped(read_back, arguments.event)
+    return runs, heading(runs, read=read_back, event=arguments.event)
 
 
 def table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> str:
@@ -554,7 +572,7 @@ def counted(tokens: int, unmeasured: int) -> str:
     return f"{tokens}+" if tokens else ""
 
 
-def heading(runs: Sequence[Run], *, event: str | None = None) -> str:
+def heading(runs: Sequence[Run], *, read: Sequence[Run] = (), event: str | None = None) -> str:
     """What was read, said once at the top of every query — including the Runs that carry no bodies,
     since that is the difference between a query answering nothing and a query unable to ask, and
     which Boards the answer spans, since every number below is an aggregate over exactly these Runs.
@@ -563,10 +581,15 @@ def heading(runs: Sequence[Run], *, event: str | None = None) -> str:
     one to others, but only where it says it is one: #105's table was read as the gate Runs' numbers
     because they were the only Runs there, and nothing in the output would have changed when they
     stopped being.
+
+    `read` is everything found before the scope was applied, and it is what tells a mistyped path
+    from a Board nobody played — two findings a scope alone reports identically, and reporting a
+    missed path as an empty Board is the same silence in the other direction.
     """
     if not runs:
-        if event:
-            return f"no Run at {event} — nothing read carried it, and the name is the one a stream states"
+        if event and read:
+            played = ", ".join(events(read))
+            return f"no Run at {event} — {len(read)} stream(s) read, at {played}"
         return "no stream found — name one, or promote a Run into runs/ first"
     return "\n".join(
         [

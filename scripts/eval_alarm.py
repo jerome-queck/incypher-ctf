@@ -58,8 +58,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths, event=arguments.event)
-    print(stream.heading(runs, event=arguments.event))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     attempts = [(run, one) for run in runs for one in run.attempts if one.opened]
     fired = [(run, one) for run, one in attempts if one.cause == CUT_SELF_REPORTED_IMPOSSIBLE]

@@ -49,9 +49,7 @@ def _provenance(runs: Sequence[stream.Run]) -> dict[tuple[str, str], str]:
         for record in run.of(stream.TRIAGE):
             for judged in record.get("tiers") or []:
                 if isinstance(judged, dict):
-                    how[run.run_id, str(judged.get("challenge_id"))] = (
-                        str(judged.get("provenance", "")) or stream.UNSTATED
-                    )
+                    how[run.run_id, str(judged.get("challenge_id"))] = str(judged.get("provenance", "")) or "(unstated)"
     return how
 
 
@@ -67,8 +65,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths, event=arguments.event)
-    print(stream.heading(runs, event=arguments.event))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     attempts = [attempt for run in runs for attempt in run.attempts if attempt.opened]
     if not attempts:

@@ -99,8 +99,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = stream.asking(__doc__)
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths, event=arguments.event)
-    print(stream.heading(runs, event=arguments.event))
+    runs, said = stream.answering(arguments)
+    print(said)
 
     banked = [flag for run in runs for flag in _banked(run)]
     first_half = sum(1 for flag in banked if flag.early)

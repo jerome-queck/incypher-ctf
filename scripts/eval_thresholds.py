@@ -171,8 +171,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cliff", type=_numbers, default=[15, 25, 40], help="step cliffs to replay at")
     arguments = parser.parse_args(argv)
 
-    runs = stream.load(arguments.paths, event=arguments.event)
-    print(stream.heading(runs, event=arguments.event))
+    runs, said = stream.answering(arguments)
+    print(said)
     attempts = [(run, attempt) for run in runs for attempt in run.attempts if attempt.opened]
     if not attempts:
         print("\nno Attempt in these streams — nothing to replay")
