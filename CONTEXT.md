@@ -144,6 +144,14 @@ Flag ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-o
 _Avoid_: host, endpoint, service, box, the challenge (the Challenge is the task; the Target is what
 it exposes)
 
+**Artefact**:
+One file the Board ships with a Challenge — what the recon cascade opens onto, and what the model is
+handed. 22 of 74 BrunnerCTF Challenges ship none at all, so three Challenges in ten are prose and
+nothing else, and prose is then the only input an Attempt has.
+_Avoid_: asset, download, sample, payload. Not *attachment* either — that is the Board's listing of
+a file together with what our fetch made of it, so it exists for files we could not fetch and for
+ones we decided not to; an Artefact is one we hold.
+
 ### How the Solver chooses what to work
 
 **Intake**:
@@ -359,6 +367,16 @@ two Boards mint the same ones and one address would hold two Challenges
 _Avoid_: workspace, scratch, sandbox (the sandbox is the container itself, ADR-0018). Not the Run's
 own record either: that lives under `/state/runs/`, deliberately outside this directory, so the
 model cannot rewrite the file its own stall is judged from.
+
+**Landing**:
+Where an Artefact's copy sits in a Challenge's Working directory — the path the model is told about
+and the one it can open. It carries the Board's own name for the file, except where that name was
+already taken when the Attempt opened: the copy then lands under one minted from its own digest, and
+the Attempt prompt says whose name it is. Overwriting what holds the name is the one thing staging
+may not do — that is the memory the Working directory exists to keep.
+_Avoid_: destination, drop, staged file. Not *our copy* bare — Intake keeps one too, under
+`/state/runs/`, and that one is change detection's evidence rather than anything the model is
+pointed at. Not *Target* either: a Target is an Instance's address, not a file.
 
 **Refusal**:
 The Solver declining to start, before anything is spent — a missing or empty credential, no tracked
