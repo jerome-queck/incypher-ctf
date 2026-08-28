@@ -72,3 +72,33 @@ running `ctfd-chall-manager`. Whether COMPFEST runs one is **unverified at the t
 and is a question for the first authenticated read: check the plugin's asset URL and whether any
 Challenge carries a `dynamic_iac` type. If it does not, this Board closes the same gate clause
 Brunner could not, and v1's gate stays open on the same line.
+
+## Before playing
+
+```bash
+sh scripts/check-rules-drift.sh docs/competitions/compfest-2026.rules.txt
+```
+
+`rules unchanged: <url>` and exit 0 means nothing changed. **Exit 1 is the live page no longer
+matching the snapshot**, and that is two different things: a diff it has just printed, or the
+`From:`/`To:` span gone from the page altogether. The second is drift as much as the first, but
+`--update` cannot take it — the script stops before the block that rewrites the file. Those two
+header lines are the part of the snapshot a human edits, and `--update` never touches them, so a
+moved span is answered by pointing them at the page's new wording. Exit 2 is a check that never got
+to look: the page would not fetch, or the baseline is missing a header. It is never silent on
+success, so **silence means it did not run** — read the exit status rather than taking quiet for
+reassurance.
+
+Run it before the 29 August open and again on the morning of the 30th. Nothing on the page promises
+it is frozen, and this is a 48-hour event, so a mid-event edit is a thing somebody reads once or
+nobody reads at all.
+
+**The AI Policy is inside the snapshotted span** — it sits between "During the competition, each
+team is prohibited from:" and the flag format line, so the division wording and the one-way switch
+land in this diff rather than passing beside it. Read that part of any diff first: it is the clause
+that decides whether we may play at all, and unlike the rest it cannot be answered by changing how
+the Solver behaves.
+
+`bash scripts/setup-board.sh` runs this same check against whichever Board it is pointed at — it
+finds the snapshot through that Board's `.board.json` rather than a list of its own, and it tells
+these outcomes apart on screen — so setup covers the first of those two mornings.
