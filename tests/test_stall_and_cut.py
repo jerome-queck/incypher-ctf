@@ -18,7 +18,7 @@ from solver.record import (
     CUT_SELF_REPORTED_IMPOSSIBLE,
     CUT_STEP_CLIFF,
 )
-from solver.stall import Breaker, Deadline, Thresholds, Watch, normalise, replayable
+from solver.stall import DECLARES_IMPOSSIBLE, Breaker, Deadline, Thresholds, Watch, normalise, replayable
 
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
 
@@ -337,3 +337,58 @@ def test_one_challenge_failing_alone_is_not_the_solver_backing_off():
     breaker.closed("web-1", steps=0)
 
     assert breaker.backoff() == 0.0
+
+
+def test_the_marker_the_prompt_asks_for_is_one_the_matcher_hears():
+    """The binding #143 exists for. The prompt states `DECLARES_IMPOSSIBLE` and this reads it, so a
+    reword that reaches one reaches the other or this fails."""
+    watch = watching()
+
+    assert watch.said(f"{DECLARES_IMPOSSIBLE} the Flag is in a Discord we cannot join.", now=at(2))
+    assert watch.cause(at(2)) == CUT_SELF_REPORTED_IMPOSSIBLE
+
+
+def test_the_declaration_is_a_marker_and_never_a_phrase():
+    """Nothing pinned its shape, so it could be loosened back to a sentence without a test going red
+    — and a sentence is matched inside the model's own reasoning, which is the whole defect.
+
+    A marker is `APPROACH:`'s shape and this asserts it stays one.
+    """
+    assert DECLARES_IMPOSSIBLE.endswith(":")
+    assert DECLARES_IMPOSSIBLE.isupper()
+    assert " " not in DECLARES_IMPOSSIBLE
+
+
+def test_a_model_reasoning_about_the_declaration_has_not_made_one():
+    """The regression the first cut of #143 introduced and this closes.
+
+    `solver/run.py` hands every Claim to `said`, and `solver/codex.py` defines a Claim as the model's
+    message *and its reasoning and its plan*. Naming the words invites the echo, so a substring rule
+    reads a model deciding **not** to declare as a model declaring — and cuts the Attempt on a
+    standing penalty for saying the opposite of what it was read as.
+    """
+    watch = watching()
+
+    for reasoning in (
+        "I need to decide whether this challenge cannot be won before spending more budget.",
+        'Per the instructions I would write "UNWINNABLE:" only if the Flag were behind a login.',
+        "Plan: enumerate the service, then judge whether UNWINNABLE: applies here.",
+        "It is not true that this challenge cannot be won — I have two angles left.",
+    ):
+        assert not watch.said(reasoning, now=NOON), reasoning
+
+    assert watch.cause(NOON) == ""
+
+
+def test_the_wording_that_was_missed_on_a_live_board_still_does_not_cut():
+    """`claims/000054.txt` from `compfest-2026-seg1`, which reasoned correctly that the Challenge was
+    unwinnable — and must still not cut an Attempt, because the matcher is not being loosened. What
+    changed is that the model is now told the sentence, not that near-misses became good enough."""
+    watch = watching()
+
+    assert not watch.said(
+        "The flag is not available through any unauthenticated official/public surface I could "
+        "verify, and producing a guessed flag would violate the board's no-brute-force rule.",
+        now=NOON,
+    )
+    assert watch.cause(NOON) == ""
