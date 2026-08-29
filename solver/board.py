@@ -121,6 +121,16 @@ class Verdict:
         return self.outcome == CORRECT
 
     @property
+    def incorrect(self) -> bool:
+        """Whether the Board read this Flag and said no.
+
+        Narrower than `not correct`, and the difference is the whole point: a Board that was rate
+        limited, paused, or answered something no verdict could be read out of has declined to
+        answer rather than answered, and only an answer says the Solver was wrong.
+        """
+        return self.outcome == INCORRECT
+
+    @property
     def solved(self) -> bool:
         """Whether the Challenge is this team's now — so there is nothing left here to win.
 

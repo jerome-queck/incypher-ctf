@@ -18,11 +18,16 @@ import pytest
 from solver.board import ALREADY_SOLVED, ATTEMPT, CORRECT, INCORRECT, PAUSED, RATE_LIMITED, UNREAD, Board
 from solver.carry import DERIVED
 from solver.flag import (
+    CROWDED,
+    CROWD_LIMIT,
     GUESSED,
+    MARK,
     OBSERVED,
     REPRODUCED,
     STATED,
+    SUBMIT,
     UNVERIFIED,
+    WRONG_CEILING,
     Candidate,
     Flags,
     Pace,
@@ -415,11 +420,30 @@ def test_where_attempts_are_unlimited_a_reproduced_candidate_is_submitted_at_onc
     assert (outcome.solved, outcome.flag) == (True, FLAG)
 
 
-def test_where_attempts_are_unlimited_an_unverified_candidate_is_still_submitted(recorder):
+def test_where_attempts_are_unlimited_an_unverified_candidate_waits_for_the_tail(recorder):
+    """This reverses what an unlimited Board used to do, and the Board it was written for is why.
+
+    Submitting an unverified candidate on the spot was free in slots and was kept for the number it
+    bought — how often a model states a Flag nothing produced. COMPFEST prices the other side of
+    that trade: a wrong Flag is a wrong Flag under a rule it states beside DDoS, so *free to submit*
+    stopped meaning *free to be wrong*. Nothing is dropped — the tail still spends it, and the
+    per-model number still gets counted (#141).
+    """
     wire = Wire(graded(INCORRECT))
     flags = flags_of(recorder, wire)
 
     outcome = spend(flags, flags.candidates(attempt_id=ATTEMPT_ID, said=[FLAG]))
+
+    assert wire.submitted == []
+    assert [candidate.strength for candidate in outcome.held] == [UNVERIFIED]
+
+
+def test_the_tail_still_spends_the_unverified_candidate_it_held(recorder):
+    """The other half of the gate above: held is held *until the tail*, never dropped."""
+    wire = Wire(graded(INCORRECT))
+    flags = flags_of(recorder, wire)
+
+    outcome = spend(flags, flags.candidates(attempt_id=ATTEMPT_ID, said=[FLAG]), last_call=True)
 
     assert wire.submitted == [FLAG]
     assert [answer.candidate.strength for answer in outcome.graded] == [UNVERIFIED]
@@ -451,7 +475,11 @@ def test_the_reserved_last_attempt_is_spent_by_a_reproduced_candidate(recorder):
 
 def test_an_unknown_maximum_is_treated_as_limited(recorder):
     """Every attempt could be the last, so an unreproduced candidate never spends one. A Board that
-    does not say how many attempts we have is not a Board that said we have many."""
+    does not say how many attempts we have is not a Board that said we have many.
+
+    An unknown maximum is not an unlimited one, so the confidence gate does not reach this: the
+    Board's own budget is what refuses the candidate here, exactly as it did before that gate.
+    """
     wire = Wire()
     flags = flags_of(recorder, wire)
 
@@ -535,7 +563,7 @@ def test_a_paused_board_is_neither_a_solve_nor_a_wrong_flag(recorder):
     as a graded Flag would record a Challenge as failed on a verdict about the Board."""
     flags = flags_of(recorder, Wire(graded(PAUSED, "CTF is paused", http=403)))
 
-    outcome = spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert (outcome.solved, outcome.flag) == (False, "")
     assert outcome.graded[0].verdict.outcome == PAUSED
@@ -558,7 +586,7 @@ def test_a_verdict_that_arrived_under_a_non_two_hundred_is_still_the_bodys(recor
     verdict in the body of both."""
     flags = flags_of(recorder, Wire(graded(RATE_LIMITED, "You're submitting flags too fast", http=429)))
 
-    outcome = spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert outcome.graded[0].verdict.outcome == RATE_LIMITED
     assert outcome.solved is False
@@ -568,7 +596,7 @@ def test_a_board_that_graded_nothing_is_never_recorded_as_having_graded_it_wrong
     wire = Wire((502, b"<html>bad gateway</html>", ""))
     flags = flags_of(recorder, wire)
 
-    outcome = spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert outcome.graded[0].verdict.outcome == UNREAD
 
@@ -579,7 +607,7 @@ def test_already_solved_ends_the_challenge_and_says_nothing_about_the_flag(recor
     nothing left to win, and the string that was sent is not the Flag that won it."""
     flags = flags_of(recorder, Wire(graded(ALREADY_SOLVED, "Incorrect but you already solved this")))
 
-    outcome = spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert (outcome.solved, outcome.flag) == (True, "")
     assert outcome.graded[0].verdict.correct is False
@@ -590,7 +618,7 @@ def test_a_late_flag_is_named_rather_than_read_as_a_wrong_one(recorder):
     from a wrong Flag is the message."""
     flags = flags_of(recorder, Wire(graded(INCORRECT, f"Error: {EXPIRED_AT_SUBMIT_SAYS}")))
 
-    outcome = spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert outcome.graded[0].shape == INSTANCE_EXPIRED_AT_SUBMIT
     assert INSTANCE_EXPIRED_AT_SUBMIT in _observation_for(recorder, "flag-submit")
@@ -639,7 +667,7 @@ def test_a_challenge_with_no_instance_terminates_nothing(recorder):
     wire = Wire(graded(CORRECT))
     flags = flags_of(recorder, wire)
 
-    spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert wire.deleted == []
 
@@ -651,7 +679,7 @@ def test_submissions_are_paced_under_the_boards_incorrect_per_minute_limit(recor
     pace = Pace(per_minute=2, wrong=[NOON - dt.timedelta(seconds=30), NOON - dt.timedelta(seconds=10)])
     flags = flags_of(recorder, Wire(graded(INCORRECT)), pace=pace, sleep=waits.append)
 
-    spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert waits == [30.0]
 
@@ -661,7 +689,7 @@ def test_only_a_flag_the_board_graded_wrong_counts_against_the_limiter(recorder)
     pace = Pace(per_minute=1)
     flags = flags_of(recorder, Wire(graded(CORRECT)), pace=pace)
 
-    spend(flags, [Candidate(FLAG, UNVERIFIED)])
+    spend(flags, [Candidate(FLAG, REPRODUCED)])
 
     assert pace.wrong == []
 
@@ -720,6 +748,127 @@ def test_the_replay_runs_in_the_working_directory_under_caps_that_are_parameters
     spend(flags, flags.candidates(attempt_id=ATTEMPT_ID), workdir=WORKDIR)
 
     assert (runner.limits, runner.workdir) == (limits, WORKDIR)
+
+
+def test_the_solvers_own_report_is_not_evidence_when_another_command_prints_it_back(recorder):
+    """The loop that put 51 wrong Flags on a live Board, in one test (#141).
+
+    The Run's stream is on the mount the solving model reads, so a model grepping it for session
+    material gets every earlier `[flag] submit` line back inside *its own* output. That is a real
+    command's Observation in this Attempt, which is where `NEVER_SWEPT` — a rule about the record's
+    `tool` — does not reach. Left alone the sweep harvests the string, the replay re-runs the grep,
+    a file on disk answers identically, and a Flag the Board already rejected arrives `reproduced`.
+    """
+    grep = "rg -n -i 'cookie|session=' /state/runs/run-1/stream.jsonl"
+    stream_line = json.dumps({"seq": 490, "record": "step-end", "command_raw": f"{MARK} submit {FLAG}"})
+    observe(recorder, grep, f"/state/runs/run-1/stream.jsonl:490:{stream_line}\n".encode())
+
+    assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
+
+
+def test_a_flag_a_command_really_produced_survives_beside_the_solvers_own_line(recorder):
+    """The marker rule is a body **line** rule, so an Observation carrying both keeps the real one.
+
+    Otherwise the fix would cost every Flag that happened to be printed in the same output as one of
+    this module's reports — which is the shape of any `cat` over a directory the Solver also wrote.
+    """
+    observe(recorder, "cat findings.txt", f"{MARK} submit {OTHER}\n{FLAG}\n".encode())
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
+
+
+def test_one_command_that_emits_a_crowd_of_flags_authorises_none_of_them(recorder):
+    """A Challenge has exactly one Flag, so a command answering with a dozen read a list of them.
+
+    This is the shape of both leak paths that cost `compfest-2026-seg1` — one `rg` over a cloned
+    repository's example Flags, one over the Run's own record — and the shape every per-candidate
+    rule misses, because each string in the crowd is individually well-evidenced (#141).
+    """
+    crowd = "\n".join(f"zephyr{{example_{number}}}" for number in range(CROWD_LIMIT + 1))
+    observe(recorder, "rg -o 'zephyr\\{[^}]*\\}' /tmp/cloned-repo", crowd.encode())
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert {candidate.strength for candidate in found} == {CROWDED}
+    assert not any(candidate.authorised for candidate in found)
+
+
+def test_a_crowd_is_never_replayed_into_the_strength_reserved_for_the_last_attempt(recorder):
+    """The crowd's real damage was not that it was submitted — it was that re-reading the same file
+    promoted it to `reproduced`. A demoted candidate is not `authorised`, so no replay is spent."""
+    crowd = "\n".join(f"zephyr{{example_{number}}}" for number in range(CROWD_LIMIT + 1))
+    observe(recorder, "cat /tmp/cloned-repo/flags.txt", crowd.encode())
+    runner = Runner((0, crowd.encode()))
+    flags = flags_of(recorder, Wire(), runner=runner)
+
+    outcome = spend(flags, flags.candidates(attempt_id=ATTEMPT_ID))
+
+    assert runner.ran == []
+    assert outcome.graded == ()
+    assert {candidate.strength for candidate in outcome.held} == {CROWDED}
+
+
+def test_a_command_that_emits_one_flag_beside_a_crowd_from_another_still_authorises_it(recorder):
+    """The crowd says the *command* was reading a list, never that a string in it is wrong — so one
+    clean sighting elsewhere is still the Solver's own work finding it."""
+    crowd = "\n".join(f"zephyr{{example_{number}}}" for number in range(CROWD_LIMIT + 1))
+    observe(recorder, "rg -o 'zephyr' /tmp/cloned-repo", crowd.encode())
+    observe(recorder, "python3 solve.py", f"recovered: {FLAG}\n".encode())
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [candidate.text for candidate in found if candidate.authorised] == [FLAG]
+
+
+def nominated(count):
+    """`count` distinct reproduced candidates — a sweep handing `submit` more strings than any one
+    Attempt should spend, which is the only shape the ceiling has anything to say about."""
+    return [Candidate(f"zephyr{{candidate_{number}}}", REPRODUCED) for number in range(count)]
+
+
+def test_an_attempt_stops_submitting_once_the_board_has_said_no_the_ceiling_many_times(recorder):
+    """An unlimited Board has no budget rule, so nothing else here bounds a wrong-Flag loop.
+
+    Brunner and COMPFEST both report `max_attempts` 0, and on COMPFEST a single Attempt spent 36
+    submissions on one Challenge's candidates. The Board names that loop beside DDoS, so the bound
+    is the Solver's rather than the Board's to enforce (#141).
+    """
+    wrong = [Candidate(f"zephyr{{candidate_{number}}}", REPRODUCED) for number in range(WRONG_CEILING + 4)]
+    wire = Wire(graded(INCORRECT))
+
+    outcome = spend(flags_of(recorder, wire), wrong)
+
+    assert len(wire.submitted) == WRONG_CEILING
+    assert len(outcome.held) == len(wrong) - WRONG_CEILING
+    assert "ceiling" in _observation_for(recorder, SUBMIT)
+
+
+def test_the_ceiling_counts_only_gradings_and_never_the_board_declining_to_answer(recorder):
+    """`ratelimited` is the Board refusing to read the Flag, not the Board saying it is wrong.
+
+    Spending the ceiling on one would let a bad minute close a Challenge the Solver had never
+    actually answered wrongly — and pacing already exists to ride that out.
+    """
+    candidates = [Candidate(f"zephyr{{candidate_{number}}}", REPRODUCED) for number in range(WRONG_CEILING + 1)]
+    wire = Wire(*([graded(RATE_LIMITED)] * WRONG_CEILING), graded(CORRECT))
+
+    outcome = spend(flags_of(recorder, wire), candidates)
+
+    assert outcome.solved
+    assert len(wire.submitted) == WRONG_CEILING + 1
+
+
+def test_a_flag_that_grades_before_the_ceiling_still_ends_the_attempt(recorder):
+    """The bound costs a solve only where the Solver was wrong that many times first."""
+    candidates = [Candidate(f"zephyr{{candidate_{number}}}", REPRODUCED) for number in range(WRONG_CEILING - 1)]
+    wire = Wire(*([graded(INCORRECT)] * (WRONG_CEILING - 2)), graded(CORRECT))
+
+    outcome = spend(flags_of(recorder, wire), candidates)
+
+    assert outcome.solved
+    assert len(wire.submitted) == WRONG_CEILING - 1
 
 
 def _observation_for(recorder, tool: str) -> str:
