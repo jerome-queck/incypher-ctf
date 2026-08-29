@@ -19,6 +19,12 @@ nomination rather than protect anything.
 The reports rule is a body rule *and* a record rule, and it took a live Board to find out why —
 `NOT_EVIDENCE` carries that story.
 
+A fifth is skipped on the strength of the **command** rather than anything in its output: one that
+reads the Run's own record. v1 does not take that record out of the model's reach and
+[ADR-0028](../docs/adr/0028-the-runs-record-stays-reachable-and-the-evidence-is-refused-instead.md)
+measures why each boundary costs more than it buys, so the access stays and `_reads_the_record`
+refuses the evidence instead.
+
 A fourth is skipped, and it is the one the Claim/Observation pair could not name
 ([ADR-0019](../docs/adr/0019-the-boards-statement-of-a-challenge-is-not-evidence.md)): a Challenge's
 **description** and the flag-scan over it are recorded as Observations because the recon cascade
@@ -416,6 +422,7 @@ class Flags:
         by_the_board: set[str] = set()
         swept = 0
         stated = 0
+        recited = 0
         for command, ref, source, tool in _bodies_of(self._recorder.stream_path, attempt_id):
             # An allowlist rather than a refusal of `SOURCE_BOARD`, so a source nobody has
             # thought of yet arrives non-authorising (ADR-0019).
@@ -424,6 +431,13 @@ class Flags:
                 # Read rather than skipped, because *which* strings the Board stated is what tells a
                 # model repeating one from a model that found it (ADR-0021).
                 by_the_board.update(_in_body(self._recorder.run_dir / ref, matchers))
+                continue
+            # A command that went to the Run's own record brings back what the Solver already
+            # submitted, never what this Challenge's Flag is. Named on the **command** because that
+            # is what survives the shape the body rule cannot see: `rg -o` emits bare matches with
+            # no `MARK` on the line, and still has to name the path it reads (ADR-0028).
+            if _reads_the_record(command, self._recorder.run_dir.parent):
+                recited += 1
                 continue
             swept += 1
             # Distinct and in order, because *how many different Flags this one command emitted* is
@@ -450,7 +464,8 @@ class Flags:
             SWEEP,
             f"{MARK} sweep {shapes}",
             (
-                f"{MARK} swept {swept} observation(s), passed over {stated} the Board stated, and no claim"
+                f"{MARK} swept {swept} observation(s), passed over {stated} the Board stated, "
+                f"{recited} that read the Run's own record, and no claim"
                 + "".join(f"\n{MARK} {one}" for one in broken)
                 + f"\n{_listed(ordered)}"
             ).encode(),
@@ -590,6 +605,25 @@ class Flags:
             tool=tool,
         )
         return step.end(exit_code=0 if ok else 1, output=output, usage=NO_MODEL).shown
+
+
+def _reads_the_record(command: str, records: Path) -> bool:
+    """Whether this command went to the Run's own record for its output.
+
+    The Solver's record sits on the same mount the model works in, and v1 does not take it out of
+    reach — `/state` is virtiofs, which does not enforce file modes, and the namespace that would
+    mask it needs a capability worth less than it costs (ADR-0028). So the access stays and the
+    *evidence* is refused instead.
+
+    Every earlier Attempt's submissions are in there, which is the one thing a Flag sweep must never
+    read: it is the Solver quoting itself back. Matched on the command rather than in the body
+    because a command has to name the path it reads however it formats what it found — which is the
+    case `MARK` on a body line misses, since `rg -o` prints the matches and nothing else.
+
+    Any Run's record, not just this one: `compfest-2026-seg1` read `ctfd-probe`'s stream beside its
+    own, and a Flag from a Run we finished last week is no more this Challenge's answer.
+    """
+    return str(records) in command
 
 
 def _crowded(emitted: Sequence[str]) -> bool:

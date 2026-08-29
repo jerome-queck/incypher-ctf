@@ -876,3 +876,34 @@ def _observation_for(recorder, tool: str) -> str:
     ends = (record for record in records(recorder) if record["record"] == "step-end")
     refs = [record["observation_ref"] for record in ends if record.get("tool") == tool]
     return "\n".join((recorder.run_dir / ref).read_text() for ref in refs)
+
+
+def test_a_command_that_reads_the_runs_own_record_authorises_nothing(recorder):
+    """The record is on a mount the model can read and nothing in v1 stops it (ADR-0028), so the
+    Solver refuses the *evidence* instead of the access.
+
+    Named on the **command** rather than matched in the output, which is what survives the shape the
+    marker rule could not: `rg -o` emits the bare matches with no marker on the line, and it still
+    has to name the path it is reading (#144).
+    """
+    observe(recorder, f"rg -o 'zephyr' {recorder.run_dir.parent}/some-earlier-run/stream.jsonl", FLAG.encode())
+
+    assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
+
+
+def test_a_single_flag_read_out_of_the_record_is_refused_where_crowding_would_not_reach(recorder):
+    """Crowding is a threshold and this is not: one Flag lifted from the record is under any crowd
+    limit, and is exactly as much not-the-Solver's-work as twenty-seven are."""
+    observe(recorder, f"cat {recorder.run_dir}/stream.jsonl", FLAG.encode())
+
+    assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
+
+
+def test_a_command_that_merely_works_in_the_challenge_directory_is_untouched(recorder):
+    """The rule names the record and nothing else — a Flag the Solver's own work produced is still
+    the point of the module."""
+    observe(recorder, "python3 solve.py /state/work/an-event/42/cipher.bin", FLAG.encode())
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
