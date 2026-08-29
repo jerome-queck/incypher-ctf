@@ -307,18 +307,19 @@ record keeps both in one channel and tells them apart by `source`
 
 **Candidate**:
 A string that might be a Challenge's Flag, and **how strongly it is known** — which is the whole of
-what decides whether it may spend a submission slot. Six strengths, and the ordering between them
+what decides whether it may spend a submission slot. Seven strengths, and the ordering between them
 is the policy: **reproduced** (the exact command that emitted it was replayed and the same string
 came back), **observed** (a real command's output carried it and the replay did not confirm it),
 **unverified** (no Observation carries it — the model said it and nothing else did), **guessed**
 (an Observation did carry it, and then the Instance that minted it expired underneath it),
-**stated** (the Board's own prose carried it and the model repeated it — the only strength there is
-evidence *against*, and so the only one held back until the reserved tail on every Board at all,
-ADR-0021), and **crowded** (one command emitted it alongside more Flags than a Challenge has, so
-that command was reading a list rather than solving — ADR-0027). A candidate is not a Flag until the
-Board says so; keeping the two words apart is what stops "we found the Flag" from meaning six
-different things.
-_Avoid_: found flag, the flag (before a verdict), guess — *guessed* is one of the six strengths
+**stated** (the Board's own prose carried it and the model repeated it — evidence *against*, and so
+held back until the reserved tail on every Board at all, ADR-0021), **crowded** (one command emitted
+it alongside more Flags than a Challenge has, so that command was reading a list rather than solving
+— ADR-0027), and **template** (the string is a Flag's *shape* rather than a Flag — a regular
+expression or a placeholder token like `FAKE_FLAG` — so it is held whether or not this is the tail,
+ADR-0029). A candidate is not a Flag until the Board says so; keeping the two words apart is what
+stops "we found the Flag" from meaning seven different things.
+_Avoid_: found flag, the flag (before a verdict), guess — *guessed* is one of the seven strengths
 rather than the word for all of them
 
 **Checkpoint**:

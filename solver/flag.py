@@ -33,7 +33,7 @@ descriptions our Runs persisted end in a flag-format section, and **all four spe
 out** — so wherever that section exists the sweep finds a decoy, every time. The record says which
 Steps those are — `source` — and this module reads it.
 
-How strongly a candidate is known is the whole of the policy below, and there are six answers:
+How strongly a candidate is known is the whole of the policy below, and there are seven answers:
 
 - **reproduced** — the exact command that emitted it was replayed once and the same string came
   back. This is the only strength that may spend a Board's last attempt.
@@ -48,6 +48,9 @@ How strongly a candidate is known is the whole of the policy below, and there ar
 - **crowded** — one command emitted it alongside more Flags than a Challenge has. A Challenge has
   one, so the command was reading a list rather than solving, and the whole of what it emitted is
   demoted together (`_crowded`).
+- **template** — the string is a Flag's shape rather than a Flag, a regular expression or a
+  placeholder token, so no provenance can make it right. Held whether or not this is the reserved
+  tail (`_describes`, ADR-0029).
 
 Two submission branches follow, and only the first has ever been exercised on a real Board:
 
@@ -73,7 +76,7 @@ import time
 import unicodedata
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from solver.board import Board, Verdict
 from solver.carry import DERIVED
@@ -100,10 +103,19 @@ STATED = "stated"
 # One command emitted this alongside more Flags than a Challenge has. A Challenge has exactly one,
 # so N of them from one command are N-1 wrong at best and the command was reading something that is
 # not this Challenge's answer — a repository the model cloned, the Run's own record, a wordlist.
-# Last of the six because `stated` is at least one string the Board really did print, where this is
+# Second-last because `stated` is at least one string the Board really did print, where this is
 # a set that has disproved itself.
 CROWDED = "crowded"
-STRENGTHS = (REPRODUCED, OBSERVED, UNVERIFIED, GUESSED, STATED, CROWDED)
+# The candidate is not a value at all: it is a Flag's *shape*, a regular expression or a placeholder
+# token, so no evidence about where it was seen can make it right. `compfest-2026-seg2` submitted
+# both `COMPFEST18{[A-z0-9_-]+}` — CTFd's submission-box `placeholder=` attribute, swept off a
+# challenge-detail page — and `COMPFEST18{FAKE_FLAG}` — the string a handout ships where the Flag
+# will be. Both were `observed` off a genuine command, which is why every other rule here waved
+# them through: the provenance was real and the string still described a Flag rather than being one
+# (#150). Weakest of the seven, and the only one refused at `last_call` too — a template is wrong
+# whenever it is sent, where every other held candidate is merely unproven.
+TEMPLATE = "template"
+STRENGTHS = (REPRODUCED, OBSERVED, UNVERIFIED, GUESSED, STATED, CROWDED, TEMPLATE)
 
 # How many distinct Flags one command may emit before everything it emitted is `crowded`.
 #
@@ -126,6 +138,25 @@ CROWD_LIMIT = 3
 # Nothing is dropped — the tail still spends all three, at the one moment holding them costs nobody
 # anything, which is what keeps this a confidence gate rather than the sandbagging Brunner bans.
 NEEDS_THE_SOLVERS_OWN_WORK = (UNVERIFIED, GUESSED, CROWDED)
+
+# Words a handout puts where the Flag will go. A candidate whose wrapped body is nothing but these,
+# joined by separators, is a placeholder rather than a value — `FAKE_FLAG`, `your_flag_here`,
+# `REDACTED`. A heuristic and a parameter like every threshold here: a real Flag themed on one of
+# these words (`…{fake_solved_it}`) keeps its other segments, so it is the *only* content being one
+# of these that trips the rule, never a mention of one.
+PLACEHOLDERS = frozenset(
+    {
+        "flag", "fake", "example", "placeholder", "redacted", "sample", "changeme",
+        "dummy", "todo", "your", "here", "paste", "insert", "xxx", "xxxx", "test",
+    }
+)  # fmt: skip
+
+# The regex fragments a literal Flag does not carry. Character-class brackets and escapes are the
+# reliable half — a base64 Flag holds `+` `/` `=` but never `[` `]` `\` — so a bare quantifier is
+# not enough on its own and only a quantifier *bound to* a class or group counts. `[A-z0-9_-]+`
+# trips on the brackets; `zephyr{a+b=c}` trips on none of them.
+PATTERN_METACHARACTERS = ("[", "]", "\\")
+PATTERN_QUANTIFIERS = (".*", ".+", "]+", "]*", ")+", ")*", r"\d", r"\w", r"\s")
 
 # The three tools this module spends Steps on. The first and the last are the Solver talking *about*
 # candidates rather than a command producing one, so the sweep never reads their bodies; the replay
@@ -154,6 +185,12 @@ NOT_EVIDENCE = (DERIVED.encode(), MARK.encode())
 # better re-approached than exhausted. A correct Flag before the ceiling still grades and still ends
 # the Attempt, so the bound costs a solve only where the Solver was wrong that many times first.
 WRONG_CEILING = 5
+
+# An absolute path as a command spells one, ending where the shell would end it. Quotes are
+# terminators rather than content because a quoted path is still the path — `"/state/runs"` names
+# the same directory as `/state/runs` — and the separators are what keep `rg X /state | head` from
+# reading as one long path token.
+PATH = re.compile(r"/[^\s'\"$;|&()<>]*")
 
 # Read in blocks so an Observation nothing bounded — `aggregated_output` from the vendor's stream is
 # whatever a command wrote — is never held whole in memory. A partial line is carried across the
@@ -447,9 +484,12 @@ class Flags:
             # its output was counted once at the command that first emitted it, and counting it
             # again would let one candidate's confirmation nominate a crowd. Where that first
             # command really was reading a list, the demotion has already happened there.
-            strength = CROWDED if tool != REPLAY and _crowded(emitted) else OBSERVED
+            crowd = CROWDED if tool != REPLAY and _crowded(emitted) else OBSERVED
             for text in emitted:
-                candidate = Candidate(text, strength, command=command, ref=ref)
+                # A template outranks even a crowd's demotion downward: `_describes` reads the
+                # string alone, so a candidate that is a Flag's shape is one wherever it was seen
+                # and no clean second sighting can promote it.
+                candidate = Candidate(text, TEMPLATE if _describes(text) else crowd, command=command, ref=ref)
                 # A later command that emitted it alone outranks an earlier one that emitted it in a
                 # crowd: the crowd says the *command* was reading a list, never that the string is
                 # wrong, so one clean sighting is still the Solver's own work finding it.
@@ -458,7 +498,8 @@ class Flags:
         for text in (match for prose in said for match in _matches(prose.encode(), matchers)):
             # A string a command produced is already here and outranks both — the Board having also
             # stated it says nothing about whether the Solver later found it.
-            found.setdefault(text, Candidate(text, STATED if text in by_the_board else UNVERIFIED))
+            nominated = TEMPLATE if _describes(text) else (STATED if text in by_the_board else UNVERIFIED)
+            found.setdefault(text, Candidate(text, nominated))
         ordered = tuple(sorted(found.values(), key=lambda candidate: candidate.rank))
         self._record(
             SWEEP,
@@ -622,8 +663,29 @@ def _reads_the_record(command: str, records: Path) -> bool:
 
     Any Run's record, not just this one: `compfest-2026-seg1` read `ctfd-probe`'s stream beside its
     own, and a Flag from a Run we finished last week is no more this Challenge's answer.
+
+    **In either direction along the branch**, which is #150 and the first thing this rule met after
+    it landed. It was a substring test, so it caught a command naming the record or something under
+    it and missed `rg -n "Phantom Ledger|PhantomVault" /state` — an *ancestor*, which reads every
+    byte of the record and names none of it. That command brought back the previous segment's copy
+    of a challenge-detail page and the sweep took CTFd's submission-box placeholder off it as a
+    candidate. So the question is whether the two paths lie on one branch, and `/` is a legitimate
+    answer to it: a Flag sweep over `grep -r … /` is reading this record along with everything else.
     """
-    return str(records) in command
+    return any(_overlaps(found.group(), records) for found in PATH.finditer(command))
+
+
+def _overlaps(named: str, records: Path) -> bool:
+    """Whether one of the two paths contains the other, so reading one can read the record.
+
+    Lexical, over the string the command spelled — nothing is resolved against the filesystem. A
+    resolve would follow symlinks and answer about the machine the sweep runs on rather than about
+    the command, and the sweep also runs offline over a stored stream (ADR-0009), where the paths a
+    finished Run named no longer exist.
+    """
+    where = PurePosixPath(named.rstrip("/") or "/")
+    root = PurePosixPath(records)
+    return where == root or where in root.parents or root in where.parents
 
 
 def _crowded(emitted: Sequence[str]) -> bool:
@@ -647,6 +709,33 @@ def _crowded(emitted: Sequence[str]) -> bool:
     how junk reached the strength this module reserves for a Board's last attempt — never runs.
     """
     return len(emitted) > CROWD_LIMIT
+
+
+def _describes(text: str) -> bool:
+    """Whether a candidate is a Flag's *shape* rather than a Flag — a pattern or a placeholder.
+
+    Two heuristics, and each is one shape a live `compfest-2026-seg2` submission was. Both read the
+    string alone, because that is the whole point: `COMPFEST18{[A-z0-9_-]+}` and
+    `COMPFEST18{FAKE_FLAG}` were seen in genuine command output — the sweep read the provenance
+    right — so no rule that turns on *where* a candidate came from could ever catch them (#150).
+
+    A **pattern** carries the regex fragments a literal Flag does not: a character class in
+    brackets, an escape, or a quantifier bound to a class or group. Deliberately not a bare `+` or
+    `*`, which a base64 Flag holds legitimately — `zephyr{a+b/c=}` is a value, `[A-z0-9_-]+` is not.
+
+    A **placeholder** is a wrapped body that is nothing but the words a handout puts where the Flag
+    will go, joined by separators. The body is taken from inside the outermost braces so the
+    wrapper's own name is not one of the words weighed; a Board that wraps some other way is read by
+    the pattern half alone. `FAKE_FLAG` is `{fake, flag}`, both placeholders; a real Flag themed on
+    the word — `{fake_solved_it}` — keeps `solved` and `it` and is left alone.
+    """
+    if ("[" in text and "]" in text) or "\\" in text:
+        return True
+    if any(fragment in text for fragment in PATTERN_QUANTIFIERS):
+        return True
+    body = text[text.find("{") + 1 : text.rfind("}")] if "{" in text and "}" in text else ""
+    words = [word for word in re.split(r"[^0-9A-Za-z]+", body.lower()) if word]
+    return bool(words) and all(word in PLACEHOLDERS for word in words)
 
 
 def _refuses(candidate: Candidate, slots: Slots, spent_here: int, wrong_here: int, *, last_call: bool) -> str:
@@ -675,7 +764,19 @@ def _refuses(candidate: Candidate, slots: Slots, spent_here: int, wrong_here: in
         times is guessing whatever the next candidate's strength says. The tail argument does not rescue
         it: a slot nothing else will spend is still a wrong Flag on a Board that prohibits the loop, and
         the candidates left at that point come from a set already shown to be bad (#141).
+
+        A `template` is refused above all of it, and is the one refusal `last_call` shares with the
+        ceiling. Every other rule here asks whether *now* is the moment to spend a slot on a real
+        string; a template is not a string to spend a slot on at any moment, because it describes a
+        Flag rather than being one. The tail argument that rescues a held candidate — a slot nothing
+        else will use — does not apply, since the slot would be spent being wrong on a Board that
+        prices it (#150).
     """
+    if candidate.strength == TEMPLATE:
+        return (
+            "this candidate is a Flag's shape rather than a Flag — a pattern or a placeholder the "
+            "Board or a handout showed — so it is held whether or not this is the reserved tail"
+        )
     if not last_call and (wrong := confusables(candidate.text)):
         return f"the confusable-character guard held it back — {'; '.join(wrong)}"
     if not last_call and candidate.strength == STATED:

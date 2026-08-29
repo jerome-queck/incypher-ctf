@@ -26,6 +26,7 @@ from solver.flag import (
     REPRODUCED,
     STATED,
     SUBMIT,
+    TEMPLATE,
     UNVERIFIED,
     WRONG_CEILING,
     Candidate,
@@ -907,3 +908,75 @@ def test_a_command_that_merely_works_in_the_challenge_directory_is_untouched(rec
     found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
 
     assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
+
+
+def test_a_command_that_names_an_ancestor_of_the_record_is_refused(recorder):
+    """The substring rule missed `rg … /state`, which reads every byte of the record and names none
+    of it — an *ancestor* of the runs directory, not the directory itself. It was the first thing
+    the rule met live: `compfest-2026-seg2` swept CTFd's `placeholder=` off a page a `/state`-wide
+    `rg` had dredged up from the previous segment's record (#150).
+    """
+    grandparent = recorder.run_dir.parent.parent
+
+    observe(recorder, f"rg -n 'Phantom Ledger' {grandparent}", FLAG.encode())
+
+    assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
+
+
+def test_a_root_wide_sweep_reads_the_record_and_is_refused(recorder):
+    """`grep -r … /` reads the record along with everything else, and `/` contains it — so the
+    overlap test answers about the branch the two share, in either direction."""
+    observe(recorder, "grep -rho 'zephyr{[^}]*}' / 2>/dev/null", FLAG.encode())
+
+    assert flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID) == ()
+
+
+def test_a_path_that_merely_shares_a_prefix_of_the_records_string_is_not_the_record(recorder):
+    """The overlap is a branch relationship and not a string one: `/state/runs-elsewhere` starts
+    with the record's path as text but is a sibling directory, and reading it reads no record."""
+    sibling = f"{recorder.run_dir.parent}-elsewhere/data.txt"
+    observe(recorder, f"cat {sibling}", FLAG.encode())
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [candidate.text for candidate in found] == [FLAG]
+
+
+def test_a_candidate_that_is_a_pattern_is_held_at_every_moment_including_the_tail(recorder):
+    """`COMPFEST18{[A-z0-9_-]+}` is CTFd's submission-box placeholder, and it was `observed` off a
+    genuine command — so every rule that turns on provenance waved it through. It describes a Flag
+    rather than being one, so it is refused whether or not this is the reserved tail (#150).
+    """
+    pattern = "zephyr{[a-z0-9_]+}"
+    observe(recorder, "rg -o 'zephyr\\{.*\\}' challenge.html", pattern.encode())
+    flags = flags_of(recorder, Wire(graded(CORRECT)))
+    found = flags.candidates(attempt_id=ATTEMPT_ID)
+
+    assert [candidate.strength for candidate in found] == [TEMPLATE]
+
+    outcome = spend(flags, found, last_call=True)
+
+    assert outcome.graded == ()
+    assert [candidate.text for candidate in outcome.held] == [pattern]
+
+
+def test_a_candidate_that_is_a_placeholder_token_is_held(recorder):
+    """`COMPFEST18{FAKE_FLAG}` came off `strings` over the handout, exactly as the Board shipped it —
+    a value-shaped string that is still not a value (#150)."""
+    observe(recorder, "strings -n 6 public.zip", b"zephyr{FAKE_FLAG}\n")
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [candidate.strength for candidate in found] == [TEMPLATE]
+    assert not any(candidate.authorised for candidate in found)
+
+
+def test_a_real_flag_themed_on_a_placeholder_word_is_left_alone(recorder):
+    """The rule fires only where the body is *nothing but* placeholder words — a Flag that merely
+    contains one keeps its other segments and stays the Solver's own work."""
+    themed = "zephyr{fake_but_real_solve}"
+    observe(recorder, "python3 solve.py", f"recovered {themed}\n".encode())
+
+    found = flags_of(recorder, Wire()).candidates(attempt_id=ATTEMPT_ID)
+
+    assert [(candidate.text, candidate.strength) for candidate in found] == [(themed, OBSERVED)]
