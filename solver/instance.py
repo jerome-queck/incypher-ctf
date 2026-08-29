@@ -47,6 +47,18 @@ MARK = "[instance]"
 # — treated as static and attempted with no deploy at all.
 INSTANCED_TYPE = "dynamic_iac"
 
+# Isolated Challenges whose Instances a **different plugin** serves. `container` is the CTFd
+# containers plugin, measured on COMPFEST on 29 August 2026: `/plugins/containers/`, with `image`,
+# `internal_port`, `timeout_minutes` and its own deploy endpoint, and nothing this module can call.
+#
+# Named rather than inferred from the absence of chall-manager's fields, because the two silences
+# are opposite: a `dynamic` Challenge carrying none of them is static and workable, and a
+# `container` carrying none of them has a target that does not exist until somebody deploys it —
+# its `connection_info` says so outright and its Flag is generated per Instance, so there is
+# nothing to reach and nothing to submit. A set rather than a second constant: a third plugin at a
+# third venue is a line here (#138 is where the seam that would replace this gets decided).
+INSTANCED_ELSEWHERE = frozenset({"container"})
+
 # The closed vocabulary. Every failure on this path is one of these ten, so nothing reaches the
 # orchestrator as an anonymous tool error (ADR-0007). Read them as instructions rather than as
 # labels: the first three are *never retry* / *retry after terminating* / *retry in a moment*.
@@ -130,6 +142,12 @@ class Terms:
     @property
     def instanced(self) -> bool:
         return self.challenge_type == INSTANCED_TYPE
+
+    @property
+    def elsewhere(self) -> bool:
+        """An Isolated Challenge some other plugin deploys, so we cannot — and, unlike a static
+        Challenge, there is no target to work without one."""
+        return self.challenge_type in INSTANCED_ELSEWHERE
 
     @property
     def renewable(self) -> bool:

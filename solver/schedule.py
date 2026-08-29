@@ -558,11 +558,19 @@ def render(ranked: Sequence[Ranked]) -> str:
 
 
 def _undeployable(sighting: Sighting) -> bool:
-    """A `shared` Isolated Challenge is undeployable by us entirely — POST, PATCH *and* DELETE all
-    fail, and only an admin ever deploys one (`solver/instance.py`). It is the one thing besides
-    being solved that takes a Challenge out of the eligible set, and it is a fact about the Board
-    rather than a judgement about the Challenge."""
-    return sighting.terms.instanced and sighting.terms.shared
+    """Undeployable by us, in the two shapes that happen — and both are facts about the Board rather
+    than judgements about the Challenge, which is why they sit beside "already solved" and nowhere
+    near a penalty.
+
+    A `shared` Isolated Challenge: POST, PATCH *and* DELETE all fail, and only an admin ever deploys
+    one. And an Isolated Challenge some **other** plugin serves, which we cannot deploy at all
+    (`solver/instance.py`). Neither leaves a target to work: an Instance that does not exist has no
+    address, and where the Board mints a Flag per Instance there is nothing to submit either.
+
+    Excluded rather than demoted, for the reason `shared` is: a demotion returns a Challenge to the
+    front the moment the Board runs dry, and spends an Attempt on something no Attempt could have
+    won."""
+    return (sighting.terms.instanced and sighting.terms.shared) or sighting.terms.elsewhere
 
 
 def _scaled(values: Mapping[int | str, float]) -> dict[int | str, float]:
