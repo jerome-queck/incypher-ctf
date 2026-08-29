@@ -9,7 +9,9 @@ mid-Attempt that it appears stuck is close to an ideal prompt for inducing *impo
 `UNWINNABLE` is the near miss and stays on the right side of that line. It is a standing rule about
 what makes a *Challenge* unwinnable, stated once at the open like `DERIVATION` — not a reading of
 how this Attempt is going, which is the thing ADR-0005 keeps out. It is here because the matcher it
-feeds was listening for words the model had never been asked to use (#143).
+feeds was listening for words the model had never been asked to use (#143), and most of it is
+exclusions because the first wording of it asked about the workspace and was answered truthfully
+about the workspace, on two Challenges the rest of the Board had solved (#149).
 
 The five things that cross an Attempt boundary are `solver/carry.py`'s and are not re-listed here;
 this module writes the header they hang under.
@@ -47,27 +49,46 @@ DERIVATION = (
 
 NO_PROHIBITIONS = "— this Board's rules name none beyond ordinary competition conduct"
 
-# #143's contract, and the one place in this prompt that touches the stall call at all.
+# #143's contract and #149's correction, and the one place in this prompt that touches the stall
+# call at all.
 #
 # It reads as a rule about the **Challenge** and never as a question about the Attempt, which is
 # what keeps ADR-0005 intact. What that record forbids is telling a model mid-Attempt that it
 # appears stuck — a running commentary on how the turn is going, and close to an ideal prompt for
-# inducing *impossible*. This is stated once when the Attempt opens, alongside `DERIVATION`, and
-# says nothing about progress: it names the two states in which no amount of further work is the
-# answer, and neither is *hard* or *slow*.
+# inducing the state. This is stated once when the Attempt opens, alongside `DERIVATION`, and says
+# nothing about progress.
 #
 # The sentence is `solver/stall.py`'s so the matcher and the prompt cannot drift. Saying what it
 # costs matters as much as saying the words: a model that thinks declaring this forfeits the Run
 # will keep grinding, and a model that thinks it is free will reach for it the moment a Challenge
 # is difficult.
+#
+# **The second paragraph is the whole of #149** and is longer than the trigger it qualifies, which
+# is the right proportion. `compfest-2026-seg2` parked two Challenges other teams had solved 58 and
+# 31 times, and both Claims gave the same reason: *no account credentials were provided in this
+# environment*, *this workspace lacks its credentials*. Both were true, and neither was about the
+# Challenge. The first cut of this rule offered *"a credential or an account we do not hold"* as a
+# trigger and the model read *we* as itself — correctly, because ADR-0014 denies it the Board
+# credential on purpose. A **designed** boundary read as a closed route, through the one door out
+# of an Attempt that only ever shuts. So the exclusions are named one at a time, each of them a
+# thing a live Attempt actually stopped on, rather than left to be inferred from the trigger.
 UNWINNABLE = (
-    f"If this Challenge cannot be won from here — the Flag is behind a credential or an account we "
-    f"do not hold, or the only route to it is one this Board's rules forbid — then write a line "
-    f"beginning exactly `{DECLARES_IMPOSSIBLE}` followed by which of those it is, and stop. It parks "
-    f"this Challenge and spends the rest of the Run on the others, which is the right trade when it "
-    f"is true and an expensive one when it is not. Only a line that starts with `{DECLARES_IMPOSSIBLE}` "
-    f"counts, so you can reason about whether to write one without writing it. Difficulty is not "
-    f"this: a Challenge you have not cracked yet is one to keep working."
+    f"There is one state worth declaring, and it is a fact about this **Challenge** rather than "
+    f"about your workspace: no route to the Flag exists for anyone playing this Board — every team "
+    f"meets the same wall — or the only route to it is one this Board's rules forbid. If that is "
+    f"true, write a line beginning exactly `{DECLARES_IMPOSSIBLE}` followed by which of those it "
+    f"is, and stop.\n"
+    f"Almost nothing is this, and what *you* do not hold is never the evidence. The Solver that "
+    f"opened this Attempt holds this Board's credential and submits the Flag on your behalf, so you "
+    f"are not expected to reach the Board, to log in, or to hold an account anywhere: that boundary "
+    f"is deliberate and it is not the Challenge being closed. Neither is a tool the image does not "
+    f"ship, a host that will not answer, a key or an address or an endpoint you have not found yet, "
+    f"or a cryptographic step you have not broken — those are all work left to do. Nor is "
+    f"difficulty: a Challenge you have not cracked yet is one to keep working.\n"
+    f"Declaring it parks this Challenge and spends the rest of the Run on the others, which is the "
+    f"right trade when it is true and an expensive one when it is not. Only a line that starts with "
+    f"`{DECLARES_IMPOSSIBLE}` counts, so you can reason about whether to write one without writing "
+    f"it."
 )
 
 # What the model is told where staging could not use the Board's own name for a file (#119).
