@@ -17,6 +17,7 @@ from solver.instance import Lease, Terms
 from solver.intake import Attachment, Sighting
 from solver.profile import Rules
 from solver.prompt import APPROACH, DERIVATION, NAME_TAKEN, compose
+from solver.stall import DECLARES_IMPOSSIBLE
 from solver.staging import Staged
 
 RULES = Rules(
@@ -219,3 +220,26 @@ def test_the_prompt_is_composed_from_what_it_is_handed_and_never_from_disk():
     text = prompt_for(staged=(Staged("door.zip", 512, absent),))
 
     assert str(absent) in text
+
+
+def test_the_model_is_told_the_sentence_that_declares_a_challenge_unwinnable():
+    """The matcher waited for words nobody asked for, and on the first live Challenge that deserved
+    it the model said the thing in its own words and was not heard
+    ([#143](https://github.com/jerome-queck/incypher-ctf/issues/143)).
+
+    `DECLARES_IMPOSSIBLE` is `solver/stall.py`'s, imported rather than restated, so the prompt and
+    the matcher cannot drift into two different sentences.
+    """
+    assert DECLARES_IMPOSSIBLE in prompt_for()
+
+
+def test_the_unwinnable_contract_is_about_the_challenge_and_never_about_the_attempt():
+    """ADR-0005 keeps the stall call away from the solving model because telling one that it appears
+    stuck is close to an ideal prompt for inducing *impossible*. This says what makes a Challenge
+    unwinnable — no route that does not break the rules — and never asks how the turn is going."""
+    said = prompt_for().lower()
+
+    assert "a credential or an account we do not hold" in said
+    assert "a challenge you have not cracked yet is one to keep working" in said
+    for inducing in ("stuck", "give up", "how you are doing", "running out"):
+        assert inducing not in said

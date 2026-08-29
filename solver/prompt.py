@@ -6,6 +6,11 @@ submission. Nothing here tells the model how it is doing: ADR-0005 puts the stal
 solving model on the measurement that a model's own progress report is unreliable, and telling one
 mid-Attempt that it appears stuck is close to an ideal prompt for inducing *impossible*.
 
+`UNWINNABLE` is the near miss and stays on the right side of that line. It is a standing rule about
+what makes a *Challenge* unwinnable, stated once at the open like `DERIVATION` — not a reading of
+how this Attempt is going, which is the thing ADR-0005 keeps out. It is here because the matcher it
+feeds was listening for words the model had never been asked to use (#143).
+
 The five things that cross an Attempt boundary are `solver/carry.py`'s and are not re-listed here;
 this module writes the header they hang under.
 
@@ -23,6 +28,7 @@ from solver.instance import Lease
 from solver.intake import Sighting
 from solver.profile import Rules
 from solver.staging import Staged
+from solver.stall import DECLARES_IMPOSSIBLE
 
 # The one line the model writes that survives the Attempt (`solver/carry.py`). Asked for by an
 # explicit marker rather than inferred from the prose, so a label is something the model chose to
@@ -40,6 +46,29 @@ DERIVATION = (
 )
 
 NO_PROHIBITIONS = "— this Board's rules name none beyond ordinary competition conduct"
+
+# #143's contract, and the one place in this prompt that touches the stall call at all.
+#
+# It reads as a rule about the **Challenge** and never as a question about the Attempt, which is
+# what keeps ADR-0005 intact. What that record forbids is telling a model mid-Attempt that it
+# appears stuck — a running commentary on how the turn is going, and close to an ideal prompt for
+# inducing *impossible*. This is stated once when the Attempt opens, alongside `DERIVATION`, and
+# says nothing about progress: it names the two states in which no amount of further work is the
+# answer, and neither is *hard* or *slow*.
+#
+# The sentence is `solver/stall.py`'s so the matcher and the prompt cannot drift. Saying what it
+# costs matters as much as saying the words: a model that thinks declaring this forfeits the Run
+# will keep grinding, and a model that thinks it is free will reach for it the moment a Challenge
+# is difficult.
+UNWINNABLE = (
+    f"If this Challenge cannot be won from here — the Flag is behind a credential or an account we "
+    f"do not hold, or the only route to it is one this Board's rules forbid — then write a line "
+    f"beginning exactly `{DECLARES_IMPOSSIBLE}` followed by which of those it is, and stop. It parks "
+    f"this Challenge and spends the rest of the Run on the others, which is the right trade when it "
+    f"is true and an expensive one when it is not. Only a line that starts with `{DECLARES_IMPOSSIBLE}` "
+    f"counts, so you can reason about whether to write one without writing it. Difficulty is not "
+    f"this: a Challenge you have not cracked yet is one to keep working."
+)
 
 # What the model is told where staging could not use the Board's own name for a file (#119).
 #
@@ -114,7 +143,8 @@ def _finding_the_flag(rules: Rules) -> str:
         f"Flags on this Board match {shapes}.\n"
         f"Print the Flag from the command that produced it. **Do not try to submit it** — submitting "
         f"is not yours and there is nothing here to submit to; the Flag is taken from your output.\n"
-        f"{DERIVATION}"
+        f"{DERIVATION}\n"
+        f"{UNWINNABLE}"
     )
 
 

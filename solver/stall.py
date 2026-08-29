@@ -71,11 +71,37 @@ MARKED = re.compile(r"^\[[a-z][a-z-]*\] ")
 # reading them, and repetition is a claim about what was tried rather than about how it was spelt.
 SHELL = re.compile(r"^\S*(?:sh|bash|zsh|dash)\s+-[a-z]*c\s+")
 
+# The marker `solver/prompt.py` asks for, and the reason this rule stopped being a guess.
+#
+# Until #143 this was five phrases and nothing told the model which words carry: `compfest-2026-seg1`
+# met a Challenge whose Flag sat behind a Discord login the Solver could not hold, reasoned that out
+# correctly, wrote *"guessing would violate the rules"*, and matched none of them.
+#
+# **A marker rather than a sentence, and read on a line of its own** — which is `APPROACH:`'s rule
+# and for `APPROACH:`'s reason: a declaration is something the model chose to write, never something
+# a parser guessed out of a paragraph. The first cut of #143 told the model a *sentence* and left
+# `said` matching substrings, which is strictly worse than the bug it fixed: `solver/run.py` feeds
+# this every Claim and `solver/codex.py` defines a Claim as the model's message *and its reasoning
+# and its plan*, so naming the sentence invited the echo. `"I need to decide whether this challenge
+# cannot be won"` and `"it is not true that this challenge cannot be won"` both cut an Attempt on a
+# standing penalty, having said the opposite of what they were read as.
+#
+# The word is `UNWINNABLE` and not `IMPOSSIBLE` because `solver/prompt.py` may not contain the
+# second: a standing test asserts it, on ADR-0005's measurement that naming the state to a model is
+# most of the way to inducing it. The marker is about the **Challenge** having no route, which is
+# the thing the model is being asked to report.
+DECLARES_IMPOSSIBLE = "UNWINNABLE:"
+
 # Matched lowercased against what the model said, and deliberately tight. ADR-0005 expects this to
 # fire rarely — MIRAGE-Bench finds agents fabricate an action 46–65% of the time in genuinely
 # unachievable states rather than say so — and a loose matcher would turn "impossible to read
 # without the password" into a cut Attempt. It is a parameter for the same reason every threshold
 # here is one.
+#
+# Unchanged by #143, and deliberately still here: a model that gives up in words nobody chose is
+# saying something worth hearing. These are substrings matched anywhere in the prose, which is safe
+# only because nothing ever asks the model to write them — the moment a phrase is prompted for it
+# needs the marker's line rule instead, which is the lesson that cost this ticket a second pass.
 IMPOSSIBLE_SAYS = (
     "this is impossible",
     "this challenge is impossible",
@@ -83,6 +109,16 @@ IMPOSSIBLE_SAYS = (
     "unsolvable",
     "i give up",
 )
+
+
+def declared(prose: str) -> bool:
+    """Whether the model used the declaration the prompt asks for, on a line of its own.
+
+    The line rule is the whole of what makes it safe to tell the model the words. A model reasoning
+    about whether to declare — quoting the instruction back, ruling it out, planning to check — does
+    so mid-sentence, and only a model that has decided starts a line with the marker.
+    """
+    return any(line.lstrip().upper().startswith(DECLARES_IMPOSSIBLE) for line in prose.splitlines())
 
 
 def normalise(command: str) -> str:
@@ -253,7 +289,7 @@ class Watch:
         measures 28–64% of tokens saved on failed trajectories for 1.6–4.2 points of overall
         success. It shortens the budget and seals it; nothing here can hand the time back.
         """
-        if not any(phrase in prose.lower() for phrase in self.thresholds.impossible):
+        if not declared(prose) and not any(phrase in prose.lower() for phrase in self.thresholds.impossible):
             return False
         self._impossible = True
         self.deadline.shorten(now)
