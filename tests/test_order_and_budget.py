@@ -208,6 +208,22 @@ def test_a_shared_isolated_challenge_is_ineligible_because_it_is_undeployable_by
     assert ranked == [2, 3], "a shared Challenge that is not Isolated is deployed by nobody, so it is ordinary"
 
 
+def test_an_isolated_challenge_served_by_a_plugin_we_do_not_drive_is_ineligible(scheduler):
+    """COMPFEST serves its Isolated Challenges through the CTFd containers plugin, and this Solver
+    speaks `ctfd-chall-manager` (ADR-0007). So the Instance is real, the deploy is somebody else's
+    API, and the Challenge has no reachable target at all — its `connection_info` says "Start an
+    instance to receive your HTTP URL" and its Flag is generated per Instance.
+
+    That is the same fact as `shared`, one step further out: undeployable by us, about the Board
+    rather than about the Challenge. Ineligible rather than penalised, because a penalty would put
+    it back in line the moment the Board ran dry."""
+    board = seen(sighting(1, kind="container"), sighting(2, kind="dynamic_iac"), sighting(3))
+
+    ranked = ranking(scheduler, board)
+
+    assert ranked == [2, 3], "a Challenge whose Instances nobody but its own plugin can deploy is not workable"
+
+
 def test_a_challenge_the_model_called_impossible_is_penalised_and_never_excluded(scheduler):
     """ADR-0009 keeps this cause as an alarm the aim is for it never to fire, and a cause that
     silently deletes Challenges is an alarm nobody can watch trending to zero."""
