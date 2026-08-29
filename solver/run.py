@@ -242,6 +242,15 @@ class Run:
         self._slots_spent: dict[int | str, int] = {}
         self._leases: dict[int | str, Lease] = {}
         self._won: list[str] = []
+        # Challenges this Run has solved but the Board has not yet been re-read to confirm.
+        # A solve arrives out of band from Intake — the Board grades it the instant `_submit`
+        # sends the Flag, and `Sighting.solved` is only re-read once an Intake cycle — so
+        # without this the Challenge stays in Order's eligible set and is picked again, which
+        # cost `compfest-2026-seg2` a 78-step Attempt on The 67th Line seconds after it solved
+        # it (#151). It is a **floor** on the Board's reading and never a second source of
+        # truth: the next sync prunes every id the Board now reports solved, leaving only the
+        # ones still inside that gap.
+        self._solved: set[int | str] = set()
         self._attempts = 0
         self._in_flight: Deadline | None = None
         self._stopping = ""
@@ -278,7 +287,12 @@ class Run:
         while not self._stopping:
             if self._intake.due():
                 self._intake.sync()
-            pick = self._scheduler.acquire(self._intake.snapshot, leased=tuple(self._leases))
+                # The Board's own answer overwrites ours: an id it now lists solved leaves the
+                # floor, so a Run that mis-recorded a solve cannot exclude a Challenge for good.
+                self._solved &= {one.challenge_id for one in self._intake.snapshot.unsolved}
+            pick = self._scheduler.acquire(
+                self._intake.snapshot, leased=tuple(self._leases), solved=tuple(self._solved)
+            )
             if pick is None:
                 if self._scheduler.out_of_time():
                     break
@@ -477,6 +491,10 @@ class Run:
             carried = (waiting.candidates if waiting else ()) + outcome.held
             self._pending[challenge.challenge_id] = Pending(challenge.challenge_id, held.workdir, carried)
         if outcome.solved:
+            # `Outcome.solved` is *there is nothing left to win here*, which is true of
+            # `already_solved` too — a teammate got there first, and Order wants it gone whether or
+            # not the string we sent was the Flag.
+            self._solved.add(challenge.challenge_id)
             self._pending.pop(challenge.challenge_id, None)
             self._leases.pop(challenge.challenge_id, None)
             held.lease = None
