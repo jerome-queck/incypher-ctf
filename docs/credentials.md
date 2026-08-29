@@ -131,9 +131,30 @@ browser to fall back to.
 
 **A credential on disk is not covered by the environment allowlist.** The orchestrator's allowlist
 spawn (below) stops a challenge reading a secret out of its own environment; it does nothing about a
-file. Challenge code runs as root in this container, so `$CODEX_HOME/auth.json` is readable by it.
-Accepted for v1 and recorded in ADR-0011 — the boundary that actually fixes it is v2's uid
-separation.
+file. Everything in this container runs as root, so `$CODEX_HOME/auth.json` is readable by it.
+Accepted for v1 and recorded in ADR-0011.
+
+**Two things that page and this one both got wrong, and a live Run found them
+([#144](https://github.com/jerome-queck/incypher-ctf/issues/144)).**
+
+*The actor is not only challenge code.* Both records described this as a challenge binary reading a
+file. On `compfest-2026-seg1` the read was made by **the model itself** — it ran `rg` over
+`/state/runs/*/stream.jsonl` hunting for session material, and found the Run's own record. Any fix
+scoped to "code a Challenge supplied" would not have covered the one read that happened.
+
+*And uid separation does not close it on `/state`.* Both records name that as the boundary. Measured
+in this image, on this mount:
+
+| path | `chmod 700`, root-owned, read as another uid |
+|---|---|
+| container filesystem (`/var/lib/...`) | **blocked** — modes are enforced |
+| the `/state` bind mount | **read succeeds**, while `stat` reports `mode=700 uid=0` |
+
+Colima's mount does not enforce modes, so a non-root uid buys nothing for anything under `/state` —
+which is where the record, the working directory and `auth.json` all live. Uid separation remains
+right for the container filesystem and is **not** on its own the fix here; what would close it is
+keeping the live record off the shared mount, or running the agent somewhere it cannot reach.
+Neither is a v1 change, and ADR-0027's crowding rule is what currently stops the consequence.
 
 **One credential per provider.** Within a provider these are not a fallback chain: the client
 takes the first credential it finds, and given both an API key and a token the Anthropic SDK sends

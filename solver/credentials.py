@@ -54,7 +54,15 @@ NOT_SECRETS = ("CTFD_URL", "RUN_ID", "RUN_SECONDS", "CODEX_MODEL", "CODEX_HOME_M
 # and the model holding it is half of what "Codex never touches the Board" rules out (ADR-0014).
 #
 # What this does **not** cover is a credential on disk. Root walks through any file-permission fix,
-# so `$CODEX_HOME/auth.json` is readable by challenge code no matter what is in this tuple; that
-# hole is accepted for v1 and named in `docs/credentials.md`, and the boundary that closes it is
-# v2's uid separation.
+# so `$CODEX_HOME/auth.json` is readable no matter what is in this tuple; that hole is accepted for
+# v1 and named in `docs/credentials.md`.
+#
+# Two corrections a live Run forced, because this comment used to name the wrong actor and the wrong
+# remedy (#144). The reader it should describe is not challenge code but **the model** — on
+# `compfest-2026-seg1` it was the agent's own `rg` over `/state/runs` that read the Run's record,
+# and a boundary drawn around challenge-supplied code would not have been in its way. And uid
+# separation is not the remedy on `/state`: Colima's bind mount does not enforce modes, so a
+# root-owned `0700` directory there is read by any uid while `stat` reports it as protected.
+# Measured, not assumed — the same test blocks on the container filesystem, which is what makes it
+# the mount and not the mode.
 CHILD_ENVIRONMENT = ("PATH", "HOME", "TERM", "LANG")

@@ -138,6 +138,15 @@ abstract base — the same rule
   otherwise reads as though the allowlist closed this class of problem. `CODEX_HOME` under a
   non-root user is not a fix — a control root walks through is a comment, not a control. The real
   boundary is v2's uid separation, alongside the supervisor, exactly where ADR-0008 put it.
+
+  **Both halves of that last sentence were tested in August 2026 and both are wrong**
+  ([#144](https://github.com/jerome-queck/incypher-ctf/issues/144)). The reader is not only
+  challenge code: on `compfest-2026-seg1` the model itself read the Run's record. And uid separation
+  does not reach `/state` at all — Colima's bind mount does not enforce file modes, so a root-owned
+  `0700` directory there is readable by any uid while `stat` reports it as protected. The same test
+  blocks on the container filesystem, which is what identifies the mount rather than the mode as the
+  cause. What this record got right is the shape of the problem; what it named as the fix would not
+  have worked.
 - **`docs/credentials.md` loses `CODEX_ACCESS_TOKEN`.** The variable named a flag we cannot use.
   Codex is now the one credential that does **not** arrive by `--env-file`, and the page says so.
 - **The container needs a writable `CODEX_HOME`**, because Codex writes refreshed tokens back. That
