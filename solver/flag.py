@@ -16,6 +16,9 @@ strength of having mentioned it. Both are rules about a **body**: the model's ow
 neither, because a Flag that appeared only there is `unverified` already and refusing it would drop a
 nomination rather than protect anything.
 
+The reports rule is a body rule *and* a record rule, and it took a live Board to find out why —
+`NOT_EVIDENCE` carries that story.
+
 A fourth is skipped, and it is the one the Claim/Observation pair could not name
 ([ADR-0019](../docs/adr/0019-the-boards-statement-of-a-challenge-is-not-evidence.md)): a Challenge's
 **description** and the flag-scan over it are recorded as Observations because the recon cascade
@@ -24,27 +27,33 @@ descriptions our Runs persisted end in a flag-format section, and **all four spe
 out** — so wherever that section exists the sweep finds a decoy, every time. The record says which
 Steps those are — `source` — and this module reads it.
 
-How strongly a candidate is known is the whole of the policy below, and there are five answers:
+How strongly a candidate is known is the whole of the policy below, and there are six answers:
 
 - **reproduced** — the exact command that emitted it was replayed once and the same string came
   back. This is the only strength that may spend a Board's last attempt.
 - **observed** — a real command's output carried it, and the replay did not confirm it: it differed,
   it failed, or the emitting command was the Solver's own probe and is not a shell command at all.
-- **unverified** — no Observation carries it. The model said it and nothing else did. Still
-  submitted while attempts remain, and recorded as what it is — a per-model number worth having.
+- **unverified** — no Observation carries it. The model said it and nothing else did. Recorded as
+  what it is, which is a per-model number worth having.
 - **guessed** — it *was* authorised by an Observation, and then the Instance that minted it expired
   underneath it. Known from our own clock rather than from a rejected Flag.
-- **stated** — the Board's own prose carried it and the model repeated it. The only strength with
-  positive evidence *against* it, so it is the only one an unlimited Board does not wave through: it
-  waits for the reserved tail, where the slot it spends has nothing else to be spent on (ADR-0021).
+- **stated** — the Board's own prose carried it and the model repeated it. Positive evidence
+  *against*, so it waits for the reserved tail on any Board at all (ADR-0021).
+- **crowded** — one command emitted it alongside more Flags than a Challenge has. A Challenge has
+  one, so the command was reading a list rather than solving, and the whole of what it emitted is
+  demoted together (`_crowded`).
 
 Two submission branches follow, and only the first has ever been exercised on a real Board:
 
-- **Unlimited attempts** — submit as soon as a candidate is reproduced. Speed wins, and holding a
-  Flag back is the *no-sandbagging* rule Brunner bans outright.
+- **Unlimited attempts** — a candidate the Solver's own work produced is submitted the moment it is
+  reproduced, because speed wins and holding a Flag back is the *no-sandbagging* rule Brunner bans
+  outright. The two bounds here are the ones a Board with no budget of its own does not supply:
+  everything below `observed` waits for the reserved tail (`NEEDS_THE_SOLVERS_OWN_WORK`), and an
+  Attempt stops once the Board has graded it wrong `WRONG_CEILING` times.
 - **Limited, or unknown** — the full gate applies and the last attempt is reserved for a reproduced
-  candidate. Brunner reported `max_attempts` 0 on all 74 Challenges, so unknown is treated as
-  limited and this branch is covered by a test rather than discovered live.
+  candidate. The Board's stated maximum is itself the bound on a wrong-Flag loop, so neither of the
+  two above is repeated here. Brunner reported `max_attempts` 0 on all 74 Challenges, so unknown is
+  treated as limited and this branch is covered by a test rather than discovered live.
 
 Standard library only — this runs inside the Solver image, which has nothing installed.
 """
@@ -78,11 +87,39 @@ REPRODUCED = "reproduced"
 OBSERVED = "observed"
 UNVERIFIED = "unverified"
 GUESSED = "guessed"
-# The Board's own prose carried it and the model repeated it. Weakest of the five, because it is the
-# only one there is positive evidence *against*: a Flag-shaped string in a Challenge's statement is
-# the Board showing the wrapper's shape far more often than it is the Flag (ADR-0021).
+# The Board's own prose carried it and the model repeated it, and it is the only strength there is
+# positive evidence *against*: a Flag-shaped string in a Challenge's statement is the Board showing
+# the wrapper's shape far more often than it is the Flag (ADR-0021).
 STATED = "stated"
-STRENGTHS = (REPRODUCED, OBSERVED, UNVERIFIED, GUESSED, STATED)
+# One command emitted this alongside more Flags than a Challenge has. A Challenge has exactly one,
+# so N of them from one command are N-1 wrong at best and the command was reading something that is
+# not this Challenge's answer — a repository the model cloned, the Run's own record, a wordlist.
+# Last of the six because `stated` is at least one string the Board really did print, where this is
+# a set that has disproved itself.
+CROWDED = "crowded"
+STRENGTHS = (REPRODUCED, OBSERVED, UNVERIFIED, GUESSED, STATED, CROWDED)
+
+# How many distinct Flags one command may emit before everything it emitted is `crowded`.
+#
+# Set against what a *right* command looks like rather than against what the bad ones did: the Flag
+# appears in one command's output as many times as it likes and dedups to one, a Challenge that also
+# ships a decoy makes two, and beyond that the command is describing its input rather than the
+# Challenge. The single commands that cost `compfest-2026-seg1` emitted 27 and 47.
+CROWD_LIMIT = 3
+
+# What an **unlimited** Board will not spend a slot on before the reserved tail: everything the
+# Solver's own work did not produce.
+#
+# The confidence gate, and it lives in that branch for the same reason the ceiling does. Where a
+# Board states a maximum, the maximum *is* the bound on a wrong-Flag loop and the reserve already
+# keeps the last slot for a reproduced candidate. Where it states none, nothing here ever said stop
+# — submitting was free, so the gate waved everything through, and *free to submit* was read as
+# *free to be wrong*. COMPFEST prices the second one: a wrong Flag is a wrong Flag under a rule it
+# states beside DDoS.
+#
+# Nothing is dropped — the tail still spends all three, at the one moment holding them costs nobody
+# anything, which is what keeps this a confidence gate rather than the sandbagging Brunner bans.
+NEEDS_THE_SOLVERS_OWN_WORK = (UNVERIFIED, GUESSED, CROWDED)
 
 # The three tools this module spends Steps on. The first and the last are the Solver talking *about*
 # candidates rather than a command producing one, so the sweep never reads their bodies; the replay
@@ -91,6 +128,26 @@ SWEEP = "flag-sweep"
 REPLAY = "flag-replay"
 SUBMIT = "flag-submit"
 NEVER_SWEPT = (SWEEP, SUBMIT)
+
+# The same two reports again, as a rule about a **body line** rather than about a record — because
+# `NEVER_SWEPT` only reaches this module's reports where they arrive as their own Step, and the
+# Solver's record is on the writable mount the solving model reads. A model grepping
+# `/state/runs/*/stream.jsonl` for session material gets every earlier `[flag] submit` line back in
+# its own output, which is a real command's Observation in the current Attempt: the sweep harvests
+# the strings, the replay re-runs the grep and the file answers identically, and a rejected string
+# arrives `reproduced`. That is the strength this module reserves for a Board's last attempt, so
+# the loop upgrades junk rather than merely repeating it (#141).
+NOT_EVIDENCE = (DERIVED.encode(), MARK.encode())
+
+# How many *wrong* answers one Attempt may spend before the rest of its candidates are held.
+#
+# The gate below is otherwise a budget rule, and an unlimited Board has no budget — so a sweep that
+# nominated 36 candidates submitted 36, which is the wrong-Flag retry loop COMPFEST names beside
+# DDoS. This bounds it without deciding *which* candidate is wrong: past the ceiling the Attempt has
+# been answering wrongly for long enough that its whole candidate set is suspect, and a Challenge is
+# better re-approached than exhausted. A correct Flag before the ceiling still grades and still ends
+# the Attempt, so the bound costs a solve only where the Solver was wrong that many times first.
+WRONG_CEILING = 5
 
 # Read in blocks so an Observation nothing bounded — `aggregated_output` from the vendor's stream is
 # whatever a command wrote — is never held whole in memory. A partial line is carried across the
@@ -335,6 +392,11 @@ class Flags:
         # A sweep, a replay and a submission are Steps of the Attempt they belong to, so the numbers
         # come from whoever owns it — two counters would put two Steps at the same address.
         self._step_numbers = step_numbers or _from_one()
+        # How many times each Attempt has been graded wrong, which is the one thing the ceiling is
+        # about and the one scope `submit` cannot see: `solver/run.py` calls it **once a turn**, so
+        # a count local to the call resets with the turn and an Attempt of N sweeps spends N
+        # ceilings. Keyed by Attempt because that is what the bound is a fact about.
+        self._wrong: dict[str, int] = {}
 
     def candidates(self, *, attempt_id: str, said: Sequence[str] = ()) -> tuple[Candidate, ...]:
         """Everything that could be this Challenge's Flag, and what authorises each one.
@@ -354,7 +416,7 @@ class Flags:
         by_the_board: set[str] = set()
         swept = 0
         stated = 0
-        for command, ref, source in _bodies_of(self._recorder.stream_path, attempt_id):
+        for command, ref, source, tool in _bodies_of(self._recorder.stream_path, attempt_id):
             # An allowlist rather than a refusal of `SOURCE_BOARD`, so a source nobody has
             # thought of yet arrives non-authorising (ADR-0019).
             if source != SOURCE_SOLVER:
@@ -364,8 +426,21 @@ class Flags:
                 by_the_board.update(_in_body(self._recorder.run_dir / ref, matchers))
                 continue
             swept += 1
-            for text in _in_body(self._recorder.run_dir / ref, matchers):
-                found.setdefault(text, Candidate(text, OBSERVED, command=command, ref=ref))
+            # Distinct and in order, because *how many different Flags this one command emitted* is
+            # the question `_crowded` asks and a Flag repeated down a file is still one Flag.
+            emitted = tuple(dict.fromkeys(_in_body(self._recorder.run_dir / ref, matchers)))
+            # A replay is exempt because it re-runs a command the sweep already read: everything in
+            # its output was counted once at the command that first emitted it, and counting it
+            # again would let one candidate's confirmation nominate a crowd. Where that first
+            # command really was reading a list, the demotion has already happened there.
+            strength = CROWDED if tool != REPLAY and _crowded(emitted) else OBSERVED
+            for text in emitted:
+                candidate = Candidate(text, strength, command=command, ref=ref)
+                # A later command that emitted it alone outranks an earlier one that emitted it in a
+                # crowd: the crowd says the *command* was reading a list, never that the string is
+                # wrong, so one clean sighting is still the Solver's own work finding it.
+                if (already := found.get(text)) is None or candidate.rank < already.rank:
+                    found[text] = candidate
         for text in (match for prose in said for match in _matches(prose.encode(), matchers)):
             # A string a command produced is already here and outranks both — the Board having also
             # stated it says nothing about whether the Solver later found it.
@@ -414,7 +489,7 @@ class Flags:
         spent_here = 0
         for found in candidates:
             candidate = self._degraded(self._reproduced(found, attempt_id=attempt_id, workdir=workdir), lease)
-            if refusal := _refuses(candidate, slots, spent_here, last_call=last_call):
+            if refusal := _refuses(candidate, slots, spent_here, self._wrong.get(attempt_id, 0), last_call=last_call):
                 held.append(candidate)
                 self._record(
                     SUBMIT, f"{MARK} hold {candidate.text}", f"{MARK} {refusal}".encode(), attempt_id, ok=False
@@ -423,6 +498,7 @@ class Flags:
             answer = self._graded(candidate, attempt_id=attempt_id, challenge_id=challenge_id)
             graded.append(answer)
             spent_here += 1
+            self._wrong[attempt_id] = self._wrong.get(attempt_id, 0) + (1 if answer.verdict.incorrect else 0)
             if answer.verdict.solved:
                 self._release(challenge_id, lease, attempt_id=attempt_id)
                 return Outcome(True, candidate.text if answer.verdict.correct else "", tuple(graded), tuple(held))
@@ -516,21 +592,55 @@ class Flags:
         return step.end(exit_code=0 if ok else 1, output=output, usage=NO_MODEL).shown
 
 
-def _refuses(candidate: Candidate, slots: Slots, spent_here: int, *, last_call: bool) -> str:
+def _crowded(emitted: Sequence[str]) -> bool:
+    """Whether one command emitted so many different Flags that the command is what it says
+    something about.
+
+    The rule the incident argues for. A Challenge has exactly one Flag, so a command answering with
+    a dozen has read a list of them rather than solved anything — and that is the exact shape of
+    both leak paths that cost `compfest-2026-seg1`: one `rg` over a cloned repository's example
+    Flags, one `rg` over the Run's own record. Every per-candidate rule is defeated by them, because
+    each individual string is well-evidenced; it is only together that they disprove each other.
+
+    Per **command**, not per sweep: an Attempt that works for twenty turns legitimately accumulates
+    Flag-shaped strings across them — a decoding tried, a decoy found, a guess printed — and one
+    each from twenty commands is a model working, where twenty from one command is a model grepping.
+
+    Demotion rather than refusal, because the set is untrustworthy and not proven wrong: `crowded`
+    sits in `NEEDS_THE_SOLVERS_OWN_WORK`, so the tail still spends them. It is also not
+    `authorised`, so the
+    replay that would have promoted it to `reproduced` off a second read of the same file — which is
+    how junk reached the strength this module reserves for a Board's last attempt — never runs.
+    """
+    return len(emitted) > CROWD_LIMIT
+
+
+def _refuses(candidate: Candidate, slots: Slots, spent_here: int, wrong_here: int, *, last_call: bool) -> str:
     """Why this candidate may not be submitted right now, or the empty string where it may.
 
-    The whole submission policy, in the order the checks have to run in. The guard is first because
-    it is the one refusal that is about the candidate rather than about the budget: a homoglyph is
-    wrong however many attempts remain. It is also the one refusal `last_call` overrides outright —
-    a homoglyph submitted at the end of a Run spends a slot nothing else will ever use, where one
-    held back is a Flag the Solver found and never submitted.
+        The whole submission policy, in the order the checks have to run in. The guard is first because
+        it is the one refusal that is about the candidate rather than about the budget: a homoglyph is
+        wrong however many attempts remain. It is also the one refusal `last_call` overrides outright —
+        a homoglyph submitted at the end of a Run spends a slot nothing else will ever use, where one
+        held back is a Flag the Solver found and never submitted.
 
     A `stated` candidate is refused next, and **above the unlimited branch**, which is the one place
-    this module does not let speed win. An unlimited Board still has the Board-wide
-    `incorrect_submissions_per_min` limiter, and that is every *other* Challenge's budget — so a
-    string the Board itself showed us waits for the tail, where the slot has nothing else to be spent
-    on. It is not sandbagging: the candidate is submitted, at the one moment holding it costs nobody
-    anything (ADR-0021).
+        this module does not let speed win. An unlimited Board still has the Board-wide
+        `incorrect_submissions_per_min` limiter, and that is every *other* Challenge's budget — so a
+        string the Board itself showed us waits for the tail, where the slot has nothing else to be spent
+        on. It is not sandbagging: the candidate is submitted, at the one moment holding it costs nobody
+        anything (ADR-0021).
+
+        The two rules inside the unlimited branch are `NEEDS_THE_SOLVERS_OWN_WORK` and `WRONG_CEILING`,
+        and they are there rather than here because a Board that states a maximum has already bounded
+        the loop they exist to bound.
+
+        The ceiling sits above even the guard, and is the one refusal `last_call` does **not** override.
+        Every other rule here asks what this candidate is worth; the ceiling asks whether the Attempt is
+        still answering rather than guessing, and an Attempt the Board has said no to `WRONG_CEILING`
+        times is guessing whatever the next candidate's strength says. The tail argument does not rescue
+        it: a slot nothing else will spend is still a wrong Flag on a Board that prohibits the loop, and
+        the candidates left at that point come from a set already shown to be bad (#141).
     """
     if not last_call and (wrong := confusables(candidate.text)):
         return f"the confusable-character guard held it back — {'; '.join(wrong)}"
@@ -540,6 +650,21 @@ def _refuses(candidate: Candidate, slots: Slots, spent_here: int, *, last_call: 
             "reserved tail, where the slot it spends has nothing else to be spent on"
         )
     if slots.unlimited:
+        # The ceiling belongs to this branch alone. Every refusal below it is the Board's own budget
+        # doing the bounding, and a Board that states a maximum has already said how long a
+        # wrong-Flag loop may run; it is only where the Board states *no* limit that nothing else
+        # here ever says stop. Not overridden by `last_call`: a slot nothing else will spend is
+        # still a wrong Flag under a rule that names the loop beside DDoS (#141).
+        if wrong_here >= WRONG_CEILING:
+            return (
+                f"this Attempt has already been graded incorrect {wrong_here} time(s), which is the "
+                f"ceiling — its remaining candidates are held rather than spent on a wrong-Flag loop"
+            )
+        if not last_call and candidate.strength in NEEDS_THE_SOLVERS_OWN_WORK:
+            return (
+                f"a {candidate.strength} candidate is not the Solver's own work saying so, and this "
+                f"Board states no budget to spend it against — so it waits for the reserved tail"
+            )
         return ""
     left = slots.left
     if left is not None and left - spent_here <= 0:
@@ -580,11 +705,20 @@ def _bodies_of(stream: Path, attempt_id: str) -> Iterator[tuple[str, str, str]]:
             continue
         if record.get("tool") in NEVER_SWEPT or not (ref := record.get("observation_ref")):
             continue
-        yield str(record.get("command_raw", "")), str(ref), str(record.get("source", SOURCE_SOLVER))
+        yield (
+            str(record.get("command_raw", "")),
+            str(ref),
+            str(record.get("source", SOURCE_SOLVER)),
+            str(record.get("tool", "")),
+        )
 
 
 def _in_body(body: Path, matchers: Sequence[re.Pattern[bytes]]) -> Iterator[str]:
-    """Every wrapper match in one Observation's body, minus any derived record the body carries.
+    """Every wrapper match in one Observation's body, minus any line the Solver itself wrote.
+
+    Both markers in `NOT_EVIDENCE` are here for the same reason: a body line carrying one is the
+    Solver talking rather than a command producing, and a sweep that read it would authorise a
+    candidate on the strength of having mentioned it.
 
     `carry.DERIVED` marks the one line per Attempt holding a model-authored approach label. That
     label crosses into the next Attempt's prompt, so the model can print it back out — into a note
@@ -600,7 +734,7 @@ def _in_body(body: Path, matchers: Sequence[re.Pattern[bytes]]) -> Iterator[str]
     """
     try:
         for line in _lines(body):
-            if DERIVED.encode() not in line:
+            if not any(marker in line for marker in NOT_EVIDENCE):
                 yield from _matches(line, matchers)
     except OSError:
         # A body file that has been deleted under us costs the candidates it held and nothing more:
