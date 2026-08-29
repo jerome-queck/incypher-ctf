@@ -26,19 +26,32 @@ from pathlib import Path
 from solver import boot, profile
 from solver.board import Board
 from solver.boot import Refusal
-from solver.codex import Invocation
+from solver.codex import Invocation, asking
 from solver.flag import Flags, Pace
 from solver.instance import Instances
 from solver.intake import Intake
 from solver.record import Recorder
 from solver.redaction import Redactor
-from solver.run import Ending, Run, Steps
+from solver.run import WORK_ROOT, Ending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
 # different thing and survives nothing (`CONTEXT.md`, *Run state*).
 RUN_STATE = Path("/state")
+
+# The two directories this file names under the mount it was pointed at, and they are named the
+# same way on purpose: a Solver handed a different `/state` is handed a different one whole, and a
+# path that stayed absolute while its sibling followed the mount is the seam only this file can see.
+#
+# The judge is spawned in its own rather than in an Attempt's or in the Run's record: the CLI runs
+# *in* its working directory, and either of those would stand a judgement among a Challenge's files
+# or this Run's own stream. What that buys, and what a read-only sandbox still allows, is
+# `solver/codex.py`, at `asking`. The other is `run.WORK_ROOT` re-rooted rather than restated, so
+# the model's directories cannot drift from the module that lays them out (ADR-0025 namespaces the
+# event beneath it).
+JUDGE_WORKDIR = "triage"
+ATTEMPT_WORKDIRS = WORK_ROOT.name
 
 # What a Run exits with, because a supervisor at v2 and a human at 16:05 read the same number.
 CLEAN = 0
@@ -124,11 +137,24 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
 
     steps = Steps()
     instances = Instances(board, recorder, step_numbers=steps.spend)
+    # Triage's last resort, and the one collaborator only this file can hand it: what the Board
+    # states and what its solves say are read off the Board itself, and the model is asked about
+    # whatever neither of them could rank. Left at its default nothing is asked at all, and a Board
+    # that publishes no difficulty is triaged entirely at the floor — every Challenge budgeted
+    # alike, and every Tier recorded `unjudged` (ADR-0006). Brunner published one on nearly every
+    # Challenge, which is why four gate Runs never showed this.
+    #
+    # It is handed the rung this Run leads with and no chain behind it: failing over would spend a
+    # second invocation on a Tier, and a judge that answers nothing leaves the floor either way. And
+    # it is handed the Board's `web_search` for the reason the Attempt below is: the tool is the
+    # Board's to withdraw, and a Run whose judge kept it would be playing one invocation outside the
+    # rules the rest of it obeys (ADR-0014).
+    judge = asking(held.chain[0], recorder=recorder, workdir=run_state / JUDGE_WORKDIR, web_search=rules.web_search)
     run = Run(
         profile=discovered,
         recorder=recorder,
         intake=intake,
-        scheduler=Scheduler(window, recorder, dials=dials),
+        scheduler=Scheduler(window, recorder, dials=dials, judge=judge),
         flags=Flags(
             board,
             recorder,
@@ -141,6 +167,7 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
         steps=steps,
         chain=held.chain,
         invocation=Invocation(reasoning_effort=dials.reasoning_effort, web_search=rules.web_search),
+        work_root=run_state / ATTEMPT_WORKDIRS,
     )
     _on_signal(run)
     return run.work()

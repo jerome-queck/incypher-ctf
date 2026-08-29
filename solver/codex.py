@@ -301,6 +301,7 @@ def asking(
     *,
     recorder: Recorder,
     workdir: Path,
+    web_search: bool = True,
     attempt_id: str = "triage",
     seconds: float = 180.0,
     launch: Launch | None = None,
@@ -318,21 +319,31 @@ def asking(
 
     **The shell cannot be taken away from it.** ADR-0014 measured that: `codex exec` has no door
     marked *just answer*, and nothing removes its tools. So what keeps this judgement off the Board
-    is not a flag but the three things the invocation withholds — a **read-only sandbox**, so
-    nothing it does changes anything; **no network**, so no Board, no Instance and no submission is
+    is not a flag but the two things the invocation withholds — a **read-only sandbox**, which is
+    what denies the write *and* the network here, so no Board, no Instance and no submission is
     reachable at all; and the allowlist environment every child gets, which holds no CTFd token and
     not even the Board's URL (`solver/credentials.py`). A judge cannot spend a submission slot it
     has no address for.
 
-    The residual is named rather than hidden, in the same spirit as the vendor's own context
-    compaction: a read-only sandbox can still *read*, so a judge that went looking could open a
-    file under `/state`. What is guaranteed here is narrower and is the thing that matters — Triage
-    itself never opens one, and the working directory it is pointed at holds nothing.
+    Two residuals, named rather than hidden, in the same spirit as the vendor's own context
+    compaction. A read-only sandbox can still *read*, so a judge that went looking could open a file
+    under `/state`; what is guaranteed is narrower and is the thing that matters, that Triage itself
+    never opens one. And the network is the *sandbox's* to grant rather than this flag's — the CLI
+    opens it for `workspace-write` with the key true, or for full access, and `network=False` puts
+    exactly that workspace-write key on an argv that is neither. It states the intent and the
+    sandbox is what enforces it, so a sandbox widened here would take the network with it.
+
+    **`web_search` is the caller's, because it is the Board's.** It is a model-side tool the vendor
+    runs at its own end, so no sandbox gates it and neither withholding above reaches it — which
+    makes it the one dial of an Attempt's that has to be handed in rather than narrowed away. A
+    Board whose rules withdraw web search withdraws it from every invocation the Run makes
+    (ADR-0014), and a judge left at this default would be the one that ignored them.
 
     Everything the judge says lands in `claims/`, which Flag verification never sweeps, and the
     tokens it spends are counted by the Steps the invocation writes.
     """
     clock = now or (lambda: dt.datetime.now(dt.timezone.utc))
+    asked = 0
 
     def ask(prompt: str) -> str:
         # The CLI is spawned *in* this directory, so it has to exist — and it stays empty, because
@@ -343,15 +354,23 @@ def asking(
             workdir.mkdir(parents=True, exist_ok=True)
         except OSError:
             return ""
+        # One ask is one invocation of the CLI numbering its Steps from 1, and a Board that drops
+        # Challenges mid-event is asked again for every batch that arrives — so `attempt_id` names
+        # the judge and the ask's own sequence is appended to it, the way an Attempt's id is
+        # composed (`solver/run.py`). Two asks under one id would write their Steps at the same
+        # addresses, and the record could no longer tell the second judgement from the first
+        # (`solver/run.py`, at `Steps`).
+        nonlocal asked
+        asked += 1
         deadline = Deadline(budget=clock() + dt.timedelta(seconds=seconds))
         said = run_attempt(
             prompt,
             workdir,
             deadline,
             recorder=recorder,
-            attempt_id=attempt_id,
+            attempt_id=f"{attempt_id}-{asked}",
             chain=(credential,),
-            invocation=Invocation(sandbox="read-only", network=False),
+            invocation=Invocation(sandbox="read-only", network=False, web_search=web_search),
             launch=launch,
             now=clock,
         )

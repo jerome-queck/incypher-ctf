@@ -167,15 +167,30 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Slots:
-    """This Challenge's submission budget as the Board states it.
+    """This Challenge's submission budget, as the Board states it and never more generous than
+    that (`floored`).
 
     CTFd writes *unlimited* as `max_attempts` 0 and `spent` is our own count held server-side, so it
-    survives a container restart where a local tally would not. **Absent is unknown and unknown is
-    treated as limited**: a Board that does not say cannot be assumed generous.
+    survives a container restart where a local tally would not. What it does not survive is the gap
+    between two readings — it is re-read once an Intake cycle and spent once a turn — so a caller
+    spending slots inside that gap holds the only record of them and floors the stated count with it.
+    **Absent is unknown and unknown is treated as limited**: a Board that does not say cannot be
+    assumed generous.
     """
 
     max_attempts: int | None = None
     spent: int = 0
+
+    def floored(self, spent: int) -> Slots:
+        """The same budget, holding the higher of the Board's spent count and one the caller knows.
+
+        The larger rather than the later, because the two move for different reasons: the Board's
+        count includes a teammate's submissions and the caller's includes the ones the Board has not
+        been re-read since. Taking the larger is what makes the number a floor under the Board's
+        real count — over-counting refuses a candidate a slot the Board would have taken, and
+        under-counting spends the reserve on a Challenge that has none left.
+        """
+        return replace(self, spent=max(self.spent, spent))
 
     @property
     def unlimited(self) -> bool:
@@ -195,9 +210,16 @@ class Pace:
     """The Board-wide incorrect-submissions-per-minute limit, kept to on our side of it.
 
     The setting is `incorrect_submissions_per_min` and is **unreadable to a non-admin**, so CTFd's
-    own default is assumed and the number is a parameter like every other uncalibrated one. Only a
-    Flag the Board graded *wrong* counts against it, which is what CTFd itself counts — so a Run
-    that is solving things is never paced by this at all.
+    own default is assumed and the number is a parameter like every other uncalibrated one. Every
+    answer but a solve counts against it, so a Run that is solving things is never paced by this at
+    all.
+
+    That is a **wider** set than the per-Challenge budget spends (`Verdict.spent_a_slot`), and
+    deliberately: the two are wrong in opposite directions. A `ratelimited` answer is the Board
+    saying its own count of our wrong Flags is ahead of ours, which is the last answer a pacer
+    should ignore, and pacing on one too many costs seconds — where counting one too many against a
+    Challenge's budget refuses a reproduced candidate a slot the Board would have taken, and no
+    `last_call` releases *the budget is spent*.
 
     It is Board-wide rather than per-Challenge, which is the whole reason it is held here and handed
     in: one Challenge burning the limit is one Challenge spending every other Challenge's slots.
@@ -378,6 +400,10 @@ class Flags:
         Each candidate is replayed once, checked against the Instance's own deadline, put past the
         confusable guard and then either submitted or held — in that order, because every step of it
         can change what the next one is entitled to do.
+
+        `slots` is the budget as the gate has to see it **now**, which is not always as the Board
+        last stated it: the caller spends a slot a turn and the Board is re-read once an Intake
+        cycle, so a caller with submissions in that gap hands one floored by them (`Slots.floored`).
 
         `last_call` is the Run's reserved tail releasing the reserve: there is no later Attempt for
         the last attempt to be reserved *for*, so a held candidate is submitted rather than carried

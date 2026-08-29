@@ -201,6 +201,89 @@ clear_env() {
   printf '  %s✓ removed%s %s from %s\n' "$GREEN" "$RESET" "$1" "$ENV_FILE"
 }
 
+# Where an event's files live — the profile a Board is resolved through, and the rules snapshot it
+# is diffed against. Spelled once, because a second copy of a path is the copy that drifts.
+PROFILES=docs/competitions
+
+# How `tracked_event_for` says it could not name an event. The two are kept apart because their
+# remedies are opposite — write a profile for a Board nobody has met, versus repair one we already
+# hold — and any other non-zero status is the helper failing to run at all, which is a third thing.
+UNCLAIMED=3
+BROKEN=4
+
+# tracked_event_for URL — the event whose $PROFILES profile claims URL, on stdout.
+#
+# Asked of `solver/profile.py` rather than answered by a case arm here, because that mapping is the
+# rule deciding which Board's rules bind a Run: a second copy of it in this wizard is the copy that
+# drifts, and a drift check reading the wrong rulebook is worse than one that never ran. It also
+# makes a new event three files under $PROFILES and no edit here, which is what the hand-written arm
+# cost us: two Boards ended up with a rulebook snapshot this wizard never diffed.
+#
+# Every refusal reaches the screen, and a directory that will not read is not reported as an empty
+# one. A mistyped key in any event's profile — that file being what a human edits when this very
+# check shows a rule has moved — would otherwise read as a Board nobody has written a profile for,
+# and send them to create a file that is already there. The two statuses it answers with are the
+# constants above, handed in rather than written a second time down here.
+#
+# Reading the program from stdin puts the working directory on the import path, and the `cd` above
+# made that the repository root.
+tracked_event_for() {
+  UNCLAIMED="$UNCLAIMED" BROKEN="$BROKEN" python3 - "$PROFILES" "$1" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+from solver.boot import Refusal
+from solver.profile import rules_for, tracked
+
+directory, wanted = Path(sys.argv[1]), sys.argv[2]
+
+try:
+    # Every tracked profile has to answer to its own URL. That is what separates a directory this
+    # wizard cannot trust — a file that will not read, two files claiming one Board — from a Board
+    # we simply hold no rules for, and it asks the module rather than matching URLs a second time.
+    for known in tracked(directory):
+        rules_for(known.url, directory)
+except Refusal as unusable:
+    print(unusable, file=sys.stderr)
+    raise SystemExit(int(os.environ["BROKEN"]))
+
+try:
+    print(rules_for(wanted, directory).event)
+except Refusal as unclaimed:
+    print(unclaimed, file=sys.stderr)
+    raise SystemExit(int(os.environ["UNCLAIMED"]))
+PY
+}
+
+# rules_drift_for EVENT — diff EVENT's live rules page against its snapshot, and say what to do
+# about what came back.
+#
+# `check-rules-drift.sh` exits 1 for two different things: a diff it has just printed, and a rules
+# span it could not find on the page. Only the first can be accepted with `--update` — the second
+# dies under `set -e` before that script reaches its merge block — so this sends the operator to
+# what the check printed rather than promising a diff that may not be there.
+rules_drift_for() {
+  local event=$1
+  local baseline="$PROFILES/$event.rules.txt"
+  if [ ! -f "$baseline" ]; then
+    warn "$event has a profile but no rules snapshot, so there is nothing to diff against"
+    SKIPPED+=("rules drift unchecked — snapshot $baseline before playing")
+    return 0
+  fi
+  local drift=0
+  sh scripts/check-rules-drift.sh "$baseline" || drift=$?
+  case "$drift" in
+    0) ;;
+    1) warn "the live rulebook no longer matches $baseline — read what the check printed above"
+       note "A diff is accepted with: sh scripts/check-rules-drift.sh $baseline --update"
+       note "A span it could not locate is not — that is the page moving, and From:/To: are hand-edited."
+       SKIPPED+=("rules drift on $event — read the check's output before playing") ;;
+    *) warn "the rules page could not be read, so whether it drifted is unknown"
+       SKIPPED+=("rules unchecked — re-run: sh scripts/check-rules-drift.sh $baseline") ;;
+  esac
+}
+
 TOTAL_STAGES=7
 
 banner "Point the Solver at a CTF board"
@@ -318,16 +401,22 @@ stage "Prove it works"
 say "Two checks, both against the live board."
 say ""
 step "Rules drift — has anything in the rulebook changed since we snapshotted it?"
-case "$CTFD_URL" in
-  *global.brunnerctf.dk*) rules_baseline=docs/competitions/brunnerctf-2026-global.rules.txt ;;
-  *)                      rules_baseline="" ;;
+resolved=0
+event=$(tracked_event_for "$CTFD_URL") || resolved=$?
+case "$resolved" in
+  0) rules_drift_for "$event" ;;
+  "$UNCLAIMED")
+    warn "no profile in $PROFILES/ claims $CTFD_URL, so no rulebook binds it here"
+    note "The Solver refuses a Board it holds no profile for, so this Run would not start (ADR-0008)."
+    SKIPPED+=("rules drift unchecked — $PROFILES/ holds no .board.json for $CTFD_URL") ;;
+  "$BROKEN")
+    warn "the refusal above is about $PROFILES/ itself, not this Board — repair the file it names"
+    note "The Solver reads that whole directory too, so it would refuse this Run for the same reason."
+    SKIPPED+=("rules drift unchecked — repair the $PROFILES/ profile the refusal above names") ;;
+  *)
+    warn "solver/profile.py could not be asked which event this board is — see the error above"
+    SKIPPED+=("rules drift unchecked — needs python3 and a run from the repository root") ;;
 esac
-if [ -n "$rules_baseline" ]; then
-  sh scripts/check-rules-drift.sh "$rules_baseline" || \
-    warn "read that diff before playing — accept it with --update once you have"
-else
-  note "no rules baseline snapshotted for this board yet — see docs/competitions/"
-fi
 say ""
 step "API path — can the Solver enumerate, submit, and download?"
 note "This submits ONE deliberately wrong flag to read the verdict semantics."
