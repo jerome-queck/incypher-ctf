@@ -302,7 +302,13 @@ class Scheduler:
         self._taken = 0
         self._held: dict[int | str, Pick] = {}
 
-    def acquire(self, snapshot: Snapshot, *, leased: Collection[int | str] = ()) -> Pick | None:
+    def acquire(
+        self,
+        snapshot: Snapshot,
+        *,
+        leased: Collection[int | str] = (),
+        solved: Collection[int | str] = (),
+    ) -> Pick | None:
         """The next Challenge and its budget, or `None` where the clock can no longer buy an Attempt.
 
         `None` has two causes and they want **opposite** responses, so a caller reads
@@ -322,7 +328,7 @@ class Scheduler:
         affordable = self.window.left(now) - self.dials.tail_seconds
         if self.out_of_time():
             return None
-        ranked = self.order(snapshot, leased=leased)
+        ranked = self.order(snapshot, leased=leased, solved=solved)
         if not ranked:
             return None
         # What is already being worked is not picked again. A no-op while `concurrency` is one,
@@ -376,7 +382,13 @@ class Scheduler:
         spent.impossible = spent.impossible or outcome.cause == CUT_SELF_REPORTED_IMPOSSIBLE
         spent.crashed = spent.crashed or outcome.cause == CRASHED
 
-    def order(self, snapshot: Snapshot, *, leased: Collection[int | str] = ()) -> tuple[Ranked, ...]:
+    def order(
+        self,
+        snapshot: Snapshot,
+        *,
+        leased: Collection[int | str] = (),
+        solved: Collection[int | str] = (),
+    ) -> tuple[Ranked, ...]:
         """Rank every eligible Challenge, best first — the function itself, recomputed from scratch.
 
         Total and deterministic: every eligible Challenge appears exactly once, ties break on the
@@ -390,7 +402,11 @@ class Scheduler:
         from. Both make this **idempotent** and not free of effect: the second call over the same
         Snapshot writes nothing and answers identically, which is the property a replay needs.
         """
-        eligible = [one for one in snapshot.unsolved if not _undeployable(one)]
+        # `solved` is the Run's own floor over `snapshot.unsolved`: a Challenge it has solved
+        # since the last Intake is not eligible, even though the Board's copy of the snapshot
+        # still lists it unsolved (#151). The caller reconciles the floor against the Board on
+        # each sync, so this only ever subtracts.
+        eligible = [one for one in snapshot.unsolved if not _undeployable(one) and one.challenge_id not in solved]
         if not eligible:
             return ()
         self._triage_arrivals(eligible)

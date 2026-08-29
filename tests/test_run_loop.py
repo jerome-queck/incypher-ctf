@@ -406,6 +406,26 @@ def test_a_solved_challenge_is_not_attempted_again(tmp_path):
     assert after.count(2) == 1
 
 
+def test_a_challenge_leaves_the_working_set_the_moment_it_solves_not_at_the_next_intake(tmp_path):
+    """The solve arrives out of band from Intake, so between grading it and the next sync the
+    snapshot still lists the Challenge unsolved. Without the Run's own floor Order picks it straight
+    back, which cost `compfest-2026-seg2` a 78-step Attempt on an already-solved Challenge the same
+    second it banked it (#151). The cycle here is longer than the whole window, so the only thing
+    that can take the Challenge out is the local floor and never a re-read of the Board.
+    """
+    clock = Clock()
+    wire = Wire(count=1)
+    run, recorder = solver(
+        tmp_path, wire, Agent(clock, wire=wire, solving=(1,)), clock, lasting=1200.0, cycle_seconds=100_000.0
+    )
+
+    ending = run.work()
+
+    opened = [one["challenge_id"] for one in records(recorder, "attempt-open")]
+    assert opened == [1], "the solved Challenge was re-opened before any Intake could confirm the solve"
+    assert ending.cause == WINDOW_CLOSED
+
+
 def test_the_whole_board_profile_as_discovered_reaches_the_prompt_as_prohibitions(tmp_path):
     clock = Clock()
     wire = Wire(count=1)

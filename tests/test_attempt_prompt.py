@@ -239,7 +239,34 @@ def test_the_unwinnable_contract_is_about_the_challenge_and_never_about_the_atte
     unwinnable — no route that does not break the rules — and never asks how the turn is going."""
     said = prompt_for().lower()
 
-    assert "a credential or an account we do not hold" in said
+    assert "no route to the Flag exists for anyone playing this Board".lower() in said
     assert "a challenge you have not cracked yet is one to keep working" in said
     for inducing in ("stuck", "give up", "how you are doing", "running out"):
         assert inducing not in said
+
+
+def test_the_unwinnable_contract_says_the_solver_holds_the_credential_the_model_does_not():
+    """The trigger's first wording asked what *we* do not hold, and the model answered about itself
+    — correctly, since ADR-0014 denies it the Board credential on purpose. `compfest-2026-seg2`
+    parked two Challenges the rest of the Board had solved 58 and 31 times on exactly that reading
+    (#149), so the prompt now says whose the credential is rather than leaving it to be inferred."""
+    said = prompt_for()
+
+    assert "holds this Board's credential and submits the Flag on your behalf" in said
+    assert "that boundary is deliberate and it is not the Challenge being closed" in said
+
+
+def test_the_unwinnable_contract_names_each_thing_that_is_not_grounds():
+    """One at a time rather than left to be inferred from the trigger. Each of these is a shape a
+    live Attempt stopped on, or would have: `23-1` had no account for the service and `16-1` had
+    neither the address nor the key, and both were work left to do."""
+    said = prompt_for().lower()
+
+    for not_grounds in (
+        "to reach the board, to log in, or to hold an account anywhere",
+        "a tool the image does not ship",
+        "a host that will not answer",
+        "a key or an address or an endpoint you have not found yet",
+        "a cryptographic step you have not broken",
+    ):
+        assert not_grounds in said

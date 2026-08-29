@@ -296,6 +296,30 @@ def test_the_alarm_exits_non_zero_only_when_it_fired(tmp_path, capsys):
     assert "this is impossible" in said
 
 
+def test_the_alarm_names_the_declaration_rather_than_searching_the_phrases_past_it(tmp_path, capsys):
+    """Both `compfest-2026-seg2` alarms used the marker exactly as the prompt asks and carried none
+    of the five legacy phrases, so a query that searched the phrases alone reported *no phrase
+    matches* — this script's own words for a false positive — about the two Attempts that had done
+    it right (#149). The prose below is the two Claims, verbatim.
+    """
+    written = Written(tmp_path, run_id="declared").opened()
+    written.attempt("23-1", challenge_id=23).turn(
+        ("ls", b"a"),
+        said=(
+            "The source is solvable, but I cannot reach the service.\n"
+            "UNWINNABLE: the questionnaire service connection details are behind the Board login, "
+            "and no account credentials were provided in this environment.",
+        ),
+    ).over(CUT_SELF_REPORTED_IMPOSSIBLE)
+    run = written.closed()
+
+    code, said = answer(eval_alarm, [run.path], capsys)
+
+    assert code == 1
+    assert "UNWINNABLE: the questionnaire service connection details" in said
+    assert "no phrase in the Claims matches" not in said
+
+
 def test_a_premature_quit_is_derived_from_the_lines_and_never_from_a_field(tmp_path, capsys):
     """ADR-0014: refusal and premature-quit are queries, not fields, and nothing is added to the
     closed Cut vocabulary. A turn that came back of its own accord with another turn after it is

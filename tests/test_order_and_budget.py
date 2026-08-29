@@ -197,6 +197,16 @@ def test_a_solved_challenge_is_out_and_an_unsolved_one_never_is(scheduler):
     assert ranked == [2]
 
 
+def test_a_challenge_the_run_just_solved_is_out_before_the_board_says_so(scheduler):
+    """A solve arrives out of band from Intake, so the Board's copy of the snapshot still lists the
+    Challenge unsolved. The Run's own floor takes it out until the next sync reconciles it (#151)."""
+    board = seen(sighting(1), sighting(2))
+
+    assert ranking(scheduler, board) == [1, 2]
+    assert ranking(scheduler, board, solved=(1,)) == [2]
+    assert scheduler.acquire(board, solved=(1,)).challenge.challenge_id == 2
+
+
 def test_a_shared_isolated_challenge_is_ineligible_because_it_is_undeployable_by_us(scheduler):
     """POST, PATCH *and* DELETE all fail on a `shared` Instance — only an admin ever deploys one
     (`solver/instance.py`). That is a fact about the Board rather than a judgement about the

@@ -19,6 +19,12 @@ in `solver/stall.py` is deliberately tight — MIRAGE-Bench measures agents fabr
 Challenge that really was impossible or a phrase that matched too loosely, and only the prose tells
 them apart. It lives in `claims/` beside a `/state` stream and is dropped from a promoted one, so
 run this against `state/runs/<id>` when the answer matters.
+
+**The declaration is read before the phrases**, in the matcher's own order (`stall.said`). Since
+#143 the marker is the way this alarm is normally reached and the phrases are the residue — a model
+giving up in words nobody chose — so a query that searched the phrases alone answered *no phrase
+matches the matcher as it stands today* about the two Attempts that had used the marker exactly as
+asked, which is this script's own words for a false positive (#149).
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import stream  # noqa: E402
 from solver.record import CUT_SELF_REPORTED_IMPOSSIBLE  # noqa: E402
-from solver.stall import Thresholds  # noqa: E402
+from solver.stall import DECLARES_IMPOSSIBLE, Thresholds, declared  # noqa: E402
 
 # How much of the sentence to print. Enough to judge the match, short enough that a fired alarm
 # stays one line per Attempt.
@@ -41,10 +47,19 @@ SHOWN = 160
 
 
 def _why(run: stream.Run, attempt: stream.Attempt) -> str:
-    """The phrase that tripped it, out of what the model actually said — or why we cannot show one."""
+    """What tripped it, out of what the model actually said — or why we cannot show one.
+
+    Both halves of the matcher, in the order `stall.said` reads them. The declaration first because
+    it is the one the model was *asked* for: where it is present it is the whole reason, and the
+    phrase search below it would either miss it or quote some unrelated sentence that happened to
+    carry one of the five.
+    """
     said = run.said(attempt)
     if not said:
         return "no Claim body beside this stream"
+    for _, prose in said:
+        if line := _declaration(prose):
+            return line
     for _, prose in said:
         lowered = prose.lower()
         for phrase in Thresholds().impossible:
@@ -52,6 +67,20 @@ def _why(run: stream.Run, attempt: stream.Attempt) -> str:
                 at = lowered.index(phrase)
                 return " ".join(prose[max(0, at - 40) : at + SHOWN].split())
     return "no phrase in the Claims matches the matcher as it stands today"
+
+
+def _declaration(prose: str) -> str:
+    """The line the model declared on, as it wrote it — or the empty string where it did not.
+
+    `declared` answers *whether*, which is what the stall call needs and not what a reader does, so
+    the line is found again here rather than returned from there: a Watch that handed back the text
+    it matched would be carrying prose into the one module ADR-0005 keeps prose out of.
+    """
+    if not declared(prose):
+        return ""
+    lines = (line.lstrip() for line in prose.splitlines())
+    found = next(line for line in lines if line.upper().startswith(DECLARES_IMPOSSIBLE))
+    return " ".join(found[:SHOWN].split())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
