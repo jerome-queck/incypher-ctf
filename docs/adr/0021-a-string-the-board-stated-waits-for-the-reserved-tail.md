@@ -21,7 +21,9 @@ not demoted to `unverified` — it is not a candidate at all*:
 **That last clause is wrong, and this record supersedes it.** `_refuses` returns the empty string for
 every strength where `slots.unlimited` holds, and Brunner reports `max_attempts` 0 on all 74
 Challenges. So on the one Board we have played, `unverified` is not a holding pen — it is a
-submission. A model that restates the example while narrating what it tried spends a live slot on the
+submission. (That last sentence stopped being true on 29 August 2026: ADR-0027 makes `unverified`
+exactly the holding pen it was not here, on a Board that states no budget. The argument below is
+unaffected — it turns on `stated` being the one strength there is evidence *against*.) A model that restates the example while narrating what it tried spends a live slot on the
 Board's own decoy, which is the defect ADR-0019 was written to remove, arriving by the other door.
 
 Everything else in ADR-0019 stands. The `source` fact it added is what makes this record's rule
@@ -76,7 +78,9 @@ Two properties fall out and are worth naming:
 
 - **The strength vocabulary is five, not four**, in `CONTEXT.md` and in `solver/flag.py`'s ladder.
   `STRENGTHS` is written as a sequence precisely so that adding one is an ordering decision rather
-  than an edit in five places.
+  than an edit in five places. It became six in
+  [ADR-0027](0027-one-flag-per-challenge-and-the-solver-bounds-what-the-board-does-not.md), which
+  is the sequence earning that.
 - **A Run cut before its tail never submits a `stated` candidate.** A crash, or a window that closes
   during an Attempt, loses it. That is the same exposure every held candidate already has.
 - **Nothing measures how often this fires.** The four gate Runs cannot show how often a model
