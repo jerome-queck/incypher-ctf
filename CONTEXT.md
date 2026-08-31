@@ -322,6 +322,19 @@ stops "we found the Flag" from meaning seven different things.
 _Avoid_: found flag, the flag (before a verdict), guess — *guessed* is one of the seven strengths
 rather than the word for all of them
 
+**Approach label**:
+The one model-authored field that crosses an Attempt boundary — a short line **declaring what the
+model is about to try**, written at the start of a turn and lifted out of a Claim by its marker.
+It is a statement of intent and never a report of what happened: nothing checks it against the
+commands that followed, because its value is *differential* — a label that changes is a new
+approach, a label that repeats is not
+([ADR-0031](docs/adr/0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md)).
+It is declared before the work because a Cut kills the model without warning, so anything asked for
+at the end of a turn is asked for at the one moment a Cut prevents.
+_Avoid_: summary, conclusion, finding — the model may name what it is trying and may never state
+what it concluded (ADR-0005). Not **Claim** either: a Claim is the prose, and the label is the one
+line lifted out of it.
+
 **Checkpoint**:
 An environment state change that can be re-verified by replaying a command: a shell that answers, a
 route that was 403 and is now 200, an archive that extracted, a crash that reproduces. A Checkpoint

@@ -1,5 +1,17 @@
 # There is no queue, and the clock chooses a working set
 
+> **One term deleted by
+> [ADR-0031](0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md).**
+> Order, the working set, Tier's one-way movement and the spend ceiling all stand. What goes is
+> `w_impossible` — the `− w_impossible × self_reported(c)` term in *The function*, its Consequence
+> bullet, and *Corrections to ADR-0009* item 1, which is written **as** that penalty. There is
+> still no queue and a cut Challenge is still not placed anywhere; what replaces the penalty is
+> `spend_norm` plus a demotion that finally counts Attempts as well as seconds. The reasoning that
+> chose *large and non-decaying* — *"a model that called something impossible will call it
+> impossible again"* — is what the evidence overtook: the cause has fired twice ever, and both
+> times it was wrong. `cut:self-reported-impossible` is kept exactly as ADR-0009 wants it, an alarm
+> the aim is for never to fire; it simply no longer moves a rank.
+
 > **Corrected in one claim by [ADR-0016](0016-an-empty-list-is-not-an-empty-board.md)**, found
 > hours after this record merged. Order, the working set, Tier's one-way movement and every
 > rejected alternative below all stand. What is overtaken is the scoreboard Consequence's
