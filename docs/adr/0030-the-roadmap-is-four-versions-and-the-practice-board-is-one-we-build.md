@@ -120,10 +120,15 @@ discharge v1's Pending Instance clause** — ADR-0026 is explicit that a fake is
 clause exists to distrust, and only a Board can discharge it.
 
 What the local board must replicate, what it must deliberately not, and what seeds it are
-[#158](https://github.com/jerome-queck/incypher-ctf/issues/158)'s to settle. One correction that
-record already carries and this one repeats, because it is the obvious wrong assumption: the
-`ctf-workspace` repository is **not** a challenge-content source — its 182 challenges are a bare
-`README.md` and an empty-flag `meta.yml` each.
+[#158](https://github.com/jerome-queck/incypher-ctf/issues/158)'s to settle. **What seeds it is in
+better shape than this repository has been recording.** Measured 31 Aug 2026 against
+`jerome-queck/ctf-workspace`: **398 challenges across nine competitions, 271 of them carrying a real
+flag** in `meta.yml` — every one of the 110 empty ones is `status: stuck`, which is to say never
+solved rather than never recorded. An earlier audit called that repository *"not a challenge-content
+source"* on the strength of a sample that happened to be stuck challenges, and that claim is
+withdrawn here so it stops being repeated. **Handouts are linked rather than committed** — 259 of
+412 challenge READMEs carry a URL — so the open question for the rig is whether those links still
+resolve now that the competitions are over, not whether content exists.
 
 ## External CTFs are opportunities, never gates
 
