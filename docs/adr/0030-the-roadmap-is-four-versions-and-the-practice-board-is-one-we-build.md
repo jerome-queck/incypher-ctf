@@ -66,8 +66,13 @@ the Instance clauses on the local board, which Brunner structurally cannot ask.
    model before it can write what it tried. **Nothing measures this clause yet** — ADR-0031 makes
    the measurement a v2 deliverable.
 4. **The carry is bounded by construction.** No Attempt's carried context exceeds the ceiling
-   declared in code. The ceiling's value belongs to the Attempt-boundary work; the gate asserts the
-   bound holds, never a magic number.
+   declared in code. The gate asserts the bound holds, never a magic number — the value is
+   [ADR-0031](0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md)'s,
+   which sets **one 16 KiB ceiling over the whole rendered block** with the tried list as the
+   elastic section. **The assertion cannot be a query over `runs/`.** `scripts/promote_run.py`
+   leaves bodies behind, so a promoted stream cannot answer a question about carried context at
+   all; the bound is asserted where the block is composed, in code or in `pytest`, and building
+   that is a v2 deliverable. Nothing asserts it today.
 5. **Solve rate is reviewed as a direction, not a threshold.** *Is Attempt 90 as good as Attempt 3?*
    — the first third of Attempts against the last third, recorded and read at the gate. It is
    deliberately not pass/fail: one venue yields too few samples for a threshold to mean anything,
