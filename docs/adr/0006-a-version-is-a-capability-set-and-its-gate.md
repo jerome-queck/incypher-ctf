@@ -1,5 +1,12 @@
 # A version is a capability set and its gate, never a date
 
+> **Superseded by [ADR-0030](0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md).**
+> The thesis in this record stands and is restated there. **The roadmap table below is historical**
+> — four of its five gates became unreachable as written and v2's venue binding no longer exists.
+> ADR-0030 carries the live table, and the mapping that resolves a version number written here
+> (old v2 + old v3 → v2, old v4 → v3, old v5 → v4) against it. Read this record for the reasoning;
+> read ADR-0030 for what is being built.
+
 > **Superseded in part by [ADR-0008](0008-one-image-for-every-board-and-two-seams-instead-of-one.md).**
 > The roadmap, the gates and the venue bindings below all stand. Only the Consequence that the ADK
 > "integrates behind the same seam the Board sits behind" is overtaken: there are two seams, and the

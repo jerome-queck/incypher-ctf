@@ -2,7 +2,7 @@
 
 `acquire()` answers a Challenge **and** its budget; `release(outcome)` gives it back. The two are
 one surface on purpose: a design where something else decides how long an Attempt gets is a design
-where the paralleliser v3 wants is a rewrite rather than *"hold N instead of one"*. v1 holds
+where the paralleliser v2 wants is a rewrite rather than *"hold N instead of one"*. v1 holds
 exactly one, and asking for a second while one is out is refused rather than quietly allowed.
 
 **There is no queue.** [ADR-0015](../docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)
@@ -138,8 +138,8 @@ class Dials:
     # Challenge is on three solves has still told us nothing about the rest of it.
     explore_at_most_solves: int = 0
 
-    # How many Attempts may be held at once — read by `acquire`, and pinned at one so that v3
-    # tunes this number rather than reshaping the scheduler. What v3 still has to settle is what a
+    # How many Attempts may be held at once — read by `acquire`, and pinned at one so that v2
+    # tunes this number rather than reshaping the scheduler. What v2 still has to settle is what a
     # second concurrent hold means for the ranking; the cap is what is settled here.
     concurrency: int = 1
     # The strength every Attempt is worked at. Taken from `codex.Invocation` rather than retyped,
@@ -333,7 +333,7 @@ class Scheduler:
             return None
         # What is already being worked is not picked again. A no-op while `concurrency` is one,
         # and the difference between a second hold and a second Attempt at the same Challenge for
-        # any v3 that raises it.
+        # any v2 that raises it.
         available = [one for one in ranked if one.challenge_id not in self._held]
         if not available:
             return None

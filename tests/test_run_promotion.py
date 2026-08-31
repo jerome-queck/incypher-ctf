@@ -4,7 +4,7 @@ Two things are on trial, and they pull against each other.
 
 The first is that the record **survives whole**. `runs/<run_id>.jsonl` is the stream as written, not
 a projection of it, because [ADR-0009](../docs/adr/0009-store-what-was-observed-derive-every-judgement.md)'s
-whole payoff is that a projection can be redefined in v4 *against v1 runs* — and a promotion that
+whole payoff is that a projection can be redefined in v3 *against v1 runs* — and a promotion that
 quietly dropped the `step-begin` half of a pair, or replaced a Run with a shorter copy of itself,
 would take that away without anyone noticing.
 

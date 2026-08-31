@@ -30,10 +30,20 @@ instanced Challenge to deploy, so the Solver was never asked. The path ships com
 tested against a fake transport; what is missing is a real one.
 [ADR-0026](docs/adr/0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)
 is the verdict and its two rules: the first Board that can prove it discharges it, and it expires
-at v5's gate.
+at the final gate.
 
-A second part is outstanding and it waits on somebody else. The competition's **Agent Development Kit**
-is released 14 September 2026, eight days before the scored run, and
+**Three versions remain, and the roadmap they follow was re-locked on 31 August 2026** —
+[ADR-0030](docs/adr/0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md) replaces
+ADR-0006's table and carries the mapping for any version number written before it. **v2 is in
+progress**: the failsafes and the solve rate, gated on a 5.5-hour unattended Run against
+BrunnerCTF Global and on the Instance path exercised against a board we build. That local board is
+the part worth knowing about, because it is a reversal — the live practice calendar was measured and
+only three of its 42 events run CTFd at all, so a roadmap that gates on somebody else's event is
+betting on a coin-flip. **v3** integrates the ADK against the IN-CYPHER batch from 14 September, and **v4**
+is the freeze and the only true go/no-go, on-site 21–22 September.
+
+The ADK is the one part that waits on somebody else. It is released 14 September 2026, eight days
+before the scored run, and
 [ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md) puts it behind
 `Target` rather than `Board`. The Solver is built to *accept* it, never on top of it — one that
 could not ship without it would have bet the competition on an unseen release. `CONTEXT.md`'s **ADK**

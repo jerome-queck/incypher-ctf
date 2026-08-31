@@ -10,7 +10,7 @@ Four rules, and each of them is here because of what it costs to get wrong:
 
 - **The stream, not a projection.** The file is copied byte for byte. A per-Attempt summary row
   would be a judgement frozen at the moment it was taken, and every number in v1 is uncalibrated —
-  the whole payoff of ADR-0009 is that a projection can be redefined in v4 *against v1 runs*.
+  the whole payoff of ADR-0009 is that a projection can be redefined in v3 *against v1 runs*.
 - **Bodies stay behind.** Observation and Claim bodies live in files beside the stream and are not
   copied, so the JSONL keeps its digests and the repository does not grow gigabytes of command
   output. What that costs is named in ADR-0009: delete `/state` and those digests can never be
