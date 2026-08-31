@@ -1,5 +1,24 @@
 # A gate clause with no venue is Pending, and the gate closes without it
 
+> **The two `docs/competitions/compfest-2026.md` citations below now point at a file that is
+> gone**, removed by [#171](https://github.com/jerome-queck/incypher-ctf/issues/171). COMPFEST is
+> dead as a venue — a Cloudflare Managed Challenge on every path to every client shape, and the
+> board closed 2026-08-31T00:00:00Z — and wayfinder map
+> [#153](https://github.com/jerome-queck/incypher-ctf/issues/153) rules it out of scope, so its
+> three tracked files came out of `docs/competitions/`. **Nothing in this record's reasoning
+> depends on them.** The chall-manager question it credits that file with stating is stated in
+> *this record's own sentence* — check the plugin's asset URL and whether any Challenge carries a
+> `dynamic_iac` type — so the citation was attribution and never the only copy.
+>
+> Two things a later reader should know. The files are recoverable at **a1580d8**, the last
+> commit that held them, which `git log --diff-filter=D -- docs/competitions/` also finds — and
+> that matters beyond this record, because ADR-0027's premise that *COMPFEST names a wrong-Flag
+> retry loop beside DDoS* is sourced from the deleted `compfest-2026.rules.txt` without citing its
+> path. And the detection method above has since been overtaken: ADR-0030 records that **a status
+> code is not a platform fingerprint**, because nine hosts answered 200 on both
+> `/api/v1/challenges` and the chall-manager `mana` endpoint while serving HTML — content-type,
+> and the body compared against the landing page, are the test.
+
 **A gate clause that no binding of its version could produce evidence for is *Pending*: the gate
 closes, the clause is carried, and it is discharged by the first Board that can prove it.** This
 amends [ADR-0006](0006-a-version-is-a-capability-set-and-its-gate.md), which has two verdicts and
