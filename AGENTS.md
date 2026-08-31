@@ -163,3 +163,14 @@ v1 has landed against [spec #63](https://github.com/jerome-queck/incypher-ctf/is
 `v1`, with four gate Runs promoted under `runs/` and the layout in `MAP.md`. The **ADK
 integration** is the one part still gated on an outside release — ADR-0008 expects it behind
 `Target` rather than `Board`, and names the kit's arrival as the date that expectation gets tested.
+
+**The roadmap is ADR-0030, and ADR-0006's table is historical.** Three versions remain — v2 (the
+failsafes and the solve rate), v3 (the ADK against IN-CYPHER from 14 Sep), v4 (freeze and go/no-go,
+on-site 21–22 Sep) — and a version number written anywhere before 31 August 2026 resolves through
+ADR-0030's mapping table, because **the older ADRs were deliberately not rewritten**: a `v3` inside
+ADR-0005 or ADR-0015 records what was decided then. Two standing consequences for a session working
+here. **The practice board is one we build**, not an event — the live calendar was measured and only
+about 13% of it runs CTFd, so no version gates on somebody else's competition and an external board
+can never fail a gate. And **a status code is not a platform fingerprint**: nine hosts answered
+HTTP 200 on `/api/v1/challenges` *and* on the chall-manager `mana` endpoint with a single-page-app
+catch-all, so content-type and the body compared against the landing page are the test.

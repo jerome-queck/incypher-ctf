@@ -448,7 +448,10 @@ the penalised act, so "we hold a spare key" is not a chain and does not count as
 *cannot* do is add headroom — a quota burned through a different door is burned the same, which is
 why no proxy or shim sits in it (ADR-0010, ADR-0011).
 The chain switches on **exhaustion and nothing else** — no Category, Tier or cost input picks the
-model, because v1 runs one brain per Run and routing is v3's
+model, because the Solver runs one brain per Run and **routing was struck from the roadmap** when
+the Solver became Codex-only
+([ADR-0030](docs/adr/0030-four-versions-remain-and-the-practice-board-is-one-we-build.md)): one
+vendor behind one seam leaves nothing to route between
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). Which
 credential leads is a config value rather than code, so a practice Run can lead with a different one
 without a rebuild.
@@ -477,7 +480,29 @@ run, so it sits behind the same adapter seam a Board does, and a Solver that can
 has bet the competition on an unseen release (ADR-0006).
 _Avoid_: SDK, framework
 
-One term is about how this repository is governed rather than about the domain:
+Three terms are about how this repository is governed rather than about the domain:
+
+**Version**:
+A capability set and the **Gate** that closes it — never a date. A date and a venue are *bindings*
+to a version, re-bound whenever the world moves, and re-binding one is not a change to the roadmap
+(ADR-0006's thesis, restated by
+[ADR-0030](docs/adr/0030-four-versions-remain-and-the-practice-board-is-one-we-build.md), which
+carries the live table). A version number written before 31 August 2026 belongs to the older
+numbering and resolves through ADR-0030's mapping, because the ADRs that used it were deliberately
+left as records of their own moment.
+_Avoid_: milestone, release, phase, sprint. Not **tag** either: `v1` is a git tag *because* the
+version closed, and the tag is the receipt rather than the thing.
+
+**Gate**:
+The scheduled review that closes a **Version**. It reopens the prior version's decisions feature by
+feature, and it reaches one of three verdicts: **pass**; **fail**, which re-scopes the *next*
+version's capability set and is written down; or **Pending**, for a clause no binding of that
+version could produce evidence for
+([ADR-0026](docs/adr/0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)).
+**A gate does not block** — it never pauses the calendar, because the calendar is fixed by a
+competition that will not wait. The single exception is the final gate, which is a real go/no-go.
+_Avoid_: milestone, review, sign-off. Emphatically not **Checkpoint**, which is a Run-level record
+this glossary already defines — a Gate is a verdict on a Run, a Checkpoint is a thing inside one.
 
 **Seed**:
 The Jerome-Group private template this repository was generated from, and the org machinery that

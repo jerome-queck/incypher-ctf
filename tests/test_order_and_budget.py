@@ -108,7 +108,7 @@ def worked(scheduler, snapshot, *, seconds=60.0, cause=CUT_BUDGET, checkpoints=0
 
 def test_acquire_answers_a_challenge_and_its_budget_together(scheduler):
     """The pair is the point. A design where something else decides how long an Attempt gets is one
-    where v3's paralleliser is a rewrite rather than *"hold N"*."""
+    where v2's paralleliser is a rewrite rather than *"hold N"*."""
     pick = scheduler.acquire(seen(sighting(1)))
 
     assert pick.challenge.challenge_id == 1
@@ -127,8 +127,8 @@ def test_v1_holds_exactly_one_attempt_at_a_time(scheduler):
 
 
 def test_how_many_are_held_at_once_is_the_dial_and_not_the_shape_of_the_code(recorder, clock):
-    """*"v3 tunes a number rather than reshaping the scheduler"* is only true if the number is the
-    thing `acquire` reads. What a second concurrent hold means for the ranking is still v3's to
+    """*"v2 tunes a number rather than reshaping the scheduler"* is only true if the number is the
+    thing `acquire` reads. What a second concurrent hold means for the ranking is still v2's to
     settle; the cap is what is settled here."""
     holding_two = Scheduler(
         Window.opened(recorder.run_dir, lasting=COMPETITION, now=OPENED),
@@ -547,7 +547,7 @@ def test_a_challenge_that_arrived_late_is_ranked_on_its_count_and_not_as_though_
     assert places.index(3) < places.index(2), "its own count carries it, rather than a velocity of zero"
 
 
-# The slots v3 tunes rather than reshapes
+# The slots v2 tunes rather than reshapes
 
 
 def test_concurrency_and_reasoning_effort_are_pinned_config_rather_than_shapes_of_the_code():
