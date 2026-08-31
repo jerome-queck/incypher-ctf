@@ -57,9 +57,14 @@ the Instance clauses on the local board, which Brunner structurally cannot ask.
 1. **Zero intervention.** No keystroke, no restart by hand, no configuration touched mid-Run.
 2. **No Instance leak and no mana deadlock**, exercised against the local board: deploy, renew,
    terminate, the Attempt-boundary sweep and a mana refusal, none of them an in-process fake.
-3. **A cut Attempt records what it tried.** `approach_label` non-empty in **≥80% of cut Attempts**.
-   Measured today at 5 of 40 — a cut kills the model before it writes the one field the next
-   Attempt needs.
+3. **A cut Attempt records what it was trying.** `approach_declared` non-empty in **≥80% of cut
+   Attempts**. Amended by
+   [ADR-0031](0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md) in
+   three ways, threshold unchanged: the denominator is **Attempts**, where the *"5 of 40"* written
+   here counted **turns**; the per-Attempt baseline over `runs/*.jsonl` is **3 of 25** cut
+   Attempts; and the field is now a declaration made *before* the work, because a cut kills the
+   model before it can write what it tried. **Nothing measures this clause yet** — ADR-0031 makes
+   the measurement a v2 deliverable.
 4. **The carry is bounded by construction.** No Attempt's carried context exceeds the ceiling
    declared in code. The ceiling's value belongs to the Attempt-boundary work; the gate asserts the
    bound holds, never a magic number.
