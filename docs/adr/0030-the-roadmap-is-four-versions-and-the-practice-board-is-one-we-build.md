@@ -1,4 +1,4 @@
-# Four versions remain, and the practice board is one we build
+# The roadmap is four versions, and the practice board is one we build
 
 > **Supersedes [ADR-0006](0006-a-version-is-a-capability-set-and-its-gate.md).**
 > Its thesis stands and is restated here — a version is a capability set and its gate, a date and a
@@ -7,11 +7,16 @@
 > and ADR-0006 for the reasoning that produced the shape.
 
 [ADR-0006](0006-a-version-is-a-capability-set-and-its-gate.md) planned five versions. v1 has landed
-and its gate is closed, so four remain — and the plan for those four was written against a practice
-calendar that has since been measured and found nearly empty. This record re-locks the roadmap and
+and its gate is closed, and this record merges two of the four that were left — so **the roadmap is
+four versions and three of them are still ahead**. The plan for those three was written against a
+practice calendar that has since been measured and found nearly empty. This record re-locks it and
 makes two decisions ADR-0006 could not have made: **old v2 and old v3 merge**, because four of old
-v2's six capabilities shipped inside v1; and **the venue that v2 and v3 gate on is a board we
-build**, because the live calendar cannot supply one.
+v2's six capabilities already had code in v1 — per-Challenge timeboxes, the anti-derailment suite,
+crash-restart continuity, and a partial mana-aware Instance lifecycle — leaving only PID-1
+supervision and `/state` bounding with none. **What shipped is not the same as what works**, which
+is why three of those four reappear below as things v2's gate *measures* rather than assumes. The
+second decision: **the venue v2 gates on is a board we build**, because the live calendar cannot
+supply one.
 
 ## The renumber, and what it does not touch
 
@@ -19,7 +24,7 @@ Old v2 + old v3 become **v2**. Old v4 becomes **v3**. Old v5 becomes **v4**.
 
 | Written before this record | Reads now |
 |---|---|
-| v2 (PID-1, endurance, timeboxes, anti-derailment, mana lifecycle) | **v2** |
+| v2 (PID-1, crash-restart, endurance, timeboxes, anti-derailment, mana lifecycle) | **v2** |
 | v3 (concurrency, tool inventory, roster, eval harness, scoreboard Triage) | **v2** |
 | v4 (ADK, PoW, healthcare, held-out eval) | **v3** |
 | v5 (adapt, freeze, go/no-go, deadline-awareness, credential posture) | **v4** |
@@ -41,8 +46,8 @@ do something. Roughly fifteen edits rather than ninety-five, and no falsified re
 |---|---|---|---|
 | **v1** | *(as shipped — see [ADR-0006](0006-a-version-is-a-capability-set-and-its-gate.md))* | **Closed**, with the Instance clause **Pending** ([ADR-0026](0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)) | — |
 | **v2** | **The failsafes are right, and the solve rate holds up.** PID-1 supervision, `/state` bounding, the Attempt-boundary carry, a bounded submission path, reasoning/execution concurrency, per-Category tool inventory, the eval harness, and an Order that works on a board with no crowd | Five clauses, below | **BrunnerCTF Global** and **the local board** |
-| **v3** | ADK behind `Target`, the PoW gate, healthcare-scenario knowledge, held-out eval | Solves real IN-CYPHER Challenges | IN-CYPHER online batch, opens 14 Sep 10:00 SGT |
-| **v4** | Adapt day 1, freeze, go/no-go checklist, deadline-awareness from an absolute timestamp, final credential posture | Frozen, crash-proof, autonomous — **the only true go/no-go** | On-site, 21–22 Sep |
+| **v3** | ADK behind `Target`, the PoW gate, healthcare-scenario knowledge, held-out eval | Three clauses, below | IN-CYPHER online batch, opens 14 Sep 10:00 SGT |
+| **v4** | Adapt day 1, freeze, go/no-go checklist, deadline-awareness from an absolute timestamp, final credential posture | Every checklist item ticked or **consciously waived, with the waiver written down** — the checklist is v4's own deliverable, and the gate is that no item is silently unanswered. **The only true go/no-go** | On-site, 21–22 Sep |
 
 ### v2's gate, in a form that passes or fails
 
@@ -64,6 +69,18 @@ the Instance clauses on the local board, which Brunner structurally cannot ask.
    and a noisy fail would re-scope v3 for no reason.
 
 Clauses 1–4 pass or fail. Clause 5 informs.
+
+### v3's gate, in the same form
+
+1. **The ADK is integrated behind `Target`**, not behind `Board` — ADR-0008's boundary, asserted by
+   a Run that reaches a Challenge's service through it.
+2. **The real PoW scheme is cleared on at least one Challenge.** Not a scheme we invented: the
+   algorithm is unpublished until 14 September, and anything built before it is our own fiction.
+3. **At least one Flag from an Instance the Solver deployed and terminated itself.** This is also
+   what discharges v1's Pending clause, on the first Board that can ask it.
+
+A clause here can still come back **Pending** if the batch turns out not to contain the Challenge
+shape it needs — that mechanism is ADR-0026's and this gate inherits it unchanged.
 
 ## Why the practice board is one we build
 
@@ -150,7 +167,7 @@ that can be mistaken for a brute-forcer is one venue-ban away from having no boa
   now *expected* rather than hoped for — `ctfd-chall-manager` is confirmed installed on the IN-CYPHER
   board, so v3's binding is the first that can prove the clause, and it will discharge there in the
   ordinary course rather than reaching the expiry.
-- **A gate still does not block.** Four gates and twenty-four days is less slack than ADR-0006 had,
+- **A gate still does not block.** Three gates and twenty-two days is less slack than ADR-0006 had,
   which is an argument for the rule and not against it: a gate that could halt the schedule would
   halt it once, and every version behind it would be late for a reason nobody chose.
 - **v2 is where the Flags currently being lost are recovered.** Survivability and solve rate are the

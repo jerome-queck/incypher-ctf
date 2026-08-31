@@ -450,7 +450,7 @@ why no proxy or shim sits in it (ADR-0010, ADR-0011).
 The chain switches on **exhaustion and nothing else** — no Category, Tier or cost input picks the
 model, because the Solver runs one brain per Run and **routing was struck from the roadmap** when
 the Solver became Codex-only
-([ADR-0030](docs/adr/0030-four-versions-remain-and-the-practice-board-is-one-we-build.md)): one
+([ADR-0030](docs/adr/0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md)): one
 vendor behind one seam leaves nothing to route between
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). Which
 credential leads is a config value rather than code, so a practice Run can lead with a different one
@@ -486,7 +486,7 @@ Three terms are about how this repository is governed rather than about the doma
 A capability set and the **Gate** that closes it — never a date. A date and a venue are *bindings*
 to a version, re-bound whenever the world moves, and re-binding one is not a change to the roadmap
 (ADR-0006's thesis, restated by
-[ADR-0030](docs/adr/0030-four-versions-remain-and-the-practice-board-is-one-we-build.md), which
+[ADR-0030](docs/adr/0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md), which
 carries the live table). A version number written before 31 August 2026 belongs to the older
 numbering and resolves through ADR-0030's mapping, because the ADRs that used it were deliberately
 left as records of their own moment.

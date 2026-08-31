@@ -1,6 +1,6 @@
 # A version is a capability set and its gate, never a date
 
-> **Superseded by [ADR-0030](0030-four-versions-remain-and-the-practice-board-is-one-we-build.md).**
+> **Superseded by [ADR-0030](0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md).**
 > The thesis in this record stands and is restated there. **The roadmap table below is historical**
 > — four of its five gates became unreachable as written and v2's venue binding no longer exists.
 > ADR-0030 carries the live table, and the mapping that resolves a version number written here

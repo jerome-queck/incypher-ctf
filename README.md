@@ -33,13 +33,13 @@ is the verdict and its two rules: the first Board that can prove it discharges i
 at the final gate.
 
 **Three versions remain, and the roadmap they follow was re-locked on 31 August 2026** —
-[ADR-0030](docs/adr/0030-four-versions-remain-and-the-practice-board-is-one-we-build.md) replaces
+[ADR-0030](docs/adr/0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md) replaces
 ADR-0006's table and carries the mapping for any version number written before it. **v2 is in
 progress**: the failsafes and the solve rate, gated on a 5.5-hour unattended Run against
 BrunnerCTF Global and on the Instance path exercised against a board we build. That local board is
 the part worth knowing about, because it is a reversal — the live practice calendar was measured and
-only about 13% of it runs CTFd at all, so a roadmap that gates on somebody else's event is betting
-on a coin-flip. **v3** integrates the ADK against the IN-CYPHER batch from 14 September, and **v4**
+only three of its 42 events run CTFd at all, so a roadmap that gates on somebody else's event is
+betting on a coin-flip. **v3** integrates the ADK against the IN-CYPHER batch from 14 September, and **v4**
 is the freeze and the only true go/no-go, on-site 21–22 September.
 
 The ADK is the one part that waits on somebody else. It is released 14 September 2026, eight days
