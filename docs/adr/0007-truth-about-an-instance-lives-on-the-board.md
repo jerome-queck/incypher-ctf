@@ -32,6 +32,33 @@
 > this is an existing idiom rather than a new dependency, and Brunner emits the identical block
 > from a fully custom theme.
 >
+> **Two corrections from the adversarial pass, which are the reason this paragraph is not the one
+> first written.** `userId` proves who is *viewing*; the rows are *team* property. The plugin's own
+> route reads `source_id = current_user.get_current_user().team_id` in team mode, so an admin moving
+> our user between teams leaves `userId` matching while the ledger renders another source's rows —
+> and this is the direction that destroys rather than merely leaks. So `teamId` is asserted against
+> `users/me`'s `team_id` **conditionally, when `window.init` says `userMode: "teams"`**, which was
+> the whole objection to gating on it: a `users` -mode board renders `teamId: null` legitimately, and
+> a mode-aware assertion never fires there. And the marker must not become a second single point of
+> failure — a transient blip on `/api/v1/users/me` at boot would otherwise make every instanced
+> Challenge undeployable for the whole Run. Where that read is unavailable, fall back to the
+> **identity observed at boot**: nothing is held at boot, so an identity established then leaks
+> nothing, and the read is lazy rather than eager so a plugin-less Board never pays for it.
+>
+> **What this deliberately does not catch, recorded because it is the failure that most resembles
+> the one the marker exists to stop.** When chall-manager itself is down, the plugin catches
+> `ChallManagerException` and renders *the genuine ledger template, authenticated as us*, with
+> `instances=[]`. That response is 200, carries the table, and carries our real `userId` — **every
+> guard here passes and it reads as "we hold nothing."** The template's `mana_remaining="unknown"`
+> would be the tell, and it is **not rendered on IN-CYPHER**, because `mana_enabled` is
+> `mana_total > 0` and mana measures disabled there. Two smaller ones share the shape: a response
+> truncated between the block and the table passes both guards and returns a *short* row list, which
+> reads as a successful sweep rather than a fault; and `Board.request` sends
+> `Accept: application/json` on this HTML route, so a CTFd or plugin release that honours it would
+> serve a healthy board a JSON body carrying neither `window.init` nor a table. The marker is
+> defended against a page that is not ours. It is not defended against a page that is ours and
+> lying, and no read of this page can be.
+>
 > **There is a fourth state, and it is the opposite of the one the ticket predicted.** It expected
 > *plugin installed but the page unauthenticatable*; that state does not exist on this Board. What
 > does exist is the split the marker creates: **not ours** — `userId` present and `0` or somebody
