@@ -14,6 +14,7 @@ Start here: `README.md`, then `AGENTS.md`.
 | Decisions | Architecture decision records | `docs/adr/` |
 | Agent conventions | The routines an agent follows here, one file per topic | `docs/agents/` |
 | Competitions | The boards we play — a verbatim rules snapshot, our reading of it, and the tracked `<event>.board.json` a Board profile is configured from, three files per event | `docs/competitions/` |
+| Research | Dated primary-source findings that unblock decisions | `docs/research/` |
 | Credentials | Every secret, where it comes from, and how it reaches the container | `docs/credentials.md` |
 | The Solver | The agent's own code — what it refuses to start without, the Board profile it discovers, the seams it reaches the outside world through, the sync that keeps its copy of a moving Board current, the Tier it reads off what that Board states, the ranking and the clock that choose what to work next and for how long, the Board's own files as an Attempt holds them, the recon every Attempt opens with, the prompt it is worked under, the stall call that ends one, the Flag it submits only where its own work produced one, the record it leaves behind, and the reserved tail it ends on | `solver/`, starting at `__main__.py` |
 | The image | The container the Solver ships as — the pinned base, the two package lists and the build-time probe that exercises each on real input, the pinned Codex CLI the adapter spawns, and the allowlist that keeps a secret out of a layer | `Dockerfile`, `.dockerignore` |

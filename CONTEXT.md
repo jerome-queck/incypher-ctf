@@ -102,14 +102,16 @@ _Avoid_: container, deployment, box, and **Lease** — which is our *hold* on an
 its own entry below.
 
 **Lease**:
-Our hold on an Instance — held from the deploy that creates it to the terminate that releases it,
-and **not** the same span as an Attempt. The word was parked through v1's early design on the
-grounds that a hold one-to-one with an Attempt names nothing Attempt does not already name; it is
-coined here because a hold and the work done under it are different things: "the Instance expired",
-"the Attempt was cut" and "we let the Lease go" are three separate facts, and only the middle one is
-about the Challenge. What
-a Lease costs is Mana, which is why one nobody is working is not free, and why the boundary leak
-sweep looks for a Lease nothing is using rather than an Instance nothing is using.
+The Solver's durable claim on an Instance — from reservation, deploy or recovery until a trusted
+Board read proves expiry or the central Lease coordinator explicitly releases or terminates it —
+and **not** the same span as an Attempt or Boot. The word was parked through v1's early design on
+the grounds that a hold one-to-one with an Attempt names nothing Attempt does not already name; it
+is coined here because a hold and the work done under it are different things: "the Instance
+expired", "the Attempt was cut" and "we let the Lease go" are three separate facts, and only the
+middle one is about the Challenge. A Lease may be active, reserved or recoverable while no command
+runs. Only a positively attributed, durably ownerless Lease that survives a grace interval and
+trusted recheck is orphaned; inactivity or an empty/unreadable ledger proves nothing. What a Lease
+costs is Mana, which is why safe reconciliation matters even between Attempts and Boots.
 _Avoid_: hold, reservation, session, and *Instance* — the Instance is the Board's running copy of a
 Challenge, the Lease is our claim on it. The two end at different moments, which is the whole reason
 for the second word.
@@ -224,19 +226,37 @@ the thing the working set is a slice of
 
 ### How the Solver works a Challenge
 
+**Lane**:
+One place in the Solver's bounded capacity for running Attempts concurrently. A Lane carries at
+most one active Attempt; several Lanes let several Attempts make progress at once. The Lane is
+capacity, not durable identity — the Attempt identifies the work and the Lease identifies the
+Instance hold across moments when no command is running.
+_Avoid_: worker, thread, slot, agent (all name an implementation or collide with another domain
+word rather than naming the concurrency boundary)
+
+**Boot**:
+One uninterrupted incarnation of the Solver process inside a **Run**. A Run has one Boot when
+nothing fails and several when a supervisor replaces a failed process. A Boot failure is not by
+itself a Run crash: the Run crashes only when no later Boot can safely continue it. Keeping the
+two apart lets process uptime change without resetting the competition window, the work already
+spent, or the evidence the Run produces.
+_Avoid_: process (the operating-system mechanism rather than the domain boundary), restart (the
+transition between Boots), run (the whole competition window)
+
 **Run**:
 One unattended outing of the Solver at one Board — the whole competition window, several hours and
-many Attempts, from the process starting to it terminating. A Run is the unit everything is
+many Attempts, across one or more Boots. A Run is the unit everything is
 compared *across*: a threshold is calibrated over Runs, a version gate is a verdict on one, and its
 `run_id` is what joins every record ADR-0009 writes. **A Run survives a restart.** If v2's
-supervisor restarts a crashed process the Run continues and a boot counter increments, because the
-thing being measured is hours against a Board rather than the life of a process — treating a
+supervisor starts a later Boot the Run continues, because the thing being measured is hours against
+a Board rather than the life of a process — treating a
 restart as a second Run would silently compare halves against wholes.
-**A Run ends when the competition window closes, or when it crashes — never because the Board looks
-finished.** Challenges drop mid-event, so "nothing left to work" is not something the Solver can
-ever conclude; that is the Run-level counterpart of ADR-0005's rule that a Challenge is never marked
-impossible. Running out of credential is not an ending either: quota windows roll, so capacity comes
-back and the Solver backs off through it (ADR-0010).
+**A Run ends when the competition window closes, it is deliberately stopped, or recovery cannot
+safely produce another Boot — never merely because one Boot failed, and never because the Board
+looks finished.** Challenges drop mid-event, so "nothing left to work" is not something the Solver
+can ever conclude; that is the Run-level counterpart of ADR-0005's rule that a Challenge is never
+marked impossible. Running out of credential is not an ending either: quota windows roll, so
+capacity comes back and the Solver backs off through it (ADR-0010).
 _Avoid_: session, attempt (an Attempt is one Challenge inside a Run — see below), execution. Not
 **Run state** either: that is what a Run *produces*, and it is a separate entry below.
 
@@ -252,6 +272,11 @@ approach labels, never a conclusion
 **An early stop does not produce a second Attempt.** When the solving agent ends its turn with
 budget left the orchestrator re-invokes *inside the same Attempt*, and what that produces is a new
 **Turn** — the entry below.
+**If work continues after a Boot failure interrupted an Attempt, it opens a second Attempt.** The
+interrupted Attempt ends with the spend and evidence it accumulated; a later Boot reconstructs that
+carry, preserves the working directory, and opens a distinct Attempt. It never resumes or reuses
+the identity of half-observed work. No synthetic Attempt is created when none was open, or when
+Recovery cannot safely continue the Run.
 _Avoid_: run (see the Run entry above — the whole competition window, holding many Attempts),
 session, try. Not **Lease** either — a Lease is our hold on the Instance and an Attempt is the work
 done under it, which is why it is a separate word.
@@ -361,12 +386,12 @@ Everything one Run produces and the image could not contain, because none of it 
 Run happens: Intake's copy of the Board, every attachment downloaded, the Steps, Observations and
 Checkpoints of every Attempt, and the telemetry. It lives at `/state`, host-mounted, so it outlives
 the container that wrote it — a container's own filesystem dies with the container, taking the
-Run's whole history with it. **The Solver reads no code and no tool from it**, so deleting it
-mid-run costs the record and not the ability
-([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)). It is output
-with **one exception, and the exception is deliberate**: a Challenge's Working directory — the entry
-below — is read back by the *model* on a later Attempt
-([ADR-0025](docs/adr/0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md)).
+Run's whole history with it. It starts as output and becomes authoritative input to every later
+Boot: the append-only record rebuilds the control state that makes continuing safe. Losing it
+mid-Run therefore loses the authority to continue, never merely the evidence. The Solver still
+reads no code or tool from it. A Challenge's Working directory — the entry below — is separate:
+the model reads it for carry, but because the model can write it, it can never prove identity,
+submission or Lease ownership ([ADR-0032](docs/adr/0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md)).
 _Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not what it is). Not
 "state" bare either — that reads as the Solver's in-memory state, which is a different thing and
 does not survive anything.
@@ -404,10 +429,11 @@ its timing — the failure being designed against is a container that comes up a
 variable quietly unset and runs the full window on a credential that was never there, silent from
 inside and afterwards indistinguishable from bad luck. **A loud refusal at 10:15, with a human
 standing there, is setup rather than Intervention.**
-_Avoid_: error, crash, validation failure, precondition. A **crash** is one of the two ways a Run
-*ends*; a Refusal is a Run that never began. A **model refusal** — the solving model declining to
-work a Challenge it was handed — is a third thing again, derived offline from a stream, joined to
-Category, and never a Cut cause (ADR-0014).
+_Avoid_: error, crash, validation failure, precondition. A terminal **crash** ends a Run only after
+Recovery cannot produce another safe Boot; one Boot failing is neither a crash nor a Refusal. A
+Refusal is a Run that never began. A **model refusal** — the solving model declining to work a
+Challenge it was handed — is a third thing again, derived offline from a stream, joined to Category,
+and never a Cut cause (ADR-0014).
 
 **Promotion**:
 Copying a finished Run's Step stream out of `/state` and into `runs/<run_id>.jsonl`, where it
@@ -429,9 +455,21 @@ eats into it, so the tail is about **doing** the four jobs rather than making ro
 where the submission reserve is released — there is no later Attempt for it to be reserved *for* —
 and where the leak sweep runs with nothing kept, because chall-manager never evicts and an Instance
 still held when the process exits is capacity nobody reclaims.
+Only window closure or deliberate shutdown enters it; a Boot failure does not. The tail is one
+durable, restartable Run phase with a hard deadline: an interrupted tail resumes safe unfinished
+work but never blindly repeats a submission whose outcome is unknown.
 _Avoid_: shutdown, cleanup, teardown, grace period. Not the **submission reserve** inside an
 Instance's own deadline either (`instance.Reserves.submission_seconds`) — that is a different
 reserve, held for a different reason, and the two are deliberately separate numbers.
+
+**Recovery**:
+The owner of an operational fault from its first detection until either a materially changed,
+probationary Boot is safe or the Run can no longer continue safely. Recovery can diagnose beside
+declared long-running work; it does not infer a hang merely from age. It never waits for blind
+restarts to run out, repeats an unchanged Solver-owned failure, deletes evidence or relaxes Board,
+identity, submission or Lease safeguards to make progress look possible.
+_Avoid_: retry, restart, crash loop, repair. A replacement Boot is one action Recovery may permit;
+a Repair Agent is one possible mechanism whose scored-Run authority is separately decided.
 
 ### Secrets and tooling
 
@@ -453,30 +491,25 @@ than reachable (ADR-0011).
 _Avoid_: manual step, human-in-the-loop, babysitting. A **supervisor** restarting a crashed process
 is not intervention either — nobody is present for it, which is the point of building one.
 
-**Credential chain**:
-The ordered credentials the Solver pays for inference with, tried in order and switched **without a
-human** when one is exhausted — a subscription first, metered credit last. The order is the whole
-meaning of the term: a fallback that waits for someone to reach for it is **Intervention**, which is
-the penalised act, so "we hold a spare key" is not a chain and does not count as one. What the chain
-*cannot* do is add headroom — a quota burned through a different door is burned the same, which is
-why no proxy or shim sits in it (ADR-0010, ADR-0011).
-The chain switches on **exhaustion and nothing else** — no Category, Tier or cost input picks the
-model, because the Solver runs one brain per Run and **routing was struck from the roadmap** when
-the Solver became Codex-only
-([ADR-0030](docs/adr/0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md)): one
-vendor behind one seam leaves nothing to route between
-([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). Which
-credential leads is a config value rather than code, so a practice Run can lead with a different one
-without a rebuild.
-_Avoid_: failover, fallback key, provider list. Not **provider abstraction** either: that is the
-seam the chain is expressed through, and a separate decision — settled as the Adapter below.
+**Inference route**:
+One tested path by which Codex works an Attempt: native Codex first, or a private single-owner CPA
+path after it proves the same tool, deadline, record and safety contract. The two routes are not two
+credentials or two pools of capacity: both spend the same personal subscription and reach the same
+backend. A route changes only on a classified route-specific failure. Shared quota exhaustion causes
+a declared wait or a separately pre-authorised saved reset; it never causes proxy rotation around a
+limit. Claude, local models and metered API inference are outside the set
+([ADR-0032](docs/adr/0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md)).
+Which model, effort, harness and Agent role receives work is a routing decision still being measured;
+"Codex-only" does not mean one model, one Lane or one tool loop.
+_Avoid_: credential chain, provider list, fallback key. Not **Adapter** either: an Adapter implements
+the route's seam, while the route is the end-to-end way an Attempt gets worked.
 
 **Adapter**:
-One concrete implementation behind one of the Solver's seams — `Board`, `Target`, or a credential in
-the chain. Adapters share a *shape* and never a base class, which is a deliberate rule rather than
+One concrete implementation behind one of the Solver's seams — `Board`, `Target`, or an Inference
+route. Adapters share a *shape* and never a base class, which is a deliberate rule rather than
 an oversight: an abstract base written before the second implementation exists encodes a guess about
 what varies ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)).
-A credential's Adapter is asked to work an Attempt, not to answer a prompt — it is handed a Challenge,
+An inference Adapter is asked to work an Attempt, not to answer a prompt — it is handed a Challenge,
 a working directory and a deadline, and it emits Steps until it finishes or is killed
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)). What
 it hides is the vendor's own agent loop; what it must not hide is anything that loop observed, since
@@ -485,7 +518,7 @@ _Avoid_: provider, driver, backend, plugin. Not **seam** either: the seam is the
 Adapter is what sits behind it, so a sentence naming both is usually confusing one of them.
 
 **ADK**:
-The competition's Agent Development Kit, released 14 September 2026, including the
+The competition's Agent Development Kit, due for release 14 September 2026, including the
 `solver.connect(host, port, team_key)` helper that clears a PoW gate. The organisers also call it
 the **Hackathon Starter Pack**; the two names mean one thing, and `ADK` is the one used here.
 **The Solver is built to accept it, never on top of it** — it arrives eight days before the scored

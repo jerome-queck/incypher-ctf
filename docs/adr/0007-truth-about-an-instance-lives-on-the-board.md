@@ -1,5 +1,12 @@
 # Truth about an Instance lives on the Board, split by question
 
+> **Amended for restart and parallel ownership by
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** The Board remains
+> authoritative about whether an Instance exists. A durable Solver claim is separately
+> authoritative about who owns it, and only one global Lease coordinator may reconcile the two.
+> Presence alone cannot prove an orphan; inactivity or an empty, stale or unreadable ledger cannot
+> authorise termination.
+
 > **Amended by [#156](https://github.com/jerome-queck/incypher-ctf/issues/156), which measured the
 > ledger instead of reasoning about it.** Everything about *where* truth lives stands, and the one
 > word this record spends on authentication — **"Authed"** — turns out to have been exactly right

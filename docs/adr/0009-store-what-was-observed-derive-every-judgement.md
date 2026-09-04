@@ -1,5 +1,12 @@
 # Store what was observed, derive every judgement
 
+> **Its recovery boundary is amended by
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** The append-only
+> stream stays canonical and judgements stay derived, but records that reserve identity, ownership
+> or a side effect must be crash-durable before that act and fail closed if they cannot be written.
+> Once a Run opens, losing `/state` loses the authority to continue; damaged bytes are quarantined,
+> never repaired in place.
+
 > **Amended by
 > [ADR-0025](0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md).** *Two homes*
 > below rests on ADR-0008's *"one-way pipe for output"*, and there is one exception to it that was
