@@ -6,6 +6,10 @@
 > refused, and the Owner turned FileVault off on 23 August 2026. The unattended reboot this record
 > calls unreachable was proven the same day — 41 seconds, no human — and what it costs is recorded
 > in ADR-0013.
+>
+> **The allocation was amended on 5 September 2026.** The Owner accepted the observed 8 CPU,
+> 24 GiB memory and 100 GiB disk VM as the pin. Runtime choice, version pins and restart conclusions
+> are unchanged.
 
 [#49](https://github.com/jerome-queck/incypher-ctf/issues/49) opened on a fact rather than a
 question: **there was no container runtime on the build machine at all** — no `docker` binary, no
@@ -23,7 +27,7 @@ what proving the restart path turned up, and it does not have a happy ending.
 The ticket's three reasons held, and two of them are now measured rather than quoted:
 
 - **The allocation is a reviewable line, not a slider.** `PIN` in `scripts/runtime.py` names 8
-  CPUs, 16 GiB and 60 GiB of disk; `runtime.py verify` fails when the machine has drifted off it.
+  CPUs, 24 GiB and 100 GiB of disk; `runtime.py verify` fails when the machine has drifted off it.
   Docker Desktop's equivalent is GUI state on one laptop that no diff can read. This is the same
   argument [ADR-0008](0008-one-image-for-every-board-and-two-seams-instead-of-one.md) made for the
   event being a config file, and it is the reason the pin is worth more than the runtime choice.
@@ -116,7 +120,7 @@ making it.
 - **The FileVault question is answered either way.** If it is turned off for the event, the
   unattended-reboot path becomes reachable and `restart_probe.py check` is what closes it. If it
   stays on, the accepted risk should be written down as accepted rather than left implied.
-- **A run needs more than 8 CPUs or 16 GiB** — one line, a `colima stop`, and a start.
+- **A run needs more than 8 CPUs or 24 GiB** — one line, a `colima stop`, and a start.
 - **The Solver stops being the only thing in the container.** ADR-0008 makes it PID 1 with no
   supervisor until v2; a supervisor changes what "came back" has to mean, and the probe's verdict
   with it.
