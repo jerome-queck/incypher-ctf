@@ -180,13 +180,15 @@ both hold to it.
   to find is still a line in the list, because a run-time install that the venue network refuses is
   a Challenge lost with nobody there to notice. Where two packages ship the same tool, the `Dockerfile` installs one
   and says which, so nothing depends on whichever binary resolves first.
-- **`docs/competitions/` — three files per event.** Our reading of the event, beside a verbatim
-  `<event>.rules.txt` snapshot, so a rules change is a diff rather than something nobody noticed —
-  and an `<event>.board.json`, the tracked half of a Board profile, holding the URL and the
-  prohibitions that exist in that Board's prose and nowhere in its API
-  ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)). The
-  snapshot is generated and says so; the other two are hand-written, and the `.board.json` is what
-  a human edits when `scripts/check-rules-drift.sh` shows a rule has moved.
+- **`docs/competitions/` — one reading, one Board profile, and a snapshot per mutable source.** Our
+  `<event>.md` reading sits beside generated `<event>.<source>.txt` snapshots, so a rules or
+  operational-source change is a diff rather than something nobody noticed — and an
+  `<event>.board.json`, the tracked half of a Board profile, holds the URL and the prohibitions
+  that exist in that Board's prose and nowhere in its API
+  ([ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md)). Each
+  snapshot is generated and says so; the reading and `.board.json` are hand-written, and the
+  `.board.json` is what a human edits when `scripts/check-rules-drift.sh` shows a prohibition has
+  moved.
 - **`scripts/` — the checks and setup run by hand against a live board.** They want a human, a
   credential, or a network the runner does not have, which is what keeps them out of `ci.yml`.
   They consume `solver/` and never re-implement it; a rule that exists in both places is a rule

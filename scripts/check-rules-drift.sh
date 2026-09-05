@@ -1,21 +1,21 @@
 # shellcheck shell=sh
 #
-# Re-fetch a competition's rules page and diff it against the committed baseline.
+# Re-fetch a competition source and diff its rendered text against the committed baseline.
 #
-#   sh scripts/check-rules-drift.sh docs/competitions/<event>.rules.txt [--update]
+#   sh scripts/check-rules-drift.sh docs/competitions/<baseline>.txt [--update]
 #
-# Competition rules are mutable and say so. A red-line change we did not see — a new ban on
-# automation, a changed flag format — is the disqualification failure mode, and nobody re-reads a
-# rules page they have already read. This turns that re-read into a diff.
+# Competition sources are mutable. A red-line change we did not see — a new ban on automation, a
+# changed flag format, a new connection path — is the disqualification failure mode, and nobody
+# reliably re-reads a page they have already read. This turns that re-read into a diff.
 #
 # Run it before every event, and again mid-event on a multi-day CTF.
 #
-# The baseline's own header says where to fetch and which span of the page is the rules, so this
-# script hardcodes no event. Exits 0 unchanged, 1 on drift, 2 when it could not check.
+# The baseline's own header says where to fetch and which span of the page matters, so this script
+# hardcodes neither event nor source kind. Exits 0 unchanged, 1 on drift, 2 when it could not check.
 set -eu
 
 if [ $# -lt 1 ]; then
-  printf 'usage: sh scripts/check-rules-drift.sh <baseline.rules.txt> [--update]\n' >&2
+  printf 'usage: sh scripts/check-rules-drift.sh <baseline.txt> [--update]\n' >&2
   exit 2
 fi
 
@@ -27,6 +27,7 @@ header_value() { sed -n "s/^$1:[[:space:]]*//p" "$baseline" | head -n1; }
 url=$(header_value Source)
 from=$(header_value From)
 to=$(header_value To)
+links=$(header_value Links)
 # SC2015's hazard is a `C` that runs after a true `A` and a false `B` in something meant as
 # if-then-else. There is no then-branch here at all: `C` runs exactly when a header is missing.
 # shellcheck disable=SC2015
@@ -44,10 +45,11 @@ curl -sSf --max-time 30 \
   -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36' \
   "$url" -o "$work/page.html" || { printf 'could not fetch %s\n' "$url" >&2; exit 2; }
 
-# Rendered text, not markup: a theme rebuild changes every tag and no rule, and the page carries a
-# per-request CSRF nonce inside <script> that would make raw markup differ on every fetch.
-FROM=$from TO=$to python3 - "$work/page.html" > "$work/fetched.txt" <<'PY'
+# Rendered text, not markup: a theme rebuild changes every tag and no claim, and pages carry
+# per-request data inside <script> that would make raw markup differ on every fetch.
+FROM=$from TO=$to LINKS=$links SOURCE=$url python3 - "$work/page.html" > "$work/fetched.txt" <<'PY'
 import html, os, re, sys
+from urllib.parse import urljoin
 
 markup = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 markup = re.sub(r'(?is)<(script|style|svg)\b.*?</\1>', ' ', markup)
@@ -63,19 +65,35 @@ lines = [line for line in lines if line]
 start = next((i for i, l in enumerate(lines) if l == os.environ['FROM']), None)
 end = next((i for i, l in enumerate(lines) if l.startswith(os.environ['TO'])), None)
 if start is None or end is None or end < start:
-    sys.exit(f"could not locate the rules span ({os.environ['FROM']!r} .. {os.environ['TO']!r}) "
+    sys.exit(f"could not locate the source span ({os.environ['FROM']!r} .. {os.environ['TO']!r}) "
              f"— the page structure changed, which is itself drift worth reading")
 print('\n'.join(lines[start:end + 1]))
+
+if os.environ['LINKS'].lower() == 'yes':
+    raw_start = markup.find(os.environ['FROM'])
+    raw_end = markup.find(os.environ['TO'], raw_start)
+    if raw_start < 0 or raw_end < raw_start:
+        sys.exit('could not locate the source span in markup for link capture')
+    print('Link targets')
+    for anchor in re.finditer(r'(?is)<a\b([^>]*)>(.*?)</a>', markup):
+        if not raw_start <= anchor.start() <= raw_end:
+            continue
+        href = re.search(r'''(?is)\bhref\s*=\s*(["'])(.*?)\1''', anchor.group(1))
+        if not href:
+            continue
+        label = html.unescape(re.sub(r'<[^>]+>', ' ', anchor.group(2)))
+        label = re.sub(r'\s+', ' ', label).strip()
+        print(f"{label} -> {urljoin(os.environ['SOURCE'], html.unescape(href.group(2)))}")
 PY
 
 sed "1,${separator_line}d" "$baseline" > "$work/baseline.txt"
 
 if diff -q "$work/baseline.txt" "$work/fetched.txt" >/dev/null; then
-  printf 'rules unchanged: %s\n' "$url"
+  printf 'source unchanged: %s\n' "$url"
   exit 0
 fi
 
-printf '\nRULES DRIFT — %s\n\n' "$url" >&2
+printf '\nSOURCE DRIFT — %s\n\n' "$url" >&2
 diff -u "$work/baseline.txt" "$work/fetched.txt" >&2 || true
 
 if [ "$update" = "--update" ]; then

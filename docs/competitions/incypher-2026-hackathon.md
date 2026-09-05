@@ -1,13 +1,16 @@
 # IN-CYPHER 2026 Hackathon
 
-The event this repository exists for. This is our reading of it; the rules themselves are
-[`incypher-2026-hackathon.rules.txt`](incypher-2026-hackathon.rules.txt), captured verbatim so a
-change to them is a diff rather than a thing nobody noticed.
+The event this repository exists for. This is our reading of it; the canonical rules are captured
+as normalized rendered text and the platform guide as normalized rendered text plus link targets in
+[`incypher-2026-hackathon.rules.txt`](incypher-2026-hackathon.rules.txt) and
+[`incypher-2026-hackathon.how-to-play.txt`](incypher-2026-hackathon.how-to-play.txt), so a change
+to either is a diff rather than a thing nobody noticed.
 
 Two pages are canonical and they are not the same page. The [organisers' hackathon
 page][official] carries the rules, prizes and eligibility. The platform's own [How to
-play][how-to-play] carries the operational facts — where challenges live, how to connect, what
-the team key is — and defers to the first for anything canonical. Both were read on 21 Aug 2026.
+play][how-to-play] carries the operational claims — where Challenges live, how to connect, what
+the Team key is — and defers to the first for anything canonical. The rules baseline was captured
+on 21 August; the complete How-to-play baseline was captured on 5 September.
 
 [official]: https://www.imperial.ac.uk/about/global/singapore/research/in-cypher/in-cypher-hackathon/
 [agenda]: https://www.imperial.ac.uk/about/global/singapore/research/in-cypher/in-cypher-hackathon/hackathon-agenda/
@@ -26,6 +29,50 @@ the team key is — and defers to the first for anything canonical. Both were re
 | Teams | One to four; university students. Score is recorded against the team. |
 | Categories | Web, pwn, crypto, reversing, forensics "and more", several set in medical scenarios |
 | Stakes | SGD 1,500 / 1,000 / 500, and the first-place team presents at the conference |
+
+## How-to-play claims and provenance
+
+This is the complete low-resolution ledger of claims in the 5 September How-to-play capture.
+**Organiser-stated** means only that the platform page says it. **Observed** means a dated read of
+the live Board. **Inferred** means our conclusion from a stated or observed fact. The exact wording
+and order live in the [capture](incypher-2026-hackathon.how-to-play.txt), not in this summary.
+
+| Claim | Provenance | Boundary |
+| --- | --- | --- |
+| The platform is where the agent runs; Challenges open in two batches: first online at 14 Sep 10:00 SGT, the same batch on-site on 21 Sep, and the remaining Challenges on the autonomous scored day on 22 Sep. | **Organiser-stated.** | “Where the agent runs” does not say who owns the host or starts the container. That remains inferred below. |
+| Teams contain one to four participants; one participant creates a named/passworded team, the others join it, and score belongs to the team. | **Organiser-stated; `userMode: "teams"` separately observed.** | Team mode and team scoring do not prove who owns a deployed Instance. |
+| Every member can view the Team key under Settings → Access Tokens; it identifies the team, crosses the raw-TCP gate, and must remain inside the team. | **Organiser-stated.** | The page does not call the Team key an API token, and the two credentials are not interchangeable. |
+| Static Challenges provide downloads or one shared service and one Flag for everyone. | **Organiser-stated.** | No Static competition-batch Challenge is visible yet. |
+| An Isolated deployment is labelled “per-player” and gives the deployer a container, private address and unspecified time limit; an expired Instance is redeployed. | **Organiser-stated.** | This attributes the deployment wording only. Whether team mode makes the held Instance personal or team-owned is unresolved until a real deployment or organiser clarification. |
+| Raw-TCP Targets use `nc 47.236.162.54 <port>` and a provided Python `solver.connect` helper to cross a Team-key-bound PoW gate. | **Organiser-stated.** | The helper/ADK and PoW algorithm are not linked yet, so neither has been observed. |
+| Web Targets use `https://<token>.in-cypher.com/`; the unguessable subdomain provides isolation and no PoW gate is used. | **Organiser-stated.** | No live Web Instance has been observed. |
+| Flags match `flag{…}` and may be submitted on the Challenge page or through the platform API; an Isolated Flag is unique to the Instance, and another Instance's Flag does not score. | **Organiser-stated.** | This is per-Instance Flag attribution, not evidence about who owns the Instance. The exact submission API, limits and competition-batch behavior remain unobserved. |
+| Agents are autonomous during the Run; only provided Challenge systems are in scope; defensive research only; do not attack the Board, other teams or shared infrastructure; do not share Flags or solutions. | **Organiser-stated**, with the page deferring canonical authority to the official hackathon page. | Drift in either source matters; both baselines are checked below. |
+| The published Discord is the organiser discussion channel. | **Organiser-stated link; observed stale.** | The invite API returned expired on the 5 September recheck; publication does not prove usability. |
+| The page says it is powered by CTFd. | **Organiser-stated page identity.** | This establishes platform family, not an exact CTFd or plugin version. |
+
+### Current chall-manager observations
+
+At **2026-09-05T14:16Z**, safe authenticated GETs preserved these current facts without retaining
+identity fields or taking Instance lifecycle action:
+
+- **Observed:** the mana API returned the exact 51-byte body summarized as `used: 0, total: 0`
+  (SHA-256 `ab8674c7f58d7b0a5b3b785ee9293d1c37e073376958958d5531c6071d8584d1`).
+- **Inferred from the observed response and upstream chall-manager semantics:** mana is disabled in
+  this practice configuration. The organisers do not use the word “mana” on the How-to-play page;
+  the competition-batch total remains unknown.
+- **Observed:** the HTML ledger redirects a bare API-token request to login. After that token had
+  established a session, the authenticated ledger was 37,931 bytes, declared `userMode: "teams"`,
+  carried non-zero user and team markers, rendered its Instance table, and held zero rows. Its
+  request-varying SHA-256 was
+  `07c98d125611b066d7076ccb5c4b1ab415489a35d5afd7be14549facdbaca687`.
+- **Boundary:** zero rows is an observation, not proof that the backend is healthy or authority to
+  call any unexplained Instance orphaned. No Challenge was deployed, renewed or terminated, so
+  per-Team ownership, Instance TTL and lifecycle behavior remain unproved on a real Instance.
+
+The preceding day's wider receipts and the chall-manager empty-ledger failure mode are preserved in
+the [live-surface recheck](../research/2026-09-05-in-cypher-live-surface-recheck.md#board-and-api-receipts)
+and [How the Solver learns which Instances it holds](https://github.com/jerome-queck/incypher-ctf/issues/156).
 
 **The tracked profile is [`incypher-2026-hackathon.board.json`](incypher-2026-hackathon.board.json)**:
 5.5 hours, closing 22 Sep 16:00 SGT. It deliberately does not take the board's own `window.init`
@@ -376,13 +423,28 @@ Answers land in this file, and any that changes a decision goes back to the map 
 
 ```bash
 sh scripts/check-rules-drift.sh docs/competitions/incypher-2026-hackathon.rules.txt
+sh scripts/check-rules-drift.sh docs/competitions/incypher-2026-hackathon.how-to-play.txt
 ```
 
-`rules unchanged: <url>` and exit 0 means nothing changed; drift prints a diff and exits 1. The
-script is never silent on success, so **silence means it did not run** — check the exit status
-rather than reading nothing as reassurance. Run it before 14 September, again on the morning of
-21 September, and again before the run on 22 September: scoring is explicitly still to be
-announced, so this page *will* change at least once and the change is one we must read.
+`source unchanged: <url>` and exit 0 means that source's normalized span matches its committed
+baseline; drift prints a diff and exits 1. The script is never silent on success, so **silence
+means it did not run** — check each exit status rather than reading nothing as reassurance. Run
+both commands at each build-session start, before 14 September, again on the morning of 21
+September, and again before the Run on 22 September. Scoring is explicitly still to be announced,
+so at least one source should change and the change is one we must read.
+
+To accept a reviewed change, rerun the drifting source with `--update`, then inspect the exact
+baseline diff before committing it:
+
+```bash
+sh scripts/check-rules-drift.sh docs/competitions/incypher-2026-hackathon.how-to-play.txt --update
+git diff -- docs/competitions/incypher-2026-hackathon.how-to-play.txt
+```
+
+The update intentionally exits 1 because drift existed. The post-update command without
+`--update` must then print `source unchanged` and exit 0. For baselines with `Links: yes`, the
+same diff also watches normalized link destinations; unchanged anchor text cannot hide a changed
+Challenge route, Discord invite or external destination.
 
 Re-check the Discord invite on the same mornings — the API call, not the URL:
 
@@ -393,6 +455,5 @@ curl -s -o /dev/null -w '%{http_code}\n' https://discord.com/api/v10/invites/MKU
 `200` means it finally works; `404` means still expired (see [Ask the
 organisers](#ask-the-organisers)).
 
-The drift script watches the canonical rules page only. [How to play][how-to-play] is not under
-it and carries the facts most likely to move — the batch schedule, the raw-TCP address, the
-instance time limit — so read it by eye on the same three mornings.
+The exact ADK/first-batch ingest after 14 September 10:00 SGT remains owned by its separate map
+ticket; these commands detect that boundary crossing but do not interpret or implement it.
