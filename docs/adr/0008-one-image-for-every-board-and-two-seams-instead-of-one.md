@@ -1,5 +1,11 @@
 # One image for every Board, and two seams instead of one
 
+> **Its v1 process and state boundaries expire at v2 under
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** The submitted
+> image remains one image and the Board/Target seams stand, but an in-image supervisor becomes PID
+> 1 and `/state` becomes recovery-critical input to later Boots rather than a disposable one-way
+> output mount.
+
 > **The package list is extended by
 > [ADR-0024](0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md).** Every
 > rule this record sets for it still holds — one package per line, no metapackage, nothing installed

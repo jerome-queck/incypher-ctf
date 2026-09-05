@@ -1,5 +1,11 @@
 # The vendor's agent drives the loop, and the seam runs an Attempt
 
+> **The provider set narrows and the route may diversify under
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** Claude leaves the
+> design. Native Codex remains primary; a proved CPA-backed route may implement the same
+> Attempt/Step/deadline contract, with the choice of Codex CLI or a second harness left to research
+> and prototype. The vendor-agent loop and Attempt-shaped seam still stand.
+
 > **One section is superseded by
 > [ADR-0023](0023-an-attempt-holds-the-turn-loop-and-order-is-not-asked-between-turns.md):
 > *An early stop is a new Attempt, not a give-up*, below.** Its mechanism never ran — the

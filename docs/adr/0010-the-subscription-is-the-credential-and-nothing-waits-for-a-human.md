@@ -1,5 +1,12 @@
 # The subscription is the credential, and nothing waits for a human
 
+> **The inference set and exhaustion response are replaced for v2 by
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** Native Codex and
+> one proved private single-owner CPA route are the only candidates; Claude and metered API
+> inference leave the set. Both routes spend the same subscription allowance, so shared exhaustion
+> means a declared wait or separately pre-authorised saved reset, never proxy rotation around a
+> limit.
+
 > **The declared set has an address, from [#61](https://github.com/jerome-queck/incypher-ctf/issues/61).**
 > Nothing below is reversed. This record requires a test asserting the redactor's declared set covers
 > *"every secret variable in `.env.example`"*, and that phrase has three answers: `^[A-Z_]+=` finds

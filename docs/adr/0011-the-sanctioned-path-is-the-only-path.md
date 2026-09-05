@@ -1,5 +1,11 @@
 # The sanctioned path is the only path, and Codex logs in inside the container
 
+> **Its absolute proxy ban gains one narrow v2 exception under
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** A pinned,
+> isolated CPA route may be proved for Jerome's single account and private use. Account sharing,
+> pooling, hosted relay, resale and limit circumvention remain outside the design; CPA is neither
+> extra quota nor formal OpenAI support.
+
 > **Superseded in part by [ADR-0014](0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md).**
 > The posture is untouched and absolute — no shim, no proxy, vendor-sanctioned paths only, the chain
 > as ADR-0010 set it, and the container logging itself in with `CODEX_HOME` on the mount. What is

@@ -1,5 +1,10 @@
 # The exploration share and solve velocity are reinstated
 
+> **The accepted restart loss expires at v2 under
+> [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** A later Boot
+> replays the Run's recorded Intake and ordering facts, including solve-velocity baselines and
+> exploration cadence; a process restart may no longer silently reset them.
+
 Order gets back the two ordering mechanisms
 [#15](https://github.com/jerome-queck/incypher-ctf/issues/15) decided and
 [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md) does not contain: a
