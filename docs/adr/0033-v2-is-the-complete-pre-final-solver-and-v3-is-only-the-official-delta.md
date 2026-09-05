@@ -28,7 +28,8 @@ rather than rewriting them:
 cut its capability set, and unfinished v2 work is never renamed v3. v2 includes the complete tool
 image; OpenAI-only inference and its proved secondary harness; productive agent topology and
 routing; parallel-safe Lanes, Order, Leases and persistent state; bounded submission; safe Board
-and Instance reads; restart, Recovery and practice self-repair; uncontaminated evaluation; the
+and Instance reads; restart, Recovery and practice self-repair;
+[Gate-qualified practice evidence](0034-a-practice-solve-qualifies-by-its-evidence-boundary.md); the
 local CTFd plus chall-manager Board; and every generic seam needed to accept later official input.
 One Lane may remain enabled until evidence permits more, but the design is concurrent from birth.
 
@@ -37,10 +38,10 @@ and `Target` seams, an open Category surface, a PoW boundary and the means to in
 not invent the organiser's ADK, PoW algorithm, unpublished rules or Challenge details.
 
 v2 also provides a host-side **Observer CLI**. It derives Run, Boot, Lane, Attempt, Lease, fault,
-Recovery, solve, timing, token/usage and resource views from canonical records and trusted Board
-reads; it owns no parallel state. Scored mode is read-only. Development and rehearsal may expose
-explicit control commands, but scored configuration refuses them. Credentials, candidate Flags,
-model context and exploit material are redacted by default.
+Recovery, solve, timing, token/usage and resource views from canonical records, trusted Board reads
+and Evaluator-attested practice receipts; it owns no parallel state. Scored mode is read-only.
+Development and rehearsal may expose explicit control commands, but scored configuration refuses
+them. Credentials, candidate Flags, model context and exploit material are redacted by default.
 
 Recovery may make bounded same-image operational repairs where the rules permit. Practice also
 rehearses diagnose → patch → build → test → probation → promote or rollback using a traceable
