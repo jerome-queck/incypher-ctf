@@ -39,7 +39,7 @@ from solver.redaction import Redactor
 
 # Bumped only for a change that the three stability rules cannot absorb — a field's meaning never
 # changes once written, a retired name is never reused, and readers access by name with a default.
-# Those rules are what let v4 analysis read a v1 Run, and this integer is what tells it which it has.
+# Those rules are what let v3 analysis read a v1 Run, and this integer is what tells it which it has.
 SCHEMA_VERSION = 1
 
 # Redaction is exact-value replacement over everything written, with one exception. A Flag that a

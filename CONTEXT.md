@@ -532,23 +532,29 @@ Three terms are about how this repository is governed rather than about the doma
 A capability set and the **Gate** that closes it — never a date. A date and a venue are *bindings*
 to a version, re-bound whenever the world moves, and re-binding one is not a change to the roadmap
 (ADR-0006's thesis, restated by
-[ADR-0030](docs/adr/0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md), which
-carries the live table). A version number written before 31 August 2026 belongs to the older
-numbering and resolves through ADR-0030's mapping, because the ADRs that used it were deliberately
-left as records of their own moment.
+[ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md),
+which carries the live table). A version number written before this record resolves through its
+mapping, because earlier ADRs deliberately remain records of their own moment. v2 is the complete
+pre-final Solver; v3 is only the evidence-backed official competition delta and freeze.
 _Avoid_: milestone, release, phase, sprint. Not **tag** either: `v1` is a git tag *because* the
 version closed, and the tag is the receipt rather than the thing.
 
 **Gate**:
 The scheduled review that closes a **Version**. It reopens the prior version's decisions feature by
-feature, and it reaches one of three verdicts: **pass**; **fail**, which re-scopes the *next*
-version's capability set and is written down; or **Pending**, for a clause no binding of that
-version could produce evidence for
+feature, and it reaches one of three verdicts: **pass**; **fail**, which leaves the Version open and
+records what remains; or **Pending**, for a clause no binding of that Version could produce
+evidence for
 ([ADR-0026](docs/adr/0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)).
-**A gate does not block** — it never pauses the calendar, because the calendar is fixed by a
-competition that will not wait. The single exception is the final gate, which is a real go/no-go.
+**A Gate does not block the calendar**, but the calendar does not make a failed Version complete or
+move known work forward. The final Gate is also a real go/no-go (ADR-0033).
 _Avoid_: milestone, review, sign-off. Emphatically not **Checkpoint**, which is a Run-level record
 this glossary already defines — a Gate is a verdict on a Run, a Checkpoint is a thing inside one.
+
+**Observer CLI**:
+The host-side, canonical-record-derived view of a Run used for development, rehearsal and
+postmortem inspection. It owns no state; scored mode is read-only, while any control authority is
+an explicit non-scored mode unless written competition rules later permit more (ADR-0033).
+_Avoid_: dashboard, control plane, human interface, Recovery Agent
 
 **Seed**:
 The Jerome-Group private template this repository was generated from, and the org machinery that
