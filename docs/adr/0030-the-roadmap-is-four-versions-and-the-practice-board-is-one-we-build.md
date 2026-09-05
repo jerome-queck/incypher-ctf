@@ -1,5 +1,9 @@
 # The roadmap is four versions, and the practice board is one we build
 
+> **Superseded by [ADR-0033](0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md).**
+> The practice-board decision and historical mapping below stand. The forward v3/v4 split does
+> not: v2 is now the complete pre-final Solver, and v3 is only the official delta and freeze.
+
 > **Supersedes [ADR-0006](0006-a-version-is-a-capability-set-and-its-gate.md).**
 > Its thesis stands and is restated here — a version is a capability set and its gate, a date and a
 > venue are bindings, a gate does not block. Its *table* is replaced: four of five gates are now

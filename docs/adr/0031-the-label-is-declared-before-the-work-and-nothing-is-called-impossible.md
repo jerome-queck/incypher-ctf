@@ -1,5 +1,9 @@
 # The label is declared before the work, and nothing is called impossible
 
+> **Roadmap amended by [ADR-0033](0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md).**
+> This record's v2 Gate corrections stand. Only its statement that all four ADR-0030 Versions
+> remain is historical; current work has three Versions in total.
+
 **The approach label is written at the *start* of a turn as what the model is about to try, not at
 the end as what it tried — because the Attempts that most need to hand something forward are the
 ones a cut stops before they can. Its accuracy is never checked. `w_impossible` is deleted: a

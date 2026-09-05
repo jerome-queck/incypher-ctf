@@ -1,5 +1,10 @@
 # A gate clause with no venue is Pending, and the gate closes without it
 
+> **Amended by [ADR-0033](0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md).**
+> The discharge rule below is unchanged. The local v2 Board proves our mechanism but cannot
+> discharge the real-Board clause; Pending now expires at v3's final go/no-go, the old v5 then v4
+> Gate under the current mapping.
+
 > **The two `docs/competitions/compfest-2026.md` citations below now point at a file that is
 > gone**, removed by [#171](https://github.com/jerome-queck/incypher-ctf/issues/171). COMPFEST is
 > dead as a venue — a Cloudflare Managed Challenge on every path to every client shape, and the
