@@ -471,6 +471,62 @@ identity, submission or Lease safeguards to make progress look possible.
 _Avoid_: retry, restart, crash loop, repair. A replacement Boot is one action Recovery may permit;
 a Repair Agent is one possible mechanism whose scored-Run authority is separately decided.
 
+### How practice proves the Solver
+
+**Known-answer regression**:
+A public or otherwise answer-exposed practice Challenge, including an exact or merely re-flagged
+copy. It can prove deterministic mechanisms and calibration, never discovery solve rate (ADR-0034).
+_Avoid_: benchmark, clean challenge, holdout
+
+**Execution holdout**:
+A practice Challenge whose fresh parameters make the unchanged reference exploit fail while
+preserving its known solution class. It measures adaptation and execution, separately from discovery.
+_Avoid_: variant, mutated challenge, discovery holdout
+
+**Discovery holdout**:
+A private derived or original practice Challenge whose solution-critical structure is fresh and
+whose generator, oracle and reference exploit are unreachable to the Solver. Only this corpus role
+may contribute to discovery solve rate, though model-training recall can never be proved absent.
+_Avoid_: unseen challenge, clean challenge, benchmark
+
+**Gate-qualified solve**:
+An accepted practice Flag with Evaluator-attested Target evidence, a Discovery holdout role and a
+complete passing Isolation receipt. The qualification states what the Gate controlled; it never
+claims model training contained no relevant knowledge (ADR-0034).
+_Avoid_: uncontaminated solve, accepted flag, clean solve
+
+**Retrieval-contaminated solve**:
+An accepted practice Flag whose Attempt observed answer-bearing material from an external or prior
+source. It remains a solve for Board mechanics and is excluded from discovery solve rate.
+_Avoid_: cheated solve, invalid flag
+
+**Unqualified solve**:
+An accepted practice Flag whose provenance or isolation is incomplete. It supports no discovery
+claim, and a successful boundary breach fails the Gate rather than silently shrinking its denominator.
+_Avoid_: uncertain solve, probably clean
+
+**Evaluator**:
+The trusted practice-rig component outside Solver and Target authority which owns the corpus
+manifest, private oracle, isolation evidence and Gate receipt. It observes or replays evidence and
+never solves a Challenge or exists in a scored Run (ADR-0034).
+_Avoid_: judge, Observer, control plane
+
+**Run controller**:
+The trusted part of the Solver which owns Board operations, scheduling, submission and canonical
+control state. It never exposes those capabilities directly to an Attempt executor (ADR-0034).
+_Avoid_: orchestrator, scheduler, worker
+
+**Attempt executor**:
+The separately confined runtime identity through which the solving model uses tools, one Challenge
+working directory, its assigned Target proxy and an inference route. It is not a Lane: the Lane is
+capacity and the executor is the mechanism occupying it (ADR-0034).
+_Avoid_: worker, agent, Lane
+
+**Isolation receipt**:
+The Evaluator-authenticated practice record binding exact images, rig and runtime controls, fresh
+state and adversarial probe results. A Gate-qualified solve cannot exist without one (ADR-0034).
+_Avoid_: log, report, attestation
+
 ### Secrets and tooling
 
 **Team key**:
