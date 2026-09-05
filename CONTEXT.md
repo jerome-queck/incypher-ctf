@@ -186,7 +186,8 @@ The intended bias toward the Categories the Solver is *weakest* at is **deferred
 needs a per-Category strength signal, and Category is an open string read from the Board, so v1 has
 no entry for the categories that will actually be scored. Until a stable Category vocabulary and
 real per-Category solve rates exist, a Tier is the difficulty a Board **states**, which Triage
-extracts.
+extracts. A confirmed Checkpoint raises it by one rung only as far as the highest stated Tier; the
+progress signal cannot manufacture effort bands above the scale Triage uses.
 _Avoid_: difficulty, priority, rank, score, weight
 
 **Order**:
@@ -289,6 +290,8 @@ own loop and can end one with budget left
 Attempt holds one or more of them, because the orchestrator answers an early stop by re-invoking
 over the same working directory rather than letting that stop end the Attempt — which would be the
 give-up button ADR-0005 removed, arriving by the back door.
+**A Turn boundary resets no Attempt evidence.** Repetition, novelty and the current stall epoch
+continue across it; ending a Turn early is neither progress nor failure.
 **It is the middle of three units and never a synonym for either neighbour**: an Attempt is what a
 Cut ends, a Turn is what a premature quit is about, and a Step is one command inside a Turn. Holding
 one word for two of them is how a Run's own record gets misread — what a model *spent* is counted
@@ -364,7 +367,9 @@ line lifted out of it.
 An environment state change that can be re-verified by replaying a command: a shell that answers, a
 route that was 403 and is now 200, an archive that extracted, a crash that reproduces. A Checkpoint
 is a state *transition*, never an interpretation — a confident wrong turn produces Claims in
-quantity and no Checkpoints at all.
+quantity and no Checkpoints at all. A model may nominate the safe probe, but that nomination is a
+Claim: only the observed replay or verified before/after state creates the Checkpoint. Novel output
+alone is weaker evidence and never one.
 _Avoid_: milestone, breakthrough, progress. Not a saved state to return to either — nothing is ever
 rolled back to a Checkpoint; it records that the environment moved.
 
