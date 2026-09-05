@@ -172,9 +172,10 @@ unachievable states and that rate is a per-model number worth having.
   routing** — [#20](https://github.com/jerome-queck/incypher-ctf/issues/20) closed noting the lever
   v1 does not have, and this records that v1 still does not have it. Chain **order** is a config
   value rather than code, so a practice Run can put Claude first without a rebuild.
-- **The local model is cut from v1.** The Colima VM is pinned at 16 GiB, not the machine's 48
-  ([`scripts/runtime.py`](../../scripts/runtime.py)), so the headroom that justified it is *host*
-  headroom — which makes a local model a second long-lived host process, the exact shape ADR-0011
+- **The local model is cut from v1.** The Colima VM was pinned at 16 GiB when this decision was
+  made, not the machine's 48; the later accepted 24 GiB pin
+  ([`scripts/runtime.py`](../../scripts/runtime.py)) still leaves the headroom that justified it on
+  the *host*. That makes a local model a second long-lived host process, the exact shape ADR-0011
   refused for the proxy. It costs nothing to defer, because `codex exec --oss --local-provider`
   means the local tier needs no adapter of ours whenever we want it.
 - **Refusal and premature-quit are queries, not fields.** Per

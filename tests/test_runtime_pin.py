@@ -20,6 +20,10 @@ PINNED_VM = {
 PINNED_VERSIONS = {"colima": runtime.PIN.colima, "docker": runtime.PIN.docker}
 
 
+def test_the_accepted_allocation_is_the_pin():
+    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 100)
+
+
 def test_a_machine_on_the_pin_has_drifted_on_nothing():
     assert runtime.drift(PINNED_VERSIONS, PINNED_VM) == []
 
@@ -41,7 +45,7 @@ def test_an_allocation_below_the_pin_names_both_numbers():
 
     assert runtime.drift(PINNED_VERSIONS, halved) == [
         "the VM has 2 CPUs, pinned at 8",
-        "the VM has 2 GiB of memory, pinned at 16",
+        "the VM has 2 GiB of memory, pinned at 24",
     ]
 
 
