@@ -1,5 +1,9 @@
 # The vendor's agent drives the loop, and the seam runs an Attempt
 
+> **The open Harness choice is resolved by
+> [ADR-0039](0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md).** Native Codex remains
+> primary; the CPA route uses a separate minimal Solver-owned Responses loop.
+
 > **The provider set narrows and the route may diversify under
 > [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** Claude leaves the
 > design. Native Codex remains primary; a proved CPA-backed route may implement the same
