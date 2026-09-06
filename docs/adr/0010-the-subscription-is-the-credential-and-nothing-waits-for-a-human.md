@@ -1,5 +1,12 @@
 # The subscription is the credential, and nothing waits for a human
 
+> **The v2 environment, credential ownership and observable limit/reset mechanism are replaced by
+> [ADR-0040](0040-one-owner-one-subscription-and-one-observed-limit-state.md).** The one persistent
+> `.env`, Supervisor-owned credentials, typed route failures and Codex Control supersede this
+> record's provider chain, board overlays, fixed-window assumptions and automatic metered fallback.
+> Historical evidence and the principles that subscription quota is shared, a stall is not a Cut,
+> no secret reaches a Worker and no human is required at runtime remain.
+
 > **The inference set and exhaustion response are replaced for v2 by
 > [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** Native Codex and
 > one proved private single-owner CPA route are the only candidates; Claude and metered API
