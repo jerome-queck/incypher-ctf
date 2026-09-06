@@ -473,6 +473,10 @@ probationary Boot is safe or the Run can no longer continue safely. Recovery can
 declared long-running work; it does not infer a hang merely from age. It never waits for blind
 restarts to run out, repeats an unchanged Solver-owned failure, deletes evidence or relaxes Board,
 identity, submission or Lease safeguards to make progress look possible.
+During an unattended Run, Recovery's model autonomously chooses the next diagnostic, wait, retry,
+isolation, redirection or candidate repair when deterministic handling cannot orient a novel
+failure. It may interpret preserved evidence and propose code, but never authors the Run's history
+or bypasses the deterministic guards that authorise an irreversible effect.
 _Avoid_: retry, restart, crash loop, repair. A replacement Boot is one action Recovery may permit;
 a Repair Agent is one possible mechanism whose scored-Run authority is separately decided.
 
