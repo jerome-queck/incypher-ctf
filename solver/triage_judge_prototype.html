@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prototype — crowd-less Triage judge</title>
+  <style>
+    :root { color-scheme: light; --ink:#17201d; --muted:#66716c; --paper:#f5f2e9; --card:#fffdf7; --line:#d8d7cd; --accent:#176b55; --warn:#9b4f19; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { width:min(1120px, calc(100% - 32px)); margin:36px auto 72px; }
+    h1,h2,h3,p { margin-top:0; } h1 { font-size:clamp(28px,4vw,48px); line-height:1.02; letter-spacing:-.04em; margin-bottom:12px; }
+    h2 { font-size:18px; } h3 { font-size:15px; margin-bottom:8px; }
+    .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.08em; text-transform:uppercase; font-size:12px; }
+    .lede { max-width:850px; font-size:17px; color:#3f4945; }
+    .notice { border-left:4px solid var(--warn); padding:12px 16px; background:#fff6ed; margin:24px 0; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:18px 0; }
+    .card,.panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; box-shadow:0 1px 0 rgba(0,0,0,.03); }
+    .metric strong { display:block; font-size:24px; letter-spacing:-.03em; } .metric span,.muted { color:var(--muted); }
+    .controls { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 22px; }
+    button { appearance:none; border:1px solid #b8bdb9; border-radius:999px; background:white; color:var(--ink); padding:9px 14px; font:inherit; font-weight:650; cursor:pointer; }
+    button:hover { border-color:var(--accent); } button.primary { background:var(--accent); color:white; border-color:var(--accent); }
+    button.active { outline:3px solid #b7dacd; border-color:var(--accent); }
+    .two { display:grid; grid-template-columns:1.15fr .85fr; gap:14px; }
+    table { width:100%; border-collapse:collapse; font-size:14px; } th,td { padding:9px 7px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; } th { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    .pill { display:inline-block; border-radius:99px; background:#e4eee9; padding:2px 8px; font-size:12px; font-weight:700; }
+    .pill.warn { background:#f8e3d4; color:#71370e; }
+    pre { white-space:pre-wrap; margin:0; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:#31403a; }
+    .tabs { display:flex; gap:7px; margin-top:28px; border-bottom:1px solid var(--line); padding-bottom:9px; }
+    .walkthrough { margin-top:14px; } .step { display:none; } .step.current { display:block; }
+    .step p { min-height:48px; }
+    .verdict { margin-top:18px; border:2px solid var(--accent); }
+    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } .two { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Throwaway logic prototype · issue 193</div>
+  <h1>Does a model judge earn its cost in crowd-less Triage?</h1>
+  <p class="lede">This demo replays one identical sparse Board snapshot through two policies: deterministic evidence only, or the same evidence plus one bounded model judgement. Watch Order, Attempt budgets, working-set width, cost, restart behaviour, and historically observed Flag yield.</p>
+  <div class="notice"><strong>Question, not conclusion.</strong> The replay can expose policy mechanics. One historical snapshot cannot prove causal solve-rate uplift. The author still decides whether the judge ships, is restricted, or is removed.</div>
+
+  <section class="panel">
+    <h2>Free play</h2>
+    <div class="controls" id="policyControls"></div>
+    <div class="controls">
+      <button id="reboot">Reboot from durable record</button>
+      <button id="lose">Lose the judge record</button>
+      <button id="reset">Reset snapshot</button>
+    </div>
+    <div class="grid" id="metrics"></div>
+    <div class="two">
+      <div class="card"><h3>Order and budgets</h3><div id="table"></div></div>
+      <div class="card"><h3>Full relevant state</h3><pre id="state"></pre></div>
+    </div>
+    <div class="card verdict" id="finding"></div>
+  </section>
+
+  <div class="tabs" id="tabs"></div>
+  <section class="panel walkthrough" id="walkthrough"></section>
+</main>
+
+<script>
+// Portable prototype module: pure data in, derived comparison out.
+const TriageReplay = (() => {
+  const FLOOR = 2, KNEE = 600, TIER_STEP = .25, RUN = 3600, TAIL = 300;
+  const challenges = [
+    {id:94,name:"Blackboard",category:"forensics",value:30,solves:0,position:0,modelTier:1,outcome:"no Flag in two observed Attempts"},
+    {id:43,name:"WordPressed to root",category:"boot2root",value:100,solves:0,position:0,modelTier:4,outcome:"Flag in one observed Attempt"},
+    {id:55,name:"Technical Debt",category:"web",value:100,solves:0,position:0,modelTier:1,outcome:"no Flag in one observed Attempt"},
+    {id:69,name:"The North Star Metric",category:"OSINT",value:100,solves:0,position:0,modelTier:4,outcome:"no Flag in two observed Attempts"},
+    {id:66,name:"New product — Brun-water",category:"OSINT",value:100,solves:0,position:0,modelTier:3,outcome:"no Flag in one observed Attempt"},
+    {id:157,name:"Half Baked",category:"forensics",value:100,solves:0,position:0,modelTier:3,outcome:"no Flag in one observed Attempt"}
+  ];
+  const judgeEvidence = Object.freeze({
+    model:"gpt-daybreak-blue-latest", observedAt:"2026-09-06T07:42:16Z", wallSeconds:11.1,
+    inputTokens:14495, outputTokens:106, reasoningTokens:71, subscriptionInvocations:1,
+    answer:"94 1; 43 4; 55 1; 69 4; 66 3; 157 3"
+  });
+  const budget = tier => Math.max(300, KNEE * (1 + (tier - FLOOR) * TIER_STEP));
+  const ordered = rows => [...rows].sort((a,b) => (b.value-a.value) || (a.position-b.position) || String(a.id).localeCompare(String(b.id)));
+  function derive(policy, recordPresent=true, boots=1) {
+    const usesJudge = policy === "model" && recordPresent;
+    const rows = ordered(challenges).map((c, i) => ({...c, rank:i+1, tier:usesJudge ? c.modelTier : FLOOR}));
+    const mean = rows.reduce((n,c)=>n+budget(c.tier),0)/rows.length;
+    const width = Math.floor((RUN-TAIL)/mean);
+    const ranked = rows.map(c => ({...c, budget:budget(c.tier), committed:c.rank<=width}));
+    const flags = ranked.filter(c => c.committed && c.id===43).length;
+    return {
+      policy, recordPresent, boots, rows:ranked, workingSetWidth:width, flags,
+      rankVector:ranked.map(c=>c.id).join(" → "),
+      cost: usesJudge ? judgeEvidence : {wallSeconds:0,inputTokens:0,outputTokens:0,subscriptionInvocations:0},
+      provenance: usesJudge ? "durably recorded model judgement" : (policy==="model" ? "unjudged fallback" : "deterministic floor"),
+      restartReproducible:true
+    };
+  }
+  return {derive, judgeEvidence};
+})();
+
+const initial = {policy:"deterministic",recordPresent:true,boots:1,tab:"mechanics",step:0};
+let state = {...initial};
+const scenarios = {
+  mechanics:[
+    ["Start with deterministic Triage. Every unresolved Challenge gets the honest unknown floor: Tier 2.", () => setPolicy("deterministic")],
+    ["Admit the recorded model judgement. Order does not move, because current Order has no Tier term.", () => setPolicy("model")],
+    ["Compare working-set width. Higher average model Tiers buy longer Attempts, so the 55-minute spendable window commits to four rather than five Challenges.", () => {}]
+  ],
+  restart:[
+    ["Use the model once. The judgement and provenance are now durable evidence.", () => setPolicy("model")],
+    ["Reboot. The rank, tiers, budgets, and cost remain byte-for-byte derived from the saved answer; no second subscription invocation occurs.", () => reboot()],
+    ["Now simulate a missing/corrupt judgement record. The safe fallback is explicit unjudged Tier 2, never a silent re-ask or invented persistence.", () => loseRecord()]
+  ],
+  decision:[
+    ["Deterministic Triage costs no model time or tokens and keeps five Challenges in the working set.", () => setPolicy("deterministic")],
+    ["The bounded judge costs one 11.1-second, 14,601-token invocation. On this snapshot it changes budgets, not route, and produces no additional historically observed Flag.", () => setPolicy("model")],
+    ["Decision boundary: retaining it needs paired Runs showing additional Flags or materially better wall time. This prototype supplies no such evidence.", () => {}]
+  ]
+};
+
+function setPolicy(policy){ state.policy=policy; if(policy==="model") state.recordPresent=true; render(); }
+function reboot(){ state.boots++; render(); }
+function loseRecord(){ state.policy="model"; state.recordPresent=false; render(); }
+function reset(){ state={...initial}; render(); }
+function derived(){ return TriageReplay.derive(state.policy,state.recordPresent,state.boots); }
+
+function render(){
+  const d=derived();
+  document.querySelector("#policyControls").innerHTML=["deterministic","model"].map(p=>`<button class="${p===state.policy?'primary active':''}" data-policy="${p}">${p==="model"?'Recorded model judge':'Deterministic only'}</button>`).join("");
+  document.querySelectorAll("[data-policy]").forEach(b=>b.onclick=()=>setPolicy(b.dataset.policy));
+  const total=(d.cost.inputTokens||0)+(d.cost.outputTokens||0);
+  document.querySelector("#metrics").innerHTML=[
+    [d.rankVector,"Order rank"],[d.workingSetWidth+" / 6","Working set"],[d.flags,"Observed Flags represented"],
+    [total.toLocaleString()+" tokens",`${d.cost.wallSeconds||0}s · ${d.cost.subscriptionInvocations||0} invocation`]
+  ].map(([a,b])=>`<div class="card metric"><strong>${a}</strong><span>${b}</span></div>`).join("");
+  document.querySelector("#table").innerHTML=`<table><thead><tr><th>Rank</th><th>Challenge</th><th>Tier</th><th>Budget</th><th>Set</th><th>Historical evidence</th></tr></thead><tbody>${d.rows.map(c=>`<tr><td>${c.rank}</td><td>${c.name}<br><span class="muted">${c.category} · ${c.solves} solves</span></td><td>${c.tier}</td><td>${c.budget}s</td><td><span class="pill ${c.committed?'':'warn'}">${c.committed?'in':'out'}</span></td><td>${c.outcome}</td></tr>`).join("")}</tbody></table>`;
+  const visible={policy:d.policy,provenance:d.provenance,judge_record_present:d.recordPresent,boots:d.boots,rank_vector:d.rankVector,working_set_width:d.workingSetWidth,judge_cost:d.cost,restart_reproducible:d.restartReproducible};
+  document.querySelector("#state").textContent=JSON.stringify(visible,null,2);
+  document.querySelector("#finding").innerHTML=`<h3>What this state says</h3><p><strong>Order is unchanged.</strong> Tier is absent from <code>Scheduler._score</code>; the judge only changes Attempt length and therefore working-set width. Here, model Tiers narrow coverage from five to four while historical Flag yield stays one. Reboot ${d.boots} ${d.recordPresent?'replays the durable answer without paying again':'falls back visibly to Tier 2 because the record is absent'}.</p>`;
+  renderWalkthrough();
+}
+function renderTabs(){
+  document.querySelector("#tabs").innerHTML=Object.keys(scenarios).map(k=>`<button data-tab="${k}" class="${state.tab===k?'active':''}">${k[0].toUpperCase()+k.slice(1)}</button>`).join("");
+  document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;state.step=0;resetScenario();});
+}
+function resetScenario(){ state.policy="deterministic";state.recordPresent=true;state.boots=1;render(); }
+function renderWalkthrough(){
+  renderTabs(); const steps=scenarios[state.tab], at=Math.min(state.step,steps.length-1), [copy,action]=steps[at];
+  document.querySelector("#walkthrough").innerHTML=`<div class="eyebrow">Guided walkthrough · ${at+1}/${steps.length}</div><h2>${state.tab[0].toUpperCase()+state.tab.slice(1)}</h2><p>${copy}</p><button class="primary" id="takeStep">${at===steps.length-1?'Replay walkthrough':'Apply this step'}</button>`;
+  document.querySelector("#takeStep").onclick=()=>{ if(at===steps.length-1){state.step=0;resetScenario();} else {action();state.step=at+1;render();} };
+}
+document.querySelector("#reboot").onclick=reboot;
+document.querySelector("#lose").onclick=loseRecord;
+document.querySelector("#reset").onclick=reset;
+render();
+</script>
+</body>
+</html>
