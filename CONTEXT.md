@@ -565,10 +565,19 @@ backend. A route changes only on a classified route-specific failure. Shared quo
 a declared wait or a separately pre-authorised saved reset; it never causes proxy rotation around a
 limit. Claude, local models and metered API inference are outside the set
 ([ADR-0032](docs/adr/0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md)).
-Which model, effort, harness and Agent role receives work is a routing decision still being measured;
-"Codex-only" does not mean one model, one Lane or one tool loop.
+Native Codex is primary; the CPA route uses a separate Solver-owned Harness so a Codex CLI or
+tool-loop failure does not take both routes down. Model, effort and Agent role remain measured
+routing decisions; "Codex-only" does not mean one model, one Lane or one tool loop
+([ADR-0039](docs/adr/0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md)).
 _Avoid_: credential chain, provider list, fallback key. Not **Adapter** either: an Adapter implements
 the route's seam, while the route is the end-to-end way an Attempt gets worked.
+
+**Harness**:
+The agent loop inside an Inference route that turns model events into bounded tool calls and Steps.
+Native Codex supplies its own Harness; the CPA route uses the Solver's minimal Responses Harness so
+the two routes do not share the Codex CLI, its tool loop or its event schema
+([ADR-0039](docs/adr/0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md)).
+_Avoid_: model, Agent, Adapter, Inference route
 
 **Adapter**:
 One concrete implementation behind one of the Solver's seams — `Board`, `Target`, or an Inference
