@@ -308,18 +308,17 @@ _Avoid_: iteration, action, and **turn** — which is a unit of its own here, wi
 what to avoid is not the word but calling a Step one. Many Steps happen inside a single Turn.
 
 **Observation**:
-Real output from a real command, inseparable from the command that produced it. The model does not
-write Observations; it only causes them. A tool that fails produces one too — the failure *is* the
-output, and recording silence instead would leave the model to narrate what it thinks happened. Not
-everything the record keeps in that channel is one: a Step carries a `source` saying whether its
-bytes are the Solver's own work or a Board statement (ADR-0019).
+Real output from a real command or tool, inseparable from the act that produced it. The model does
+not write Observations; it only causes them. A tool that fails produces one too — the failure *is*
+the output, and recording silence instead would leave the model to narrate what it thinks happened.
+Not everything the record keeps in that channel is one: a Step carries a `source` saying whether
+its bytes are the Solver's own work or a Board statement (ADR-0019).
 _Avoid_: finding, output, result, tool response
 
 **Claim**:
-Anything the model says — a hypothesis, a conclusion, a summary, "this looks like a spectrogram".
-Claims are how an Attempt reasons, and they are never evidence of anything. Claim / Observation is
-the most load-bearing pair here: it is what stops the model's account of what happened from being
-mistaken for what happened (ADR-0005).
+A model-authored hypothesis, conclusion, summary, interpretation or plan. A Candidate derivation is
+a structured Claim over Evidence artifacts and remains an interpretation rather than an Observation
+(ADR-0005, ADR-0037).
 _Avoid_: note, assertion, conclusion-as-fact — and not *observation*, which is the other half of
 the pair and deliberately a different word
 
@@ -333,22 +332,25 @@ spells the wrapper out, so a Flag-shaped string there is the Board showing its s
 _Avoid_: prose alone (the Solver's own `[recon]` lines are prose too), and not *Observation* — the
 record keeps both in one channel and tells them apart by `source`
 
-**Candidate**:
-A string that might be a Challenge's Flag, and **how strongly it is known** — which is the whole of
-what decides whether it may spend a submission slot. Seven strengths, and the ordering between them
-is the policy: **reproduced** (the exact command that emitted it was replayed and the same string
-came back), **observed** (a real command's output carried it and the replay did not confirm it),
-**unverified** (no Observation carries it — the model said it and nothing else did), **guessed**
-(an Observation did carry it, and then the Instance that minted it expired underneath it),
-**stated** (the Board's own prose carried it and the model repeated it — evidence *against*, and so
-held back until the reserved tail on every Board at all, ADR-0021), **crowded** (one command emitted
-it alongside more Flags than a Challenge has, so that command was reading a list rather than solving
-— ADR-0027), and **template** (the string is a Flag's *shape* rather than a Flag — a regular
-expression or a placeholder token like `FAKE_FLAG` — so it is held whether or not this is the tail,
-ADR-0029). A candidate is not a Flag until the Board says so; keeping the two words apart is what
-stops "we found the Flag" from meaning seven different things.
-_Avoid_: found flag, the flag (before a verdict), guess — *guessed* is one of the seven strengths
-rather than the word for all of them
+**Evidence artifact**:
+An immutable, source-identified input to a Candidate derivation: an Artefact or picture with its
+digest, an Observation, or a captured web or tool result. Model prose and a search query alone are
+not Evidence artifacts; the recorded bytes, source, time and identity are what let later work inspect
+the same thing (ADR-0037).
+_Avoid_: evidence (too broad), source (missing identity), input (missing provenance)
+
+**Candidate derivation**:
+A structured model-authored Claim that produces exactly one Candidate proposal from cited Evidence
+artifacts and records the locator, fragments, ordering or transformation that relates them. It may
+express visual recognition, semantic recognition, OSINT inference or multi-source assembly; source
+completeness and blind re-derivation measure it, never the model's confidence score (ADR-0037).
+_Avoid_: proof, Observation, confidence, chain of thought
+
+**Candidate proposal**:
+The exact string offered to the submission authority as a possible Flag, together with how it was
+obtained and its current disposition. It may be observed, derived, unsupported, Board-stated,
+crowded, templated or tied to an expired Instance; the Board alone turns it into a Flag (ADR-0037).
+_Avoid_: found flag, the flag (before a verdict), guess, candidate flag
 
 **Approach label**:
 The one model-authored field that crosses an Attempt boundary — a short line **declaring what the

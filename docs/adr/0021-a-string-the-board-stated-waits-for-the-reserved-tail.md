@@ -1,5 +1,10 @@
 # A string the Board stated waits for the reserved tail
 
+> **Superseded by
+> [ADR-0037](0037-submission-is-speed-first-provenance-backed-and-serial.md).** A Board-stated or
+> otherwise unsupported Candidate no longer gains submission authority in the reserved tail. The
+> record below remains the historical reasoning for v1's weaker rule.
+
 **A candidate the model states that the Board's own prose also carried is `stated` — a fifth
 strength, weakest of the five — and it is held back from every live submission, including where the
 Board says attempts are unlimited. The reserved tail releases it.**
