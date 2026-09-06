@@ -2,49 +2,65 @@
 
 _Research snapshot: 6 September 2026. This answers [The complete per-Category tool
 inventory](https://github.com/jerome-queck/incypher-ctf/issues/183); it does not change the image.
-“Must” means bake into the next Category-capability layer. “Useful” means keep available to a
-bounded, explicit run-time install path or reconsider after a real reach. Local models are excluded._
+“Must” means v2 must provide the capability; it does **not** freeze the exact package, layer or
+trust boundary. “Useful” means v2 must preserve a bounded on-demand seam when evidence detects the
+format/Category. [Issue #186](https://github.com/jerome-queck/incypher-ctf/issues/186) owns exact
+production composition, locks, probes and manifest. Local models are excluded._
 
 ## Decision-grade answer
 
-The open core is **eighteen packages, grouped into seventeen capability rows**: `gdb-multiarch`,
-`python3-pwntools`, `qemu-user`, `radare2`, `patchelf`, `strace`, `ltrace`, `jadx`, `apktool`,
-`tshark`, `tesseract-ocr`, `ffmpeg`, `steghide`, `7zip`, `sqlite3`, `python3-pycryptodome`, and
-`python3-sympy`, plus `netcat-openbsd`. Together they open the presently weak Pwn, Reversing, Mobile and protocol-
-Forensics surfaces while filling common Crypto, image/audio and archive/database gaps.
+Specify a **maximum-strength classic surface**, not an eighteen-package minimum. The eighteen measured
+packages below are the common substrate. Deep capability profiles cover Crypto, Web, Pwn, Reversing,
+Forensics, Stego, OSINT and Misc. Open-string fallback Categories get a compact recognizer/client
+baseline plus ADR-0024's bounded on-demand path unless organiser or corpus evidence raises them.
+Issue #186 may decide package and layering; it cannot silently remove a distinct capability inside
+the priority set.
 
 This does **not** reopen ADR-0024. Its twelve landed packages and image attachment remain the
 general-purpose floor. The new list begins where that measured verdict stops. It also does not
-claim every CTF domain can be preinstalled: challenge-specific mathematics, filesystems,
-geospatial stacks, memory profiles and proprietary formats stay on the long tail.
+claim every target can be executed in the common container: target images, credentials and
+privileges belong to separately governed profiles. Proprietary/account-bound tools remain out.
 
 Three boundaries decide the list:
 
 1. **Parse inert bytes by default.** Static parsers run with a timeout, input-size/output caps and
    a disposable output directory. They do not need extra Linux capabilities.
 2. **Executing a Challenge is a separate capability.** GDB, QEMU, tracing and pwntools may execute
-   hostile code. They run only inside the Challenge container boundary, against copied artefacts,
+   hostile code. They run only inside the Solver container boundary, against copied artefacts,
    never with `/var/run/docker.sock`, host credentials or a broader host mount. This image still
    invokes Codex at `danger-full-access`; package presence is not an inner sandbox.
-3. **No privileged discovery surface.** Live packet capture, full-system/Android emulation,
-   instrumentation servers and broad network scanners require privileges, target images or attack
-   authority the generic Board does not establish. Offline PCAP decoding and ordinary TCP clients
-   are in; raw-socket discovery and GUI viewers are out.
+3. **Network and target authority follows the Challenge.** Offline decoding is always available.
+   Scanner capability may address only the Challenge Target under Board-derived rate and request
+   caps. Android/full-system/Wine/Frida paths require the separate dynamic-target boundary;
+   package presence never grants target, credential or device authority.
 
 ## Category coverage
 
-| Expected Category | Baked floor already present | Open must-have capability | Useful long tail / explicit exclusion |
+| Open Category string | Must-have v2 capability | Authority-gated / format-triggered complement |
 | --- | --- | --- | --- |
-| Onboarding | `curl`, `wget`, `git`, image/PDF handling, attached images | OCR and media stream inspection | No separate suite; it composes the general floor |
-| Crypto | Python, OpenSSL, `xxd` | PyCryptodome and SymPy | Z3 useful; SageMath and cracking rigs remain challenge-specific |
-| Web | `curl`, Requests, `git`, `jq`, Python | None | `ffuf` useful after an endpoint hypothesis; SQLMap and browser proxies are not defaults |
-| Pwn | ELF primitives from binutils | multiarch GDB, pwntools, QEMU user-mode, patching and syscall/library traces | `socat` useful; no kernel/VM escape laboratory |
-| Reversing | `file`, `strings`, `objdump`, binwalk | radare2 plus the Pwn execution/trace set | Ghidra is capable but too large for the core; Mono/WABT/UPX are format-specific |
-| Forensics | exiftool, binwalk3, scalpel, Sleuth Kit, PIL, ImageMagick, Poppler, zsteg | TShark, OCR, FFmpeg, Steghide, 7-Zip, SQLite | Scapy/YARA useful; live capture and Volatility profiles are not generic |
-| Mobile | unzip, strings, images | JADX and Apktool (static APK/DEX/resources) | ADB useful only with a supplied endpoint; no emulator or Frida server |
-| OSINT | web search, HTTP, attached images, exiftool | OCR and media inspection | WHOIS/DNS clients useful; no account-bound GUI or scraping browser by default |
-| Misc | general floor | Union of archive, SQLite, media, static reversing and math primitives | WABT/Mono/Z3 after format detection |
-| Boot2Root | HTTP clients and SSH-capable Python libraries | ordinary stream clients through Netcat and pwntools | SMB/DNS clients useful when a host is supplied; Nmap is currently unavailable; no raw sweep |
+| Onboarding | Existing HTTP/git/file/image/PDF floor; OCR, media, archives and SQLite | None: it composes the substrate |
+| Crypto | PyCryptodome, SymPy, SageMath/fpylll, Z3/cvc5, gmpy2, common factoring/Coppersmith paths, John | Hashcat or specialised lattice engines only when their distinct backend applies |
+| Web | curl/Requests plus ffuf, feroxbuster, nuclei, sqlmap, SSTImap, jwt_tool, Arjun, smuggling clients, Katana/httpx, Playwright/Chromium and wordlists | Every active request stays on the Challenge origin and within a durable request/rate envelope |
+| Pwn | Compiler toolchain, pwntools, multiarch GDB+GEF, ROP tools, QEMU user, patchelf, traces, seccomp tools, pwninit/glibc corpus, AFL++/honggfuzz | QEMU-system/kernel kit when a kernel or guest image is supplied |
+| Reversing | radare2 **and Ghidra headless**, Capstone/Unicorn/Keystone, angr/Z3, GoReSym, WABT, .NET+ilspycmd, UPX | Qiling, Wine or a full guest for formats requiring execution |
+| Forensics | TShark, Scapy, Zeek, Sleuth Kit, Volatility3+symbols, carvers, binwalk, PCredz, YARA, Office/PDF tools, John, media/OCR/archive/SQLite | Live capture is disabled unless the Challenge explicitly supplies an interface |
+| Stego | zsteg, steghide/stegseek, stego-lsb/stegoveritas, exiftool, ImageMagick, FFmpeg, Tesseract, barcode, SSTV and RF/audio decoders | GDAL remains ADR-0024's bounded domain-library path; large ML checkpoints remain excluded |
+| Mobile | JADX, Apktool and Android platform tools | Frida, emulator/system image and app execution live behind the dynamic-target boundary |
+| OSINT | Search/HTTP/browser, EXIF/OCR/geospatial libraries, DNS/WHOIS plus Maigret/Sherlock/holehe/theHarvester | Public-Internet tools use explicit scope, rate limits and no inherited accounts |
+| Hardware/RF | Compact baseline: binwalk and generic audio/serial/PCAP decoding | sigrok-cli, multimon-ng, minimodem, rtl_433 and specialised decoders on detected capture; no physical-device authority |
+| Blockchain | Compact baseline: Python ABI/RPC parsing | Foundry, heimdall, Medusa, Halmos and chain SDK profile after EVM/Solana/Move detection; no paid explorer API |
+| Game | Reuse Rev/Misc: Ghidra, WABT, webcrack, .NET/ilspycmd | engine-specific extractors and Frida/scanmem after format detection and boundary admission |
+| AI/ML | Compact baseline: fickling, picklescan, modelscan and safe tensor/model structure inspection | ART/torchattacks/garak/pyrit after task detection; local inference models remain excluded |
+| Cloud | Compact baseline: JSON/YAML/JWT and HTTP | AWS/GCP/Azure CLIs/SDKs only after provider evidence; no host credentials, metadata endpoint or ambient account |
+| Programming/algorithmic | Reuse Crypto/Misc: compiler toolchain, Python/Node, Z3/cvc5 and Sage | Go/Rust/OR-Tools/PySAT/MiniZinc profile after language/problem detection |
+| Jail/sandbox | Reuse Pwn/Misc: pyjailbreaker, seccomp-tools, traces and language runtimes | Copied, timed execution only; no Solver/host namespace escape authority |
+| Networking/protocol | Reuse Web/Pwn/Forensics: Netcat, pwntools, SSH, DNS/WHOIS and TShark/Scapy | socat, SMB and bounded Nmap-equivalent discovery only for supplied Target addresses |
+| Boot2Root | Reuse Web/Pwn/Forensics plus supplied-host clients | Full guest/kernel profile only for an owned Challenge Instance |
+| Misc/unknown | Union is queryable: archives, encodings/CyberChef, barcodes, media, math, RE, Qiling and file identification | Unknown Category never suppresses Intake or routing; file/protocol evidence selects profiles |
+
+`healthcare` is deliberately absent. [`CONTEXT.md`](../../CONTEXT.md) defines it as a **Scenario
+setting**, not a Category; it may improve interpretation but never selects a package. Category and
+CTFd type remain open strings, so this table is a coverage map rather than an enum.
 
 The four promoted Runs attempted only reachable categories, but still spent eighteen shell Steps
 on missing commands and seven on missing imports; [ADR-0024](../adr/0024-the-image-carries-what-a-run-reached-for-and-a-picture-is-attached.md)
@@ -55,10 +71,10 @@ below rather than disguised as portable repository links.
 Its writeups demonstrate Python/AES, HTTP, image metadata and archive inspection, while a 2024
 NahamCon Mobile writeup demonstrates JADX plus emulator/ADB, a 2025 Google CTF Pwn writeup
 demonstrates cross-architecture QEMU plus GDB, and a 2025 BDSec author writeup demonstrates
-radare2. Those writeups establish demand only; packaging, architecture and licence claims below
-come from upstream and Kali.
+radare2. Those writeups establish demand only; packaging, architecture and licence claims in the
+two measured tables immediately below come from upstream and Kali.
 
-## Core inventory: bake these
+## Measured common substrate: bake these
 
 Costs are **incremental arm64 installed-size estimates**, not measured image deltas. I resolved
 `Pre-Depends`/`Depends` from Kali rolling's official arm64 `Packages.gz` against the current
@@ -89,94 +105,181 @@ the implementation ticket's job. Every package below is present for both arm64 a
 | **Must** · Crypto, Misc | [`python3-sympy`](https://tracker.debian.org/pkg/sympy) — symbolic algebra, modular arithmetic, factoring and equation solving | package `all`; **28 MiB / 2**; mpmath | BSD-3-Clause | **Pure computation; enforce time/memory limits on adversarial expressions.** Probe: solve a modular inverse/CRT fixture and substitute the result to recover `flag{probe}` bytes. |
 
 `jadx` and `apktool` share a Java closure, so their row costs cannot be added. The metadata-derived
-combined core is **1.81 GiB / 348 incremental packages** on arm64; JADX plus Apktool together are
+combined substrate is **1.81 GiB / 348 incremental packages** on arm64; JADX plus Apktool together are
 **736 MiB**, not the sum of their rows. Shared-file/config growth still makes this an estimate.
 Before implementation, install the proposed set together on the pinned
 base and measure `docker image inspect`, `dpkg-query` and build time on **both** architectures.
 
-## Useful, redundant, unsafe and unsupported
+## Additional inventory and declines
 
-These are explicit declines, not claims that the tools lack value.
+These rows distinguish required capability, bounded long-tail use, equal-path redundancy and hard
+exclusion. Package admission and the security boundary remain #186 decisions.
 
 | Verdict / Categories | Package or capability; purpose | Arch; estimated cost; runtime dependencies; licence | Boundary and real-input admission probe |
 | --- | --- | --- | --- |
-| **Useful** · Forensics, network | `python3-scapy` — packet construction and uncommon-protocol parsing | `all`; **9 MiB / 1**; Python; GPL-2.0-only | Admit after a PCAP/protocol reach. Offline probe reads the retained PCAP and counts layers; packet transmission is disabled. TShark covers the common decode floor. |
+| **Must** · Forensics, network | `python3-scapy` — packet construction and uncommon-protocol parsing | `all`; **9 MiB / 1**; Python; GPL-2.0-only | Offline probe reads a PCAP and asserts uncommon layers. Packet transmission is separately authority-gated. |
 | **Useful** · Pwn, Boot2Root | `socat` — bidirectional stream/PTY relay | arm64 + amd64; **2 MiB / 2**; OpenSSL/libwrap; GPL-2.0-only | Network/process tool, endpoint allowlist and timeout. Probe a local TCP echo and clean EOF. Pwntools already owns the normal client path. |
-| **Useful** · Crypto, Rev | `python3-z3` — SMT solving | arm64 + amd64; **27 MiB / 3**; `libz3`; MIT | Pure computation but solver resource caps required. Probe a small bit-vector key schedule. Add after a real constraint-solving reach. |
-| **Useful** · Rev, Misc | `wabt`, `mono-runtime`, `upx-ucl` — WebAssembly, managed .NET, packed-ELF specifics | both; **20 MiB / 1**, **58 MiB / 11**, **2.6 MiB / 1**; Apache-2.0, MIT, GPL-2.0-or-later with UPX exception | Format-triggered only. Probe `wasm-validate/wasm2wat`, run a compiled hello assembly under Mono, and pack/test/unpack a copied ELF. Mono/UPX execute or rewrite challenge material. |
-| **Useful** · Crypto | `john` — CPU password/hash recovery | both; **78 MiB / 4** on arm64; OpenSSL/OpenMP; GPL-2.0-or-later | Bounded wordlist/time only. Probe crack one known tiny salted hash. Prefer over `hashcat` in the generic image. |
+| **Must** · Crypto, Rev | `python3-z3` — SMT solving | arm64 + amd64; **27 MiB / 3**; `libz3`; MIT | Pure computation but solver resource caps required. Probe a small bit-vector key schedule. |
+| **Must** · Rev, Misc, Game | `wabt`, `mono-runtime`, `upx-ucl` — WebAssembly, managed .NET, packed-ELF specifics | both; **20 MiB / 1**, **58 MiB / 11**, **2.6 MiB / 1**; Apache-2.0, MIT, GPL-2.0-or-later with UPX exception | Probe `wasm-validate/wasm2wat`, run a compiled hello assembly, and pack/test/unpack a copied ELF. Mono/UPX execution or rewriting stays bounded. |
+| **Must** · Rev | GoReSym — recover names/types from stripped Go binaries | arm64+amd64 upstream builds; **S estimated**; self-contained Go binary; Apache-2.0 | Static parser. Build a stripped, hashed Go fixture; assert recovered function/type names without executing the held binary. |
+| **Must** · Crypto | `john` — CPU password/hash recovery | both; **78 MiB / 4** on arm64; OpenSSL/OpenMP; GPL-2.0-or-later | Bounded wordlist/time only. Probe one known tiny salted hash. |
 | **Useful but costly** · Crypto | `hashcat` — OpenCL/GPU-style cracking | both; **541 MiB / 34**; PoCL/LLVM/OpenCL; MIT | The run-day arm64 VM has no established GPU pass-through. Probe CPU backend against one tiny known hash before admission. Otherwise John/Python are smaller. |
-| **Useful** · Forensics | `yara` — signature matching | both; **1.3 MiB / 2**; `libyara`; BSD-3-Clause | Static scan only. Probe a rule matching a generated byte sequence. It classifies known patterns; it does not inspect structure like the current floor. |
-| **Useful** · Boot2Root, OSINT | `smbclient`, `bind9-dnsutils`, `whois` — supplied-host SMB/DNS/registration clients | both; **81 MiB / 30**, **7 MiB / 13**, **0.5 MiB / 1**; GPL-3+, MPL-2.0, GPL-2+ | Network allowlist; no subnet enumeration. Probes need disposable local SMB/DNS fixtures; WHOIS needs a recorded response because build-time Internet is not a probe. |
-| **Useful** · Mobile | `android-sdk-platform-tools` — ADB client for a supplied, authorized device/emulator endpoint | both; **11 MiB / 29**; Android tools, filesystem/graph utilities; Apache-2.0/BSD mix | No server/device is baked and USB discovery is disabled. Admit only when the Challenge supplies an endpoint; probe against a disposable emulator fixture, list one package, stream bounded logcat, then prove disconnect/teardown. |
-| **Useful** · Web | `ffuf` — bounded content discovery | both; **9 MiB / 1**; libc; MIT | Only against the Challenge origin, explicit request/rate cap. Probe a local HTTP fixture with one hidden path. |
+| **Must** · Forensics | `yara` — signature matching | both; **1.3 MiB / 2**; `libyara`; BSD-3-Clause | Static scan only. Probe a rule matching a generated byte sequence. |
+| **Must** · Boot2Root, OSINT, network | `smbclient`, `bind9-dnsutils`, `whois` — supplied-host SMB/DNS/registration clients | both; **81 MiB / 30**, **7 MiB / 13**, **0.5 MiB / 1**; GPL-3+, MPL-2.0, GPL-2+ | Network allowlist. Probe disposable local SMB/DNS fixtures; replay a recorded WHOIS response. |
+| **Must client** · Mobile | `android-sdk-platform-tools` — ADB client for a supplied, authorized device/emulator endpoint | both; **11 MiB / 29**; Android tools, filesystem/graph utilities; Apache-2.0/BSD mix | USB discovery disabled. Probe a disposable emulator fixture, list one package, stream bounded logcat, then prove disconnect/teardown. |
+| **Must, gated use** · Web | `ffuf` — bounded content discovery | both; **9 MiB / 1**; libc; MIT | Only the Challenge origin, explicit request/rate cap. Probe a local HTTP fixture with one hidden path. |
 | **Redundant** · Web | `gobuster` — duplicate directory/DNS discovery beside ffuf | arm64 + amd64; **8.6 MiB / 1**; libc; Apache-2.0 | Same Challenge-origin/rate boundary. Probe both against the same local hidden-path fixture and assert the same discovery; retain ffuf because one client is enough. |
-| **Useful but unsafe by default** · Web | `sqlmap` — automated SQL injection exploration | `all`; **13 MiB / 2**; Python; GPL-2.0-or-later | Generates attack traffic and can mutate data. Admit only after a SQLi hypothesis, Challenge-origin scope and non-destructive flags; local vulnerable fixture probe. Never generic recon. |
-| **Useful but too costly** · Rev | `ghidra` — high-quality decompiler/headless analysis | both Kali packages; **1.44 GiB / 100** incremental on arm64; full OpenJDK 21 JDK/GUI closure; Apache-2.0 with separately licensed components | Static headless mode only, timeout/disposable project. Probe `analyzeHeadless` on two real ELFs and export decompilation. Reconsider if radare2 results establish a decompiler gap worth the cost. |
+| **Must, gated use** · Web | `sqlmap` — automated SQL injection exploration | `all`; **13 MiB / 2**; Python; GPL-2.0-or-later | Generates attack traffic and can mutate data. Use only after a SQLi hypothesis, Challenge-origin scope and non-destructive flags; probe a local vulnerable fixture. Never generic recon. |
+| **Must** · Rev, Game | `ghidra` — high-quality headless decompiler and analysis platform | both Kali packages; **1.44 GiB / 100** incremental on arm64; full OpenJDK 21 JDK/GUI closure; Apache-2.0 with separately licensed components | Static headless mode, timeout/disposable project. Probe `analyzeHeadless` on two real ELFs and export decompilation. Cost may select a layer, not exclusion. |
 | **Redundant** · Forensics | `foremost` — file carving already owned by Scalpel | arm64 + amd64; **0.2 MiB / 1**; libc; GPL-2.0-or-later | Static parser, disposable output and carve limits. Probe both carvers against one generated blob containing a JPEG and assert the same payload recovery; retain the already-baked Scalpel. |
 | **Redundant** · Forensics | `tcpdump` — offline PCAP summary already owned more deeply by TShark | arm64 + amd64; **24 MiB / 5**; libpcap plus systemd helpers; BSD-3-Clause | Offline `-r` only; no capture capability. Probe the generated PCAP and assert packets, then require TShark to decode a named protocol field tcpdump does not expose. |
 | **Unsupported viewer** · Forensics | `wireshark` — Qt GUI over the TShark/Wireshark protocol libraries | arm64 + amd64; **691 MiB / 207** against the current base; Qt6/GTK/media plus Wireshark libraries; GPL-2.0-or-later | No display/session controller exists. Negative real-input probe: with `DISPLAY`/Wayland unset, opening the generated PCAP must not yield an operable result while `tshark -r` succeeds. Image/media/PDF viewing is already supplied by model attachment and headless extraction. |
 | **Unsupported now** · Boot2Root | `nmap` — port/service discovery | package absent from both official rolling indexes fetched on 6 Sep; installed cost and dependencies therefore unavailable; upstream Nmap Public Source License | Do not invent a curl-installed binary. Python/pwntools can test a small supplied port set. Admission probe, if packaging returns: scan a loopback fixture with two known ports and a strict rate/port list. Raw scans also need an explicit target/rate boundary. |
-| **Unsafe / unsupported** · Mobile | `android-sdk` plus a downloaded system image and Frida server — dynamic APK instrumentation | SDK is both-arch, **605 MiB / 145** before a multi-GiB architecture/API system image; Java, Android build/platform tools, QEMU/KVM/device surface; Apache/GPL mix, Frida wxWindows Library Licence | A generic APK does not supply an authorized device image. Admission probe belongs to a separate disposable Instance: boot pinned image, install a fixture APK, attach Frida, observe one known method, then prove egress/credential isolation and teardown. Static JADX/Apktool remains the core. |
-| **Unsafe / unsupported** · Rev | `wine64` — execute Windows PE | both index architectures; **685 MiB / 104** on arm64 before any x86 translation/guest stack; Wine/media/graphics libraries; LGPL-2.1-or-later | Executes foreign code and on arm64 does not itself solve the expected x86-64 target gap. Admission probe: run a source-and-hash-documented PE in a separately bounded Instance and prove filesystem/egress isolation. |
-| **Unsafe / unsupported** · Rev, Boot2Root | `qemu-system-x86` / `qemu-system-arm` — full-system emulation | both; **124 MiB / 36** and **133 MiB / 36** before guest images; QEMU common/data, firmware, slirp/storage libraries; GPL-2.0-or-later | Requires a supplied, authorized guest image and separately bounded storage/network lifecycle. Admission probe: boot a tiny pinned image, exchange `flag{probe}` over serial, then prove image rollback and process teardown. QEMU user-mode covers the generic ELF gap. |
-| **Unsupported package; useful domain tool** · Forensics | Volatility 3 — memory-image framework | no `volatility3` package in either index; upstream Python install cost unmeasured; Python, symbols and format plugins; Volatility Software Licence 1.0 | Static but expensive/adversarial parsing. Admission probe: pin upstream and symbols, enumerate a known process from a licence-compatible sample memory image, verify its hash and cap time/output. |
-| **Unsupported package; useful domain tool** · Rev | angr — symbolic execution | no `python3-angr` package in either index; upstream Python/native solver closure unmeasured; claripy/Z3, cle/pyvex/archinfo; BSD-2-Clause | May execute models and exhaust CPU/memory. Admission probe: solve a tiny source-and-hash-documented branch fixture under strict resources; add only after a real reach and pinned-source review. |
+| **Useful, gated long tail** · Mobile | `android-sdk` plus pinned system image and Frida server — dynamic APK instrumentation | SDK both-arch, **605 MiB / 145** before a multi-GiB system image; Java, QEMU/KVM/device surface; Apache/GPL mix, Frida wxWindows Library Licence | Disposable execution sandbox only: boot image, install fixture APK, attach Frida, observe a known method, then prove egress/credential isolation and teardown. |
+| **Useful, gated long tail** · Rev, Game | `wine64` — execute Windows PE | both index architectures; **685 MiB / 104** on arm64 before x86 translation/guest stack; Wine/media/graphics; LGPL-2.1-or-later | The arm64/x86-64 gap must be proved. Run a documented PE only inside a disposable execution sandbox and prove filesystem/egress isolation. |
+| **Useful, gated long tail** · Rev, Boot2Root | `qemu-system-x86` / `qemu-system-arm` — full-system emulation | both; **124 MiB / 36** and **133 MiB / 36** before guest images; firmware/slirp/storage; GPL-2.0-or-later | Supplied/pinned guest only. Boot a tiny image, exchange `flag{probe}` over serial, prove rollback and teardown. |
+| **Must from pinned upstream** · Forensics | Volatility 3 — memory-image framework | no Kali package; upstream Python closure and symbols, installed cost **unmeasured**; Volatility Software Licence 1.0 | Static adversarial parser. Pin upstream+symbols; enumerate a known process from a licence-compatible hashed sample under time/output caps. |
+| **Must from pinned upstream** · Rev | angr — symbolic execution | no Kali package; upstream Python/native closure cost **unmeasured**; Claripy/Z3, CLE/PyVEX; BSD-2-Clause | CPU/memory bounded. Solve a documented branching ELF and verify the recovered stdin; pin and audit the source closure. |
 | **Unsupported** · all | Proprietary IDA/Binary Ninja/Burp editions, hosted viewers and account-bound OSINT clients | no redistributable unattended Kali package; architecture, install cost and dependencies vary by product; proprietary/account-specific licences | Licence, login and GUI/session ownership are outside the Solver image. Negative admission probe: a clean credential-free container cannot open a supplied fixture through the product. The model can use text/attached-image evidence and allowed web search; it cannot inherit the Owner's desktop session. Local models are excluded, not classified. |
+
+## Legacy full-suite crosswalk
+
+The old `ctf-workspace` at commit `4631053` is a **candidate catalogue, not architecture**.
+Its own `docs/tooling.md` says `sandbox/INSTALLED.md` wins; the Dockerfile contains best-effort
+fetches, and its smokes range from six functional P2 probes to mostly command/import presence in
+P2.5. Brunner commit `92e3399` contributes a smaller audited substrate and attempt-local
+`uv --isolated` dependency pattern. The verdict below covers the candidate set in coherent
+capability bundles. Cost bands are explicit estimates from the legacy manifest and runtime type:
+**S** <50 MiB, **M** 50–250 MiB, **L** 250 MiB–1 GiB, **XL** >1 GiB; they are not current-image
+measurements. Each named tool—not one representative per row—must pass the row's applicable real
+fixture before the implementation may call it installed. Exact package locks replace mixed family
+licence labels with each upstream notice; an unresolved notice blocks that artefact, not the
+capability.
+
+Where a row below lacks an inline upstream link, architecture/licence/maintenance details are
+explicitly **legacy-workspace claims at commit `4631053`, not verified current facts**. They justify
+candidate classification only. #186 must resolve each admitted artefact against its primary
+upstream release, licence and package metadata; failed verification selects an equal-capability
+replacement or leaves the bounded seam visible.
+
+| Verdict / Categories | Package/distribution; purpose | Target arch; installed cost; runtime dependencies; licence | Security boundary; real-input probe |
+| --- | --- | --- | --- |
+| **Must** · general, programming | `build-essential`, GCC/G++, CMake, pkg-config; Python+`uv`, Node/npm — build/run common challenge code | both; **L estimated**; language runtimes/linkers; GPL/BSD/MIT/Apache family notices | Compile and run per-language hashed fixtures with network off; attempt-local caches only. |
+| **Useful, language-triggered** · programming | Go and Rust toolchains | both; **L estimated**; compilers/linkers/package metadata; BSD/MIT/Apache notices | Compile and run a hashed fixture for the detected language with network off and an attempt-local cache. |
+| **Must** · Crypto, algorithmic | SageMath, fpylll, gmpy2, Z3, cvc5, OR-Tools, PySAT, MiniZinc, prime/factoring and maintained Coppersmith libraries | both where native wheels/packages exist; **XL estimated**; Python/CAS/native solver closures; GPL/LGPL/MIT/BSD/MPL notices by project | Each solver gets its own lattice, SAT, CP-SAT, integer or CRT fixture under CPU/RAM/deadline caps. |
+| **Must** · Pwn, Rev | ROPgadget, ropper, Capstone/Unicorn/Keystone, angrop, GEF, pwninit, glibc-all-in-one, one_gadget, seccomp-tools | mostly both; **M estimated**; Python/Ruby/GDB/glibc; GPL/MIT/BSD notices by project | Each parser/helper resolves its documented output from a real ELF/libc/seccomp fixture; execution/ptrace only in copied workspace. |
+| **Must** · Pwn | AFL++ and honggfuzz; coverage-guided native fuzzing | both upstream; **L estimated**; Clang/LLVM/compiler runtime; Apache-2.0 / Apache-2.0 | Each engine crashes and minimizes the same deliberately vulnerable hashed parser under PID/CPU/disk caps. |
+| **Must, gated use** · Web | feroxbuster, dalfox, nuclei, SSTImap, jwt_tool, Arjun, smuggler/h2csmuggler, Katana/httpx/interactsh, Playwright+Chromium, SecLists/PayloadsAllTheThings, phpggc/ysoserial | both or architecture-neutral; **XL estimated**; Go/Python/Java/Node/browser; exact upstream notices pinned per artefact | A local vulnerable service proves one distinct result per tool; active traffic is Target-only, capped and recorded. Payload generators execute only in the fixture. |
+| **Must** · Forensics | Zeek, Volatility3+dwarf2json+symbols, tcpflow, binwalk, PCredz, testdisk, bulk_extractor, oletools, peepdf-3, qpdf, Scapy | both/source where packaged; **XL estimated**; Python/native parsers and symbol corpus; BSD/GPL/Volatility notices by project | Each tool recovers its own known flow/file/process/document indicator from a hashed fixture; PCredz output is secret-bearing. |
+| **Redundant** · Forensics | foremost and tcpdump | both; **~24 MiB plus 0.2 MiB** metadata estimate; libc/libpcap; GPL-2+/BSD | Existing Scalpel and TShark cover equal/deeper paths. Comparative fixtures must show no unique recovery before omission. |
+| **Must** · Stego, Misc | stegseek, stego-lsb/stegoveritas, zxing-cpp+zbar, PySSTV/sstv | both/source; **M estimated**; image/audio libraries; GPL/MIT/BSD notices by project | Each decoder reads its own embedded-text, QR or SSTV fixture. ZXing and zbar stay because their paths differ. |
+| **Useful, detected RF path** · Hardware/RF | sigrok-cli, multimon-ng, minimodem, rtl_433 | both/source; **M estimated**; audio/DSP libraries; GPL notices by project | Each decoder reads its own logic, AFSK or ISM capture. No physical-device authority. |
+| **Useful, detected-chain path** · Blockchain | Foundry, heimdall-rs, Medusa, Halmos, web3.py/eth ABI/account, crytic-compile, evmole, pinned solc | arm64+amd64 except release-specific artefacts; **L estimated**; Rust/Go/Python/Z3/EVM; Apache/MIT/GPL notices by project | Each tool deploys, inspects, decompiles, fuzzes, symbolically tests or exploits its part of a local contract. No public-chain funds/API. |
+| **Useful, chain-triggered** · Blockchain | ityfuzz; Solana/Move toolchain | both where source builds; large LLVM/Rust closure, cost **unmeasured**; project-specific SDK; OSS licences pinned at build | Prebuilt deterministic profile after chain detection. Exploit a local source-less EVM or Solana fixture; no mainnet endpoint. |
+| **Must** · OSINT | Maigret, Sherlock, holehe, theHarvester plus geopy/folium/piexif/staticmap | Python/all; **M estimated**; live HTTP/geospatial libraries; GPL/MIT notices by project | Each client/parser uses recorded responses or one controlled identity under rate/captcha caps; no inherited accounts. Coverage differs by username/email/geospatial input. |
+| **Must** · Misc, jail | pyjailbreaker, Qiling, local CyberChef library wrapper, webcrack | both/all; **M estimated**; Python/Unicorn/Node; MIT/GPL/Apache notices by project | Each escapes a disposable jail, emulates a foreign binary, decodes or deobfuscates its known fixture. Wrapper avoids the 463-tool MCP surface. |
+| **Useful, format-triggered** · Game, Rev | .NET runtime/SDK+ilspycmd, Cpp2IL, Il2CppInspectorRedux/Il2CppDumper, AssetRipper/UABEA/AssetsTools.NET, GDRE, CUE4Parse/UnrealExporter, WABT/webcrack | native both where built; old x86-64 releases are not portable; **XL estimated**; .NET/Java/Node; exact OSS notices per artefact | Every admitted extractor gets a real Unity/Godot/Unreal/.NET/WebAssembly fixture and asserts a known method/asset. |
+| **Useful, gated** · Game, Mobile | Frida client/server, frida-il2cpp-bridge, scanmem | client both; server/scanmem target-specific; cost **unmeasured**; device/process/ptrace surface; wxWindows/GPL/MIT mix | Disposable dynamic-target sandbox. Hook one fixture method or find one process value, then prove egress isolation and teardown. |
+| **Useful, provider-triggered** · Cloud | official AWS CLI/SDK, Google Cloud CLI/libraries and Azure CLI/SDK | architecture-neutral Python/native helpers; **XL estimated**; Python/Java helpers; Apache-2.0/MIT plus service terms | Each admitted CLI parses its local IAM/config artefact; authenticated probes use disposable emulators or Challenge credentials and prove credential deletion. |
+| **Must compact baseline** · AI/ML forensics | fickling, picklescan, modelscan | both/all where wheels exist; **M estimated**; Python/model parsers; BSD/Apache notices by project | Each scanner detects its known malicious model fixture without loading it. |
+| **Useful, task-triggered** · AI/ML | ART, torchattacks, garak, pyrit | both/all where wheels exist; **XL estimated** with PyTorch; Python/ML frameworks; MIT/Apache notices by project | Adversarial libraries attack a tiny checked-in model; prompt tools test only a local mock or Challenge-supplied model endpoint. No local inference model is bundled. |
+| **Unsupported/excluded** · viewers | Wireshark GUI, Autopsy, NetworkMiner, FModel, PINCE, UModel, dnSpy/Cheat Engine, AssetStudio, angr-management, IDA | GUI/platform/proprietary constraints; costs vary; display/session runtimes | No operable unattended display/licence path. TShark, headless extractors, ilspycmd, scanmem, angr and Ghidra supply the stronger autonomous paths. |
+| **Unsupported/excluded** · hype/dead | Python Ciphey, KLEE/SymCC without source, PaddleOCR arm64, NoSQLMap, local LLM/decompiler checkpoints, VibeHacking, pentest-ai/pentestMCP, mctfp/ctf-mcp | dead/incompatible or multi-GiB unproved closures; licences vary | Excluded for the item-specific maintenance, architecture, source-input, scope or authority reasons below. Probe the maintained replacement path; import success is not capability. |
+| **Redundant/unsafe integration** · MCP | duplicate proxy/Frida MCPs, CyberChef-MCP, paid Etherscan MCP, broad Ghidra/Frida/CTF MCPs | Node/Python; costs/tool surfaces vary; licences sometimes unclear | Direct CLI/library is equally capable with a smaller authority/context surface. Any future MCP needs source, egress and tool-surface audit plus an identical fixture comparison. |
+
+Distinct bundled purposes are: `dwarf2json` builds Volatility Linux symbols; PCredz extracts
+credentials from supplied captures; `phpggc` and `ysoserial` generate PHP and Java gadget payloads;
+Interactsh observes out-of-band callbacks; Cpp2IL rebuilds IL from IL2CPP metadata while
+Il2CppInspector maps types and Il2CppDumper is the fast fallback; ART supplies framework-wide
+adversarial methods, torchattacks the PyTorch-specific path, garak probes model-interface
+weaknesses, and pyrit orchestrates prompt red-team cases. These are candidate differentiators,
+not current install claims.
+
+The legacy workspace's grouped exclusions resolve per item as follows; current status remains
+subject to #186's primary-source check. FModel and PINCE are GUI-bound (replace with
+CUE4Parse/UnrealExporter and scanmem); UModel is closed Windows software (CUE4Parse); dnSpy and
+Cheat Engine are Windows GUIs (ilspycmd and scanmem); AssetStudio is archived (AssetRipper/UABEA);
+angr-management is a GUI over already-selected angr; IDA is proprietary (Ghidra headless). Python
+Ciphey is unmaintained (maintained Rust decoder/CyberChef path); KLEE and SymCC require source and a
+special build (AFL++/angr cover binary-first work); PaddleOCR lacks the required arm64 path
+(Tesseract); NoSQLMap is Python-2-era (bounded hand-written probes). LLM4Decompile, manga-OCR and
+Aletheia require local model checkpoints and are excluded by scope. CyberChef-MCP exposes 463
+context-heavy tools (thin wrapper); the surveyed Etherscan MCP requires an external public-chain
+API account (Foundry/web3);
+broad Ghidra/Frida/CTF MCPs add shell, device or scoreboard authority without capability beyond the
+selected CLI/library. Autopsy is a desktop GUI over Sleuth Kit (use CLI Sleuth Kit/Volatility);
+NetworkMiner is a desktop packet-forensics GUI (TShark/Zeek). The surveyed mega-MCPs were
+VibeHacking, pentest-ai/pentestMCP and mctfp/ctf-mcp; their infrastructure/scoreboard authority is
+outside this tool inventory. Unclear-licence MCPs fail closed.
+
+The old trust split—native trusted computation, isolated Challenge-owned execution—survives as a
+security requirement. Its host-vs-amd64 layout does not: current architecture and packaging must
+be proved in the present Solver image. The old `sandbox/INSTALLED.md` also records concrete
+warnings worth carrying forward: several fetched game artefacts were x86-64, EasyOCR lacked
+weights, a Playwright wrapper named a nonexistent CLI, and best-effort installs previously allowed
+green images with absent tools.
 
 ## Why this is the closed expected surface
 
-“Complete” here means every **recurring input or interaction shape in the expected Categories** has
-one low-friction primitive, not that every named CTF tool is installed:
+“Complete” means every recurring classic or plausible open-string input/interaction shape has a
+low-friction primitive **and a complementary deep path where it changes solve odds**:
 
 - bytes, archives, filesystems, images and PDFs already had a floor; 7-Zip, OCR, media streams,
   SQLite, steghide and PCAP fill observed format holes;
-- native executables gain static analysis, debugging, tracing, patching and foreign-user-mode
-  execution without introducing a whole guest OS;
-- APK/DEX gains two complementary static views without executing an app;
-- ordinary request/response network work uses curl, Requests and pwntools; offline protocol work
-  uses TShark; privileged discovery stays outside the default authority;
-- common cryptographic and symbolic operations gain stable Debian modules; specialised CAS,
-  solvers and crackers remain reach-triggered.
+- native, managed, WebAssembly and game executables gain decompilation, symbolic analysis,
+  debugging, fuzzing, patching and foreign execution;
+- APK/DEX gains complementary static views and an authority-gated dynamic path;
+- the proposed surface provides request/response, discovery and offline protocol work; authority and rate limits,
+  not absence, prevent misuse;
+- Crypto and programming gain CAS, lattice, SMT/SAT/CP and cracking paths;
+- hardware/RF, blockchain, cloud, OSINT, jail and unknown strings each map to a queryable profile.
 
-The package list must still be **adaptive**. Modern agent evidence says a broad, queryable Kali
-environment improves aggregate solving, but category effects differ and tool names alone do not
-create usable capability. Each baked line therefore has an executable real-input probe. A future
-Run reach can promote a Useful item; an unused core item can be challenged after Category-complete
-practice Runs record its cost and benefit.
+The suite stays adaptive in selection. Modern agent evidence says a broad,
+queryable environment improves aggregate solving, while tool names alone create no capability.
+Every shipped row therefore needs an executable real-input probe and an inventory record. A future
+Run may challenge a redundant item only with an equal-path comparison; size alone is insufficient.
 
 ## Implementation handoff
 
-One build ticket can implement the proposed core, but it should split validation by
-boundary:
+[Issue #186](https://github.com/jerome-queck/incypher-ctf/issues/186) converts this capability
+classification into exact v2 packages, layers, locks, probes and the truthful agent-visible
+manifest. This research intentionally does not freeze those production choices. Implementation
+should split by profile and boundary:
 
-1. add packages one per line with per-line reasons, preserving ADR-0008/0024 conventions;
-2. measure the **combined** layer on arm64 and amd64, including build time and final image size;
-3. keep parser probes in the Docker build where fixtures are cheap and licence-compatible;
-4. put execution/network probes in a no-network or loopback-only script run by CI and the pinned
-   runtime, with time/memory/output caps;
-5. prove a foreign ELF on each host architecture, a real APK, the retained PCAP, and generated
-   OCR/media/archive/SQLite/crypto fixtures;
-6. separately decide whether the 456 MiB QEMU and shared Java closures remain affordable after
-   measured image deltas. If not, split a deterministic secondary Category layer; do not restore
-   run-time Internet as an unrecorded dependency.
+1. lock every package/source artefact, architecture, licence and digest; generate the installed
+   inventory from what the image actually holds;
+2. measure each profile and the **combined** arm64/amd64 image, including build time and size;
+3. keep parser probes in the build where fixtures are cheap and licence-compatible;
+4. put deterministic execution/network probes in a no-network or loopback-only script run by CI
+   and the pinned runtime; put OSINT, cloud and model-endpoint smokes in a separately authorized
+   live Gate with disposable credentials and durable rate/request caps;
+5. require a functional assertion for **every admitted tool/capability** (fixtures may be shared),
+   including foreign ELF, APK, PCAP/memory/disk, web
+   target, contract, RF/audio, game asset, cloud config and jail fixtures;
+6. layer large profiles if needed for build/transfer reliability, but prebuild and attach them
+   deterministically where measurement supports it; ADR-0024's explicit run-time `apt`/`pip`
+   long tail remains authoritative until a later ADR changes it.
 
 ## Newly surfaced Wayfinder decisions
 
-Three questions are now sharp enough for tickets; none is resolved by this inventory:
+Two genuinely separate security decisions remain; cost measurement is implementation evidence,
+not authority to shrink the suite:
 
-- **The measured Category-layer budget** — after one combined arm64/amd64 build, is the full core
-  affordable in the one run-day image, or should Java/QEMU live in a deterministic secondary
-  Category layer?
 - **The dynamic-target execution boundary** — will Mobile/Windows/full-system dynamic analysis be
-  supported at all, and if so, what disposable Instance owns emulator images, privileges, egress,
-  credentials and teardown?
+  enabled for a given Challenge, and what disposable sandbox owns emulator images, privileges,
+  egress, credentials and teardown?
 - **The adversarial-parser boundary** — before adding the larger parser surface, is the current
   outer container alone sufficient, or must parsers and executed Challenge code move behind a
   separate uid/seccomp/resource boundary?
 
-The transient Nmap absence stays fog unless practice-board evidence shows that bounded supplied-
-host probing is inadequate; only then is a packaging/pinning decision worth a ticket.
+Packaging/profile implementation must also resolve three pieces of fog without reducing scope:
+Nmap is absent from the captured Kali indexes despite its tracker, several legacy game releases
+are x86-64-only, and cloud CLI combined cost is unmeasured. Each needs a pinned supported source or
+an equal-capability replacement plus a real-input probe.
+
+The 14 September ADK/first official batch may reveal genuinely new Categories or target formats;
+only those evidence-backed deltas belong to v3. All capabilities and extension seams knowable from
+current organiser statements, Runs, corpus, modern writeups and upstream packaging remain v2.
 
 ## Evidence and reproducibility
 
@@ -200,6 +303,13 @@ host probing is inadequate; only then is a packaging/pinning decision worth a ti
   provenance pointer. Neither source promises permanent file re-download.
 - [Modern autonomous CTF research](2026-09-05-modern-autonomous-ctf-solving.md) supplies the
   environment/usability evidence and its limits.
+- Machine-local legacy evidence was read at `ctf-workspace` commit `4631053`: `docs/tooling.md`,
+  ground-truth `sandbox/INSTALLED.md`, `sandbox/Dockerfile`, `docs/archive/tooling-p2.5.md`,
+  `docs/adr/0021-tooling-split.md`, install scripts, smoke scripts and `docs/ISSUES.md`. This is
+  evidence of candidates and past install failures, not a portable dependency or current design.
+- Brunner's audited command/runtime surface comes from machine-local
+  `docs/solver-tools.md` at commit `92e3399`. Its absence of system-install authority is specific
+  to that harness; its isolated dependency/cache discipline transfers.
 
 ### Packaging snapshot
 
@@ -242,6 +352,36 @@ host probing is inadequate; only then is a packaging/pinning decision worth a ti
   [Frida licence](https://github.com/frida/frida/blob/main/COPYING),
   [Volatility 3 licence](https://github.com/volatilityfoundation/volatility3/blob/develop/LICENSE.txt),
   and [angr repository/licence](https://github.com/angr/angr).
+- [SageMath](https://github.com/sagemath/sage), [fpylll](https://github.com/fplll/fpylll),
+  [Z3](https://github.com/Z3Prover/z3), [cvc5](https://github.com/cvc5/cvc5),
+  [OR-Tools](https://github.com/google/or-tools), [PySAT](https://github.com/pysathq/pysat), and
+  [MiniZinc](https://github.com/MiniZinc/libminizinc) establish the solver capabilities and
+  licences; final packaging still needs pinned closure measurement.
+- [AFL++](https://github.com/AFLplusplus/AFLplusplus),
+  [honggfuzz](https://github.com/google/honggfuzz),
+  [Volatility 3](https://github.com/volatilityfoundation/volatility3),
+  [Zeek](https://github.com/zeek/zeek), and [YARA](https://github.com/VirusTotal/yara) are the
+  primary fuzzing/forensics sources.
+- [Foundry](https://github.com/foundry-rs/foundry),
+  [Medusa](https://github.com/crytic/medusa), [Halmos](https://github.com/a16z/halmos),
+  [Heimdall](https://github.com/Jon-Becker/heimdall-rs), and
+  [web3.py](https://github.com/ethereum/web3.py) establish the self-hosted EVM surface.
+- [Frida](https://github.com/frida/frida), [Qiling](https://github.com/qilingframework/qiling),
+  [GoReSym](https://github.com/mandiant/GoReSym),
+  [ILSpy](https://github.com/icsharpcode/ILSpy), [Cpp2IL](https://github.com/SamboyCoding/Cpp2IL),
+  [AssetRipper](https://github.com/AssetRipper/AssetRipper), and
+  [GDRE Tools](https://github.com/GDRETools/gdsdecomp) establish the dynamic/game paths and their
+  platform constraints.
+- Current verification starting points for legacy exclusions are
+  [AssetStudio](https://github.com/Perfare/AssetStudio),
+  [NoSQLMap](https://github.com/codingo/NoSQLMap),
+  [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), and
+  [CyberChef-MCP](https://github.com/doublegate/CyberChef-MCP). The crosswalk deliberately marks
+  unverified legacy claims rather than inferring current support from them.
+- Official [AWS CLI](https://github.com/aws/aws-cli),
+  [Google Cloud CLI](https://cloud.google.com/sdk/docs/install), and
+  [Azure CLI](https://github.com/Azure/azure-cli) sources establish supported unattended clients;
+  service authorization is intentionally separate from package availability.
 
 ### Representative modern writeups (demand only)
 
@@ -255,13 +395,15 @@ host probing is inadequate; only then is a packaging/pinning decision worth a ti
 ## Uncertainties that remain
 
 - Combined image delta and build time are metadata estimates until Colima is healthy and both
-  architecture builds run. Java/QEMU cost could justify a deterministic secondary layer.
+  architecture builds run. Cost may justify deterministic layers, not capability removal.
 - The official 2026 Category names and file/protocol distribution are not yet released. This is a
   coverage decision over the known expected Categories, old corpus and current Runs, not a claim
   about unseen Challenges.
-- Nmap's tracker/index disagreement may be transient. It needs a packaging/pinning decision only
-  if a practice Board proves supplied-host probing insufficient.
-- The correct boundary for dynamic Android and Windows targets is a separate Instance/emulator
+- Nmap's tracker/index disagreement may be transient. Implementation needs a pinned supported
+  source or equal bounded scanner; supplied-host discovery cannot silently disappear.
+- Legacy source installs, cloud CLIs, solver stacks, game releases and symbol corpora lack one
+  comparable current installed-size measurement. Their rows say unmeasured or explicitly estimated.
+- The correct boundary for dynamic Android and Windows targets is a separate execution-sandbox/emulator
   design. Adding packages to this container cannot settle it.
 - Parser exposure should be threat-modelled before landing the layer: JADX, Apktool, FFmpeg,
   TShark, archive and image parsers all consume adversarial bytes inside the outermost current
