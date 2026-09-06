@@ -579,6 +579,21 @@ the two routes do not share the Codex CLI, its tool loop or its event schema
 ([ADR-0039](docs/adr/0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md)).
 _Avoid_: model, Agent, Adapter, Inference route
 
+**Codex Control**:
+The Supervisor-owned, non-Harness client to the pinned Codex App Server that reads native account,
+model and limit state and spends an earned reset only under pre-authorised, journalled authority.
+Its pipe and `CODEX_HOME` never reach a Worker; absence or failure makes the corresponding fact
+unknown and never grants more authority
+([ADR-0040](docs/adr/0040-one-owner-one-subscription-and-one-observed-limit-state.md)).
+_Avoid_: control plane, Observer, Harness, quota monitor
+
+**Quota wait**:
+The live Run state entered when shared account capacity is exhausted: new Inference pauses while
+the Supervisor, deterministic work and Recovery continue until observed capacity returns or the
+Run reaches its reserved tail. It is neither a Cut nor a route change
+([ADR-0040](docs/adr/0040-one-owner-one-subscription-and-one-observed-limit-state.md)).
+_Avoid_: quota failure, retry loop, fallback, Run close
+
 **Adapter**:
 One concrete implementation behind one of the Solver's seams — `Board`, `Target`, or an Inference
 route. Adapters share a *shape* and never a base class, which is a deliberate rule rather than

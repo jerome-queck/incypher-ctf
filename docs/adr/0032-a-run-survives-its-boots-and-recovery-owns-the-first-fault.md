@@ -1,5 +1,10 @@
 # A Run survives its Boots, and Recovery owns the first fault
 
+> **The inference credential, environment and shared-exhaustion mechanism are resolved by
+> [ADR-0040](0040-one-owner-one-subscription-and-one-observed-limit-state.md).** Codex Control reads
+> authoritative account-limit state when available, spends only pre-authorised journalled resets
+> and holds a live Quota wait instead of routing or closing the Run.
+
 > **The open secondary-Harness clause is resolved by
 > [ADR-0039](0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md).** Native Codex remains
 > primary; the CPA route uses a separate minimal Solver-owned Responses loop.
