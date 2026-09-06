@@ -526,16 +526,36 @@ The trusted part of the Solver which owns Board operations, scheduling, submissi
 control state. It never exposes those capabilities directly to an Attempt executor (ADR-0034).
 _Avoid_: orchestrator, scheduler, worker
 
+**Supervisor**:
+The trusted PID-1 authority inside the Solver container which owns Boots, process lifecycles and
+isolation profiles while handing children capabilities rather than credentials (ADR-0041).
+_Avoid_: init, Run controller, Recovery, process manager
+
+**Capability handle**:
+An identity-bound permission to request one typed Solver operation without receiving the credential,
+endpoint or control authority behind it (ADR-0041).
+_Avoid_: token, credential, socket, permission flag
+
 **Attempt executor**:
 The separately confined runtime identity through which the solving model uses tools, one Challenge
 working directory, its assigned Target proxy and an inference route. It is not a Lane: the Lane is
 capacity and the executor is the mechanism occupying it (ADR-0034).
 _Avoid_: worker, agent, Lane
 
+**Attempt service**:
+A descendant explicitly adopted past its spawning Step while remaining owned, bounded and removed
+with the same Attempt (ADR-0041).
+_Avoid_: daemon, background process, orphan, Worker
+
 **Isolation receipt**:
 The Evaluator-authenticated practice record binding exact images, rig and runtime controls, fresh
 state and adversarial probe results. A Gate-qualified solve cannot exist without one (ADR-0034).
 _Avoid_: log, report, attestation
+
+**Isolation profile**:
+One pretested set of identity, filesystem, process, network, syscall and resource controls that
+enforces the Attempt executor's fixed authority ceiling on a particular runtime (ADR-0041).
+_Avoid_: sandbox mode, runtime flags, best effort
 
 ### Secrets and tooling
 
