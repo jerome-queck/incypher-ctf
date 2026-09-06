@@ -1,5 +1,12 @@
 # There is no queue, and the clock chooses a working set
 
+> **The v2 evidence terms, Tier movement and exploration eligibility are replaced by
+> [ADR-0038](0038-one-order-reads-crowd-quality-and-tier-recomputes.md).** There is still one
+> deterministic Order, no queue, no ban, a working set chosen by the remaining clock, and a frozen
+> budget for an acquired Attempt. Crowd quality now gates the tractability term, qualified external
+> evidence may recompute Base Tier downward, and exploration reaches provisional or unavailable
+> evidence rather than only a literal zero-solve count.
+
 > **One term deleted by
 > [ADR-0031](0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md).**
 > Order, the working set, Tier's one-way movement and the spend ceiling all stand. What goes is

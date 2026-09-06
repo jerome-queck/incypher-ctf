@@ -164,30 +164,36 @@ replacing files. Re-running it is how the Solver notices. It touches no model an
 a Board's own file URLs carry a content hash, so what has changed is decided by comparing strings.
 _Avoid_: enumeration (that is the one list call Intake begins with), scrape, download, crawl
 
+**Crowd observation**:
+The raw population evidence read from a Board at one trusted time — Challenge solve counts and
+movement, recent solvers, and scoreboard or team activity with their source and read outcome. It is
+an observation of what the Board exposed, never proof that the population is current or useful.
+_Avoid_: crowd data, solve count, scoreboard (each names only one possible field)
+
+**Crowd state**:
+The derived quality of Crowd observations for one Challenge: `unavailable`, `provisional` or
+`qualified`, according to source trust, freshness, population activity and discrimination. It is
+recomputed from durable observations and a versioned policy; field presence alone never qualifies.
+_Avoid_: crowd mode, crowd-less mode, has solves, live crowd
+
 **Triage**:
-Reading Intake's output to decide what each Challenge is worth. Triage runs over any set of
-Challenges at any time — at the start of a run, again at its midpoint over what is still unsolved,
-and on whatever appears in between — so it is one callable thing rather than a stage of a pipeline.
-It **extracts and does not predict**: where a Board states a difficulty, Triage parses it, and a
-model is asked to judge only what is left. Triage never deploys an Instance and never opens a file
-it has downloaded; it reads the manifest, not the contents.
+Reading Intake's output to decide the Base Tier of every Challenge from qualified crowd, stated
+difficulty, or one durable model judgement where the deterministic evidence remains ambiguous.
+Triage is callable whenever Board evidence changes, not a one-shot pipeline stage; it never deploys
+an Instance or opens an Artefact, and an unavailable input remains visibly unknown.
 _Avoid_: ranking, scoring, classification, assessment
 
+**Base Tier**:
+The evidence-derived Tier before the Solver's Category weakness and confirmed Checkpoints add their
+bounded uplift. It may rise or fall when a new qualified Crowd observation replaces an older prior;
+a failed Attempt or model Claim never changes it.
+_Avoid_: prior (it can be recomputed), difficulty, final tier
+
 **Tier**:
-The effort budget Triage assigns a Challenge — how much of the run it is worth spending before an
-Attempt is cut. **A Tier is not a difficulty grade and not a rank.** It **rises on evidence and never
-falls**: Checkpoints earned across a Challenge's Attempts raise it, capped, because attempting a
-Challenge is the only real evidence of its difficulty we ever get and Triage's prior is a weak one.
-Nothing lowers it — a Claim that a Challenge is easy buys nothing, exactly as it buys no time within
-an Attempt (ADR-0005), and a barren Attempt is evidence about whether to come back rather than about
-how long to stay, which is **Order**'s question
-([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
-The intended bias toward the Categories the Solver is *weakest* at is **deferred, not dropped**: it
-needs a per-Category strength signal, and Category is an open string read from the Board, so v1 has
-no entry for the categories that will actually be scored. Until a stable Category vocabulary and
-real per-Category solve rates exist, a Tier is the difficulty a Board **states**, which Triage
-extracts. A confirmed Checkpoint raises it by one rung only as far as the highest stated Tier; the
-progress signal cannot manufacture effort bands above the scale Triage uses.
+The effort band that fixes how long one acquired Attempt may run before a Cut — Base Tier plus at
+most one rung for a reliably weak Category and bounded confirmed-Checkpoint uplift, clamped to the
+four-band scale. A later Tier may fall only because new qualified external evidence lowered Base
+Tier; failed work and model Claims cannot lower it, and an acquired Attempt's Tier never changes.
 _Avoid_: difficulty, priority, rank, score, weight
 
 **Order**:
@@ -195,20 +201,13 @@ The sequence the Solver takes Challenges in — **a pure, deterministic, total f
 Board's own signals and the Run's, recomputed at every Attempt boundary and never stored. **There is
 no queue**: a cut Challenge is not placed anywhere, it simply becomes eligible again, and where it
 next ranks falls out of the function
-([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)). Order and Tier
-are two words because they read the same inputs and weight them **oppositely** — Order goes where the
-Solver is strongest to bank Flags early, Tier spends longest where it is weakest — and a design that
-merges them silently picks one goal and loses the other. That opposition is the pair's *design
-intent*; the term it turns on is the same deferred strength signal Tier's entry describes, so in v1
-Order is what remains and all of it is measured: tractability, payoff, progress, a live Lease, and a
-monotone penalty on what has already been spent. **Order is not the only thing that chooses the
-pick**: roughly one Attempt in four is a **reserved exploration share**, spent on the best Challenge
-nobody has solved regardless of where it ranks, because tractability weights high-solve Challenges
-up and would otherwise leave the unsolved set starved by construction. Tractability itself is a
-Challenge's **solve velocity** wherever two samples exist and its solve count before that — a
-cumulative count is uniformly zero on a fresh Board and credits a Challenge for a rush that finished
-before we arrived
-([ADR-0017](docs/adr/0017-the-exploration-share-and-solve-velocity-are-reinstated.md)).
+([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)). The same formula
+always reads crowd quality, trusted payoff, a live Lease, confirmed progress, Solver-specific
+Category strength and monotone spend; unavailable crowd or Category evidence is neutral rather than
+a second mode. Order favours tractability and strength to bank Flags early while Tier uses the same
+evidence oppositely to fund harder work. A deterministic exploration share reaches the best
+provisional or unavailable Challenge without ever banning anything
+([ADR-0038](docs/adr/0038-one-order-reads-crowd-quality-and-tier-recomputes.md)).
 _Avoid_: priority, queue position, queue (there isn't one), tier (the other half of the pair, and
 deliberately a different word)
 
