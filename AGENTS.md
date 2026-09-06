@@ -90,6 +90,10 @@ step is "commit your work" has described the middle of the job. It reaches file 
 nothing else: a session that changes no file owes no pull request, and the only other thing that
 stops you is the author saying, here, that they want the commit alone.
 
+**Checkout cleanup is mandatory after a pull request opens, merges or closes.** Before ending that
+session, follow [Pull-request lifecycle cleanup](CONTRIBUTING.md#pull-request-lifecycle-cleanup);
+its clean primary worktree and bounded local branch/worktree inventory are the completion criteria.
+
 **Protection here is by convention, not by mechanism.** GitHub enforces neither branch protection
 nor required checks on a free private repository (ADR-0003), so nothing stops a push to `main` or
 a merge over red. A red conformance or CI check is a stop anyway.

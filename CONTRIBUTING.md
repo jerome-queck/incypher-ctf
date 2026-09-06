@@ -74,6 +74,33 @@ How `main` is treated — and one honest caveat:
 So: keep it small, describe *why* in the body — the diff already says what — and link the issue
 with `Closes #123`. The pull-request template lays out the rest.
 
+### Pull-request lifecycle cleanup
+
+Checkout cleanup is the last step of every session that touches a pull request. The **primary
+worktree** is the first path printed by `git worktree list --porcelain`; it is the checkout that
+rests on `main`, even when the change was built in another worktree.
+
+After the pull request opens, fetch `origin`, fast-forward the primary worktree's `main`, and leave
+that worktree clean on `main`. Retain the local topic branch while the pull request is open.
+
+Before removing a worktree or branch, inspect every worktree for that topic branch. Retain and
+report any dirty worktree, including its path and status, until its changes are deliberately
+discarded or preserved on a named ref; never discard or move changes merely to make cleanup pass.
+Before deleting the local branch, resolve the pull request's recorded head OID and prove
+`git rev-list <local-branch> --not <pr-head-oid>` is empty. Otherwise retain and report the branch
+until every additional commit is deliberately discarded or copied to a named retained ref.
+
+After the pull request merges, verify GitHub reports it merged; fetch `origin` with pruning;
+fast-forward local `main`; then remove its clean extra worktree and delete its local topic branch. A
+closed, unmerged pull request has the same cleanup only after its unique work was deliberately
+discarded or copied to a named retained ref; otherwise retain and report that branch.
+
+Cleanup is complete only when the primary worktree is clean on updated `main`. The local branch
+inventory contains only `main`, branches for open pull requests, intentional `prototype/*` evidence
+branches, and reported branches whose unique commits prevented safe deletion. The worktree
+inventory contains the primary worktree plus worktrees for those retained branches; every dirty
+worktree is reported.
+
 ## Disclosing AI assistance
 
 We build with AI agents, and every commit says so. Every commit **you write**, and your
