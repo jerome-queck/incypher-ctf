@@ -80,8 +80,9 @@ Costs are **incremental arm64 installed-size estimates**, not measured image del
 `Pre-Depends`/`Depends` from Kali rolling's official arm64 `Packages.gz` against the current
 Dockerfile's named-package closure and summed `Installed-Size`. This is reproducible metadata, but
 it omits maintainer-script/cache growth and may overcount files supplied by the actual base. The
-pinned runtime is presently `Broken, not Running`, so an image build and `du` measurement remains
-the implementation ticket's job. Every package below is present for both arm64 and amd64 in the
+pinned runtime was repaired after this research and the existing arm64 image builds, but the
+proposed combined suite does not exist yet, so its build and `du` measurement remain the
+implementation ticket's job. Every package below is present for both arm64 and amd64 in the
 6 September indexes unless stated otherwise.
 
 | Status / Categories | Package; purpose | Arch; estimated cost; material runtime dependencies | Licence | Security boundary; real-input capability probe |
@@ -394,8 +395,10 @@ current organiser statements, Runs, corpus, modern writeups and upstream packagi
 
 ## Uncertainties that remain
 
-- Combined image delta and build time are metadata estimates until Colima is healthy and both
-  architecture builds run. Cost may justify deterministic layers, not capability removal.
+- Combined image delta and build time remain metadata estimates until #186 implements the proposed
+  suite and builds it on both architectures. The existing arm64 image built successfully after
+  Colima recovery on 6 September; that does not measure packages not yet added. Cost may justify
+  deterministic layers, not capability removal.
 - The official 2026 Category names and file/protocol distribution are not yet released. This is a
   coverage decision over the known expected Categories, old corpus and current Runs, not a claim
   about unseen Challenges.
