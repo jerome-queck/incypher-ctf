@@ -28,11 +28,12 @@ from pathlib import Path
 from typing import Any
 
 
-PROMPT = (
+SHELL_PROMPT = (
     "Use the shell tool exactly once. Run this command verbatim: "
     "printf 'alpha\\nbeta\\n' > harness-proof.txt && shasum -a 256 harness-proof.txt. "
     "Then report only the digest."
 )
+READ_PROMPT = "Use the read_text tool exactly once to read source.txt. Then report only its contents."
 EXPECTED_DIGEST = hashlib.sha256(b"alpha\nbeta\n").hexdigest()
 VOLATILE_KEYS = {"prompt_cache_key", "x-session-affinity", "x-session-id"}
 VOLATILE_ID = re.compile(r"\b(?:ses|msg|prt)_[A-Za-z0-9]+\b|\b[0-9a-f]{8}-[0-9a-f-]{27,}\b", re.IGNORECASE)
@@ -62,6 +63,7 @@ class Result:
     request_count: int
     request_repetitions: dict[str, int]
     requests: list[dict[str, Any]]
+    observations: dict[str, Any]
 
 
 class FakeResponses:
@@ -140,7 +142,15 @@ class FakeResponses:
             def _stream(self, body: dict[str, Any]) -> None:
                 output_seen = "function_call_output" in json.dumps(body.get("input", []))
                 if output_seen:
-                    events = text_events(body.get("model", "trial-model"))
+                    tool_output = next(
+                        (
+                            item.get("output", "")
+                            for item in reversed(body.get("input", []))
+                            if item.get("type") == "function_call_output"
+                        ),
+                        EXPECTED_DIGEST,
+                    )
+                    events = text_events(body.get("model", "trial-model"), str(tool_output).strip())
                 else:
                     tool_name, arguments = choose_tool(body.get("tools", []))
                     events = tool_events(body.get("model", "trial-model"), tool_name, arguments)
@@ -158,7 +168,7 @@ class FakeResponses:
 
 def choose_tool(tools: list[dict[str, Any]]) -> tuple[str, str]:
     functions = [tool for tool in tools if tool.get("type") == "function"]
-    preferred = next((tool for tool in functions if tool.get("name") in {"bash", "shell"}), None)
+    preferred = next((tool for tool in functions if tool.get("name") in {"bash", "shell", "read_text"}), None)
     tool = preferred or (functions[0] if functions else None)
     if tool is None:
         return "bash", json.dumps(
@@ -178,6 +188,8 @@ def choose_tool(tools: list[dict[str, Any]]) -> tuple[str, str]:
             values[name] = "."
         elif name == "args" and spec.get("type") == "array":
             values[name] = ["-lc", command]
+        elif name == "path":
+            values[name] = "source.txt"
     return str(tool.get("name")), json.dumps(values)
 
 
@@ -252,8 +264,8 @@ def tool_events(model: str, name: str, arguments: str) -> list[dict[str, Any]]:
     ]
 
 
-def text_events(model: str) -> list[dict[str, Any]]:
-    content = {"type": "output_text", "text": EXPECTED_DIGEST, "annotations": [], "logprobs": []}
+def text_events(model: str, output: str) -> list[dict[str, Any]]:
+    content = {"type": "output_text", "text": output, "annotations": [], "logprobs": []}
     item = {"id": "msg_trial", "type": "message", "role": "assistant", "status": "completed", "content": [content]}
     response = response_base(model, [item], "completed")
     return [
@@ -278,7 +290,7 @@ def text_events(model: str) -> list[dict[str, Any]]:
             "item_id": "msg_trial",
             "output_index": 0,
             "content_index": 0,
-            "delta": EXPECTED_DIGEST,
+            "delta": output,
             "logprobs": [],
         },
         {
@@ -287,7 +299,7 @@ def text_events(model: str) -> list[dict[str, Any]]:
             "item_id": "msg_trial",
             "output_index": 0,
             "content_index": 0,
-            "text": EXPECTED_DIGEST,
+            "text": output,
             "logprobs": [],
         },
         {
@@ -324,7 +336,7 @@ def candidate_commands(
     (root / "home").mkdir()
     commands: dict[str, tuple[list[str], dict[str, str]]] = {}
     commands["Custom control"] = (
-        [sys.executable, str(Path(__file__).resolve()), "--custom-worker", endpoint],
+        [sys.executable, str(Path(__file__).resolve()), "--custom-worker", endpoint, "--mode", "shell"],
         env,
     )
     if args.omp:
@@ -357,7 +369,7 @@ def candidate_commands(
                 "yolo",
                 "--max-time",
                 "8s",
-                PROMPT,
+                SHELL_PROMPT,
             ],
             omp_env,
         )
@@ -402,7 +414,7 @@ def candidate_commands(
                 "--model",
                 "trial/trial-model",
                 "--auto",
-                PROMPT,
+                SHELL_PROMPT,
             ],
             opencode_env,
         )
@@ -436,8 +448,21 @@ def custom_request(endpoint: str, body: dict[str, Any]) -> tuple[list[dict[str, 
     return events, completed[0]
 
 
-def custom_worker(endpoint: str) -> int:
-    tool = {
+def tool_for(mode: str) -> dict[str, Any]:
+    if mode == "read":
+        return {
+            "type": "function",
+            "name": "read_text",
+            "description": "Read the one trial text file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    return {
         "type": "function",
         "name": "shell",
         "description": "Run one bounded shell command.",
@@ -449,18 +474,17 @@ def custom_worker(endpoint: str) -> int:
         },
         "strict": True,
     }
-    first_input = [{"role": "user", "content": [{"type": "input_text", "text": PROMPT}]}]
-    first_events, first = custom_request(
-        endpoint,
-        {"model": "trial-model", "input": first_input, "tools": [tool], "stream": True, "store": False},
-    )
-    calls = [item for item in first.get("output", []) if item.get("type") == "function_call"]
-    if len(calls) != 1 or calls[0].get("name") != "shell":
-        raise ValueError("response did not contain exactly one allowed shell call")
-    arguments = json.loads(calls[0]["arguments"])
-    if set(arguments) != {"command"}:
-        raise ValueError("shell arguments escaped the closed schema")
-    print(json.dumps({"type": "step-begin", "call_id": calls[0]["call_id"], "command": arguments["command"]}))
+
+
+def execute_call(call: dict[str, Any], mode: str) -> tuple[int, str, str]:
+    arguments = json.loads(call["arguments"])
+    expected = {"path"} if mode == "read" else {"command"}
+    if set(arguments) != expected:
+        raise ValueError("tool arguments escaped the closed schema")
+    if mode == "read":
+        if arguments["path"] != "source.txt":
+            raise ValueError("read escaped the one allowed file")
+        return 0, Path("source.txt").read_text(), ""
     completed = subprocess.run(
         arguments["command"],
         shell=True,
@@ -470,21 +494,52 @@ def custom_worker(endpoint: str) -> int:
         timeout=5,
         start_new_session=True,
     )
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+def custom_worker(endpoint: str, mode: str, checkpoint: str | None, crash_after_checkpoint: bool) -> int:
+    tool = tool_for(mode)
+    first_input = [
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": READ_PROMPT if mode == "read" else SHELL_PROMPT}],
+        }
+    ]
+    checkpoint_path = Path(checkpoint) if checkpoint else None
+    if checkpoint_path and checkpoint_path.exists():
+        durable = json.loads(checkpoint_path.read_text())
+        first_input = durable["first_input"]
+        call = durable["call"]
+        first_events = durable["event_types"]
+        print(json.dumps({"type": "resume", "call_id": call["call_id"]}))
+    else:
+        first_events_raw, first = custom_request(
+            endpoint,
+            {"model": "trial-model", "input": first_input, "tools": [tool], "stream": True, "store": False},
+        )
+        calls = [item for item in first.get("output", []) if item.get("type") == "function_call"]
+        if len(calls) != 1 or calls[0].get("name") != tool["name"]:
+            raise ValueError("response did not contain exactly one allowed tool call")
+        call = calls[0]
+        first_events = [event["type"] for event in first_events_raw]
+        if checkpoint_path:
+            checkpoint_path.write_text(
+                json.dumps({"first_input": first_input, "call": call, "event_types": first_events})
+            )
+            print(json.dumps({"type": "checkpoint", "call_id": call["call_id"]}))
+            if crash_after_checkpoint:
+                return 75
+    print(json.dumps({"type": "step-begin", "call_id": call["call_id"], "tool": call["name"]}))
+    exit_code, stdout, stderr = execute_call(call, mode)
     print(
         json.dumps(
-            {
-                "type": "step-end",
-                "call_id": calls[0]["call_id"],
-                "exit_code": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
-            }
+            {"type": "step-end", "call_id": call["call_id"], "exit_code": exit_code, "stdout": stdout, "stderr": stderr}
         )
     )
     second_input = [
         *first_input,
-        calls[0],
-        {"type": "function_call_output", "call_id": calls[0]["call_id"], "output": completed.stdout + completed.stderr},
+        call,
+        {"type": "function_call_output", "call_id": call["call_id"], "output": stdout + stderr},
     ]
     second_events, second = custom_request(
         endpoint,
@@ -499,12 +554,12 @@ def custom_worker(endpoint: str) -> int:
             {
                 "type": "close",
                 "text": text,
-                "usage": [first.get("usage"), second.get("usage")],
-                "event_types": [[event["type"] for event in first_events], [event["type"] for event in second_events]],
+                "usage": second.get("usage"),
+                "event_types": [first_events, [event["type"] for event in second_events]],
             }
         )
     )
-    return 0
+    return 0 if exit_code == 0 else 1
 
 
 def run_one(
@@ -523,6 +578,11 @@ def run_one(
         stdout, stderr = proc.communicate()
     proof = workdir / "harness-proof.txt"
     proof_digest = hashlib.sha256(proof.read_bytes()).hexdigest() if proof.exists() else None
+    observations = {
+        "tool_fidelity": proof_digest == EXPECTED_DIGEST,
+        "context_items": [len(request.get("body", {}).get("input", [])) for request in fake.requests],
+        "request_bytes": [len(json.dumps(request.get("body", {}))) for request in fake.requests],
+    }
     return Result(
         candidate,
         case,
@@ -536,6 +596,113 @@ def run_one(
         fake.request_count,
         dict(fake.request_repetitions),
         list(fake.requests),
+        observations,
+    )
+
+
+def run_custom_restart(endpoint: str, workdir: Path, env: dict[str, str], fake: FakeResponses) -> Result:
+    checkpoint = workdir / "checkpoint.json"
+    base = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--custom-worker",
+        endpoint,
+        "--mode",
+        "shell",
+        "--checkpoint",
+        str(checkpoint),
+    ]
+    started = time.monotonic()
+    first = subprocess.run([*base, "--crash-after-checkpoint"], cwd=workdir, env=env, capture_output=True, text=True)
+    second = subprocess.run(base, cwd=workdir, env=env, capture_output=True, text=True)
+    proof = workdir / "harness-proof.txt"
+    proof_digest = hashlib.sha256(proof.read_bytes()).hexdigest() if proof.exists() else None
+    return Result(
+        "Custom control",
+        "restart",
+        base,
+        second.returncode,
+        False,
+        time.monotonic() - started,
+        proof_digest,
+        scrub(first.stdout + second.stdout),
+        scrub(first.stderr + second.stderr),
+        fake.request_count,
+        dict(fake.request_repetitions),
+        list(fake.requests),
+        {
+            "tool_fidelity": proof_digest == EXPECTED_DIGEST,
+            "first_process_exit": first.returncode,
+            "checkpoint_survived": checkpoint.exists(),
+            "resumed_without_repeating_first_request": fake.request_count == 2,
+            "context_items": [len(request.get("body", {}).get("input", [])) for request in fake.requests],
+            "request_bytes": [len(json.dumps(request.get("body", {}))) for request in fake.requests],
+        },
+    )
+
+
+def run_native(codex: str, model: str, workdir: Path) -> Result:
+    command = [
+        codex,
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--json",
+        "--color",
+        "never",
+        "--approve-for-me",
+        "--model",
+        model,
+        "-c",
+        'model_reasoning_effort="low"',
+        "-C",
+        str(workdir),
+        SHELL_PROMPT,
+    ]
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        command,
+        cwd=workdir,
+        env=os.environ.copy(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    timed_out = False
+    try:
+        stdout, stderr = proc.communicate(timeout=90)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        os.killpg(proc.pid, signal.SIGKILL)
+        stdout, stderr = proc.communicate()
+    proof = workdir / "harness-proof.txt"
+    proof_digest = hashlib.sha256(proof.read_bytes()).hexdigest() if proof.exists() else None
+    events = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(scrub(event))
+    usage = [event.get("usage") for event in events if isinstance(event.get("usage"), dict)]
+    return Result(
+        f"Native Codex ({model})",
+        "success",
+        command,
+        proc.returncode,
+        timed_out,
+        time.monotonic() - started,
+        proof_digest,
+        scrub(stdout),
+        scrub(stderr),
+        0,
+        {},
+        [],
+        {"tool_fidelity": proof_digest == EXPECTED_DIGEST, "reported_usage": usage, "event_count": len(events)},
     )
 
 
@@ -543,7 +710,8 @@ def render(results: list[Result], path: Path) -> None:
     payload = json.dumps([asdict(result) for result in results]).replace("</", "<\\/")
     rows = "".join(
         f"<tr><td>{html.escape(r.candidate)}</td><td>{r.case}</td><td>{r.exit_code}</td><td>{r.seconds:.2f}s</td>"
-        f"<td>{'yes' if r.proof_digest == EXPECTED_DIGEST else 'no'}</td><td>{r.request_count}</td></tr>"
+        f"<td>{'yes' if r.observations.get('tool_fidelity') else 'no'}</td>"
+        f"<td>{r.request_count if r.requests else 'n/a'}</td></tr>"
         for r in results
     )
     path.write_text(
@@ -551,13 +719,21 @@ def render(results: list[Result], path: Path) -> None:
         "<style>body{font:15px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem}"
         "table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:.45rem;text-align:left}"
         "button{margin:.25rem;padding:.5rem}.panel{white-space:pre-wrap;background:#111;color:#eee;padding:1rem;overflow:auto}</style>"
-        "<h1>Secondary harness trial — PROTOTYPE</h1><p>Throwaway evidence for issue 184. Select a run to inspect full state.</p>"
+        "<h1>Secondary harness trial — PROTOTYPE</h1>"
+        "<p><strong>Question:</strong> which independent harness should stand behind native Codex for a CPA route?</p>"
+        "<p><strong>Verdict:</strong> native Codex remains primary. Advance only the minimal Solver-owned Responses loop to CPA installation issue 185; drop OMP and OpenCode.</p>"
+        "<p>Throwaway evidence for issue 184. Select a run to inspect full state.</p>"
         f"<p>Expected proof digest: <code>{EXPECTED_DIGEST}</code></p>"
         f"<table><thead><tr><th>Candidate</th><th>Case</th><th>Exit</th><th>Wall</th><th>Tool fidelity</th><th>Requests</th></tr></thead><tbody>{rows}</tbody></table>"
-        "<h2>Guided inspection</h2><div id=buttons></div><pre id=panel class=panel></pre>"
-        f"<script>const results={payload};const b=document.querySelector('#buttons'),p=document.querySelector('#panel');"
+        "<h2>Guided walkthroughs</h2><p>Success shows tool fidelity; restart shows durable event recovery; malformed and quota show failure bounds.</p>"
+        "<div id=buttons></div><pre id=panel class=panel></pre>"
+        f"<script>const results={payload};"
+        "const decide=rs=>({primary:'Native Codex',candidate:'Custom control',dropped:rs.filter(r=>"
+        "['OMP 18.1.10','OpenCode 1.18.29'].includes(r.candidate)).map(r=>r.candidate).filter((x,i,a)=>a.indexOf(x)===i)});"
+        "const b=document.querySelector('#buttons'),p=document.querySelector('#panel');"
         "results.forEach((r,i)=>{const x=document.createElement('button');x.textContent=r.candidate+' · '+r.case;"
-        "x.onclick=()=>p.textContent=JSON.stringify(r,null,2);b.append(x)});if(results.length){p.textContent=JSON.stringify(results[0],null,2)}</script>"
+        "x.onclick=()=>p.textContent=JSON.stringify({decision:decide(results),run:r},null,2);b.append(x)});"
+        "if(results.length){p.textContent=JSON.stringify({decision:decide(results),run:results[0]},null,2)}</script>"
     )
 
 
@@ -565,12 +741,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--omp")
     parser.add_argument("--opencode")
+    parser.add_argument("--native-codex")
+    parser.add_argument("--native-model", default="gpt-5.6-sol")
     parser.add_argument("--custom-worker")
+    parser.add_argument("--mode", choices=("shell", "read"), default="shell")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--crash-after-checkpoint", action="store_true")
     parser.add_argument("--output", default="solver/secondary_harness_trial_prototype.html")
     args = parser.parse_args()
     if args.custom_worker:
         try:
-            return custom_worker(args.custom_worker)
+            return custom_worker(args.custom_worker, args.mode, args.checkpoint, args.crash_after_checkpoint)
         except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError, urllib.error.HTTPError) as error:
             print(json.dumps({"type": "failure", "error": str(error)}), file=sys.stderr)
             return 1
@@ -587,6 +768,32 @@ def main() -> int:
                         workdir = root / f"work-{case}-{candidate.split()[0].lower()}"
                         workdir.mkdir()
                         results.append(run_one(candidate, case, command, env, workdir, fake))
+        with server("success") as (fake, endpoint):
+            trial_root = root / "read-custom"
+            command, env = candidate_commands(trial_root, endpoint, args)["Custom control"]
+            command[-1] = "read"
+            workdir = root / "work-read-custom"
+            workdir.mkdir()
+            (workdir / "source.txt").write_text("gamma\n")
+            result = run_one("Custom control", "non-shell read", command, env, workdir, fake)
+            close_events = [
+                json.loads(line)
+                for line in result.stdout.splitlines()
+                if line.startswith("{") and json.loads(line).get("type") == "close"
+            ]
+            result.observations["tool_fidelity"] = len(close_events) == 1 and close_events[0].get("text") == "gamma"
+            result.observations["expected_output"] = "gamma"
+            results.append(result)
+        with server("success") as (fake, endpoint):
+            trial_root = root / "restart-custom"
+            _, env = candidate_commands(trial_root, endpoint, args)["Custom control"]
+            workdir = root / "work-restart-custom"
+            workdir.mkdir()
+            results.append(run_custom_restart(endpoint, workdir, env, fake))
+        if args.native_codex:
+            workdir = root / "work-native-codex"
+            workdir.mkdir()
+            results.append(run_native(args.native_codex, args.native_model, workdir))
     render(results, Path(args.output))
     for result in results:
         print(
@@ -594,7 +801,7 @@ def main() -> int:
             result.case,
             f"exit={result.exit_code}",
             f"timeout={result.timed_out}",
-            f"tool_fidelity={result.proof_digest == EXPECTED_DIGEST}",
+            f"tool_fidelity={result.observations.get('tool_fidelity')}",
             f"requests={result.request_count}",
             f"seconds={result.seconds:.2f}",
         )
