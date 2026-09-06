@@ -1,5 +1,11 @@
 # The exploration share and solve velocity are reinstated
 
+> **The v2 form of both mechanisms is replaced by
+> [ADR-0038](0038-one-order-reads-crowd-quality-and-tier-recomputes.md).** Solve velocity remains
+> preferred once two timed observations exist, but only qualified crowd affects ranking;
+> deterministic exploration now reaches the best provisional or unavailable Challenge rather than
+> depending on a literal zero-solve count.
+
 > **The accepted restart loss expires at v2 under
 > [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** A later Boot
 > replays the Run's recorded Intake and ordering facts, including solve-velocity baselines and
