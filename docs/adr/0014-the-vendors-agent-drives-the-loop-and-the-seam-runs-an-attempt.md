@@ -1,5 +1,10 @@
 # The vendor's agent drives the loop, and the seam runs an Attempt
 
+> **The rejection of `codex exec resume` is superseded by
+> [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** A Solve Lead keeps
+> one persistent thread across the Turns of its Attempt. A classified native-Harness failure may
+> open a fresh CPA thread segment from durable context; a new Attempt or Boot never resumes it.
+
 > **The open Harness choice is resolved by
 > [ADR-0039](0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md).** Native Codex remains
 > primary; the CPA route uses a separate minimal Solver-owned Responses loop.

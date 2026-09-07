@@ -1,5 +1,10 @@
 # An Attempt holds the turn loop, and Order is not asked between turns
 
+> **The fresh-invocation mechanism is superseded by
+> [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** The Attempt still
+> owns the Turn loop and Order remains outside it, but one persistent Solve Lead thread now carries
+> its Turns. A classified route-local failure is the only in-Attempt fresh thread segment.
+
 **When the vendor's agent ends a turn with budget left, the orchestrator re-invokes *inside the same
 Attempt*. The re-invocation is a new Turn, not a new Attempt: Order is not consulted, no second
 budget is granted, and `attempt_sequence` does not move.**

@@ -228,14 +228,19 @@ the thing the working set is a slice of
 
 **Agent role**:
 The purpose-specific policy for bounded model work: **Triage Judge**, generalist **Solve Lead**,
-**Specialist** or **Recovery Agent**; a solving Turn carries one Solve Lead or Specialist role while
-the Run controller owns the Attempt and may change that role on later Turns. Intake, Order,
-verification, submission, resource governance and lifecycle ownership are deterministic functions,
-not Agent roles.
+**Specialist** or **Recovery Agent**. Intake, Order, verification, submission, resource governance
+and lifecycle ownership are deterministic functions, not Agent roles.
 _Avoid_: agent type, service, controller
 
+**Engagement**:
+One controller-owned use of an Agent role, from admission through durable close. A Solve Lead
+Engagement spans one Attempt, a Triage Judge Engagement one snapshot batch, a Specialist Engagement
+one delegated investigation and a Recovery Engagement one incident; each may hold one or more Turns.
+_Avoid_: session, invocation, agent run, task — a repository issue is a task, and a Turn is one
+vendor invocation inside the Engagement
+
 **Specialist profile**:
-The changeable expertise and tool emphasis of a Specialist invocation: web, pwn, cryptography,
+The changeable expertise and tool emphasis of a Specialist Engagement: web, pwn, cryptography,
 reverse engineering, forensics, steganography/media, OSINT, AI/ML, misc/protocols or an on-demand
 profile for another open Category. A Board Category may seed the profile but never locks it, because
 one Challenge may span several techniques.
@@ -285,8 +290,8 @@ already worked. What carries across is the environment — the workdir is the me
 approach labels, never a conclusion
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)).
 **An early stop does not produce a second Attempt.** When the solving agent ends its turn with
-budget left the orchestrator re-invokes *inside the same Attempt*, and what that produces is a new
-**Turn** — the entry below.
+budget left the controller continues its persistent Engagement *inside the same Attempt*, and what
+that produces is a new **Turn** — the entry below.
 **If work continues after a Boot failure interrupted an Attempt, it opens a second Attempt.** The
 interrupted Attempt ends with the spend and evidence it accumulated; a later Boot reconstructs that
 carry, preserves the working directory, and opens a distinct Attempt. It never resumes or reuses
@@ -297,13 +302,13 @@ session, try. Not **Lease** either — a Lease is our hold on the Instance and a
 done under it, which is why it is a separate word.
 
 **Turn**:
-One invocation of the vendor's agent — the spawn, everything it does, and the moment it comes back
-or is killed — and the unit the vendor **meters**. Turns exist because the vendor's agent drives its
-own loop and can end one with budget left
+One bounded period of model work inside an Engagement — from invocation or continuation until the
+model returns or is killed — and the unit the vendor **meters**. Turns exist because the vendor's
+agent drives its own loop and can end one with budget left
 ([ADR-0014](docs/adr/0014-the-vendors-agent-drives-the-loop-and-the-seam-runs-an-attempt.md)); an
-Attempt holds one or more of them, because the orchestrator answers an early stop by re-invoking
-over the same working directory rather than letting that stop end the Attempt — which would be the
-give-up button ADR-0005 removed, arriving by the back door.
+Engagement holds one or more of them, and the controller answers an early stop by continuing the
+persistent Solve Lead rather than letting that stop end the Attempt — which would be the give-up
+button ADR-0005 removed, arriving by the back door.
 **A Turn boundary resets no Attempt evidence.** Repetition, novelty and the current stall epoch
 continue across it; ending a Turn early is neither progress nor failure.
 **It is the middle of three units and never a synonym for either neighbour**: an Attempt is what a
@@ -420,11 +425,12 @@ does not survive anything.
 **Working directory**:
 The one directory a Challenge's Attempts write in — `/state/work/<event>/<challenge_id>/`, holding
 the Board's own files copied in and everything the model makes beside them. The sandbox makes it the
-only path the vendor's agent may write, and it is **never cleared between Attempts**: a Turn is a
-fresh spawn with no memory of the last, so this directory is what carries what was learned across
-that reset. It is therefore the one part of Run state that is also Run *input*, and it is keyed by
-event rather than by `challenge_id` alone — that id is a per-installation auto-increment integer, so
-two Boards mint the same ones and one address would hold two Challenges
+only path the vendor's agent may write, and it is **never cleared between Attempts**. A persistent
+Solve Lead carries context across Turns inside one Attempt; this directory carries Challenge work
+across Specialist Engagements, later Attempts, fresh thread segments and Boots. It is therefore the
+one part of Run state that is also Run *input*, and it is keyed by event rather than by
+`challenge_id` alone — that id is a per-installation auto-increment integer, so two Boards mint the
+same ones and one address would hold two Challenges
 ([ADR-0025](docs/adr/0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md)).
 _Avoid_: workspace, scratch, sandbox (the sandbox is the container itself, ADR-0018). Not the Run's
 own record either: that lives under `/state/runs/`, deliberately outside this directory, so the
