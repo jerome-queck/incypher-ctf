@@ -1,5 +1,10 @@
 # The event namespaces the working directory, and it is Run input
 
+> **The claim that every Turn is a fresh spawn is superseded by
+> [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** The working directory
+> remains durable Challenge memory across Engagements, Attempts and Boots; persistent Lead context
+> inside one Attempt does not make model-written files authoritative.
+
 **`/state/work` gains one directory per event — `/state/work/<event>/<challenge_id>/` — and this
 record writes down the thing that made the missing namespace dangerous: the working directory is the
 one path under `/state` that a later Attempt reads back as *input*.** Both halves answer

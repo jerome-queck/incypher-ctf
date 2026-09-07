@@ -1,5 +1,9 @@
 # Store what was observed, derive every judgement
 
+> **The fresh-Turn premise is superseded by
+> [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** The persistent Solve
+> Lead changes context continuity, not this record's Observation/Claim split or durable authority.
+
 > **Its recovery boundary is amended by
 > [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** The append-only
 > stream stays canonical and judgements stay derived, but records that reserve identity, ownership

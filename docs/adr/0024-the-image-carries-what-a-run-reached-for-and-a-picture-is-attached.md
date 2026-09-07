@@ -1,5 +1,9 @@
 # The image carries what a Run reached for, and a picture is attached
 
+> **The claim that every Turn is a fresh Codex process is superseded by
+> [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** Tool-image and picture
+> requirements stand; one persistent Solve Lead now spans an Attempt's Turns.
+
 **Twelve packages join the `Dockerfile`, each one a binary or a module the model itself reached for
 and did not find on a live Run — and `codex exec -i` now attaches a Challenge's pictures to the
 turn, because the model reads them.** Both halves answer
