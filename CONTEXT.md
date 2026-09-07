@@ -226,6 +226,21 @@ the thing the working set is a slice of
 
 ### How the Solver works a Challenge
 
+**Agent role**:
+The purpose-specific policy for bounded model work: **Triage Judge**, generalist **Solve Lead**,
+**Specialist** or **Recovery Agent**; a solving Turn carries one Solve Lead or Specialist role while
+the Run controller owns the Attempt and may change that role on later Turns. Intake, Order,
+verification, submission, resource governance and lifecycle ownership are deterministic functions,
+not Agent roles.
+_Avoid_: agent type, service, controller
+
+**Specialist profile**:
+The changeable expertise and tool emphasis of a Specialist invocation: web, pwn, cryptography,
+reverse engineering, forensics, steganography/media, OSINT, AI/ML, misc/protocols or an on-demand
+profile for another open Category. A Board Category may seed the profile but never locks it, because
+one Challenge may span several techniques.
+_Avoid_: category agent, fixed specialist, category lock
+
 **Lane**:
 One place in the Solver's bounded capacity for running Attempts concurrently. A Lane carries at
 most one active Attempt; several Lanes let several Attempts make progress at once. The Lane is
