@@ -3,221 +3,222 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Prototype — model and effort routing</title>
+  <title>Prototype — role-aware inference routing</title>
   <style>
-    :root { --ink:#18231f; --muted:#63716b; --line:#d9e2dd; --paper:#f7faf8; --card:#fff; --accent:#176b52; --warn:#945f12; --bad:#983c3c; }
+    :root { --ink:#17231f; --muted:#61716a; --line:#d7e2dc; --paper:#f6faf8; --card:#fff; --accent:#146b50; --warn:#905d12; --bad:#963b3b; --blue:#315f8b; }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    main { width:min(1180px,calc(100% - 32px)); margin:32px auto 72px; }
+    main { width:min(1220px,calc(100% - 32px)); margin:32px auto 72px; }
     h1,h2,h3 { line-height:1.15; margin:0 0 10px; }
     h1 { font-size:30px; letter-spacing:-.03em; }
-    h2 { font-size:20px; margin-top:4px; }
-    h3 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+    h2 { font-size:20px; }
+    h3 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
     p { margin:0 0 12px; }
-    code { font:13px ui-monospace,SFMono-Regular,Menlo,monospace; }
-    .eyebrow { color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.08em; font-size:12px; }
-    .lede { max-width:900px; font-size:17px; }
+    a { color:var(--blue); }
+    .eyebrow { color:var(--accent); font-weight:750; text-transform:uppercase; letter-spacing:.08em; font-size:12px; }
+    .lede { max-width:960px; font-size:17px; }
     .notice { border-left:4px solid var(--warn); padding:12px 14px; background:#fff8ea; margin:18px 0 24px; }
-    .grid { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(340px,.9fr); gap:18px; align-items:start; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; align-items:start; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; box-shadow:0 1px 2px rgba(18,35,28,.04); }
-    .stack { display:grid; gap:18px; }
-    .state { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px 16px; margin:14px 0; }
-    .datum { border-bottom:1px solid var(--line); padding:0 0 7px; }
+    .full { grid-column:1 / -1; }
+    .role-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+    .role { border-top:3px solid #b9d9ce; padding-top:10px; }
+    .role strong { display:block; margin-bottom:4px; }
+    .small { color:var(--muted); font-size:13px; }
+    .field-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    label { color:var(--muted); font-size:12px; }
+    label select,label input { display:block; width:100%; margin-top:4px; border:1px solid #b7c6bf; border-radius:7px; background:#fff; padding:8px; color:var(--ink); }
+    .state { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px 16px; margin:14px 0; }
+    .datum { border-bottom:1px solid var(--line); padding-bottom:7px; }
     .datum span { display:block; color:var(--muted); font-size:12px; }
     .datum strong { display:block; margin-top:2px; overflow-wrap:anywhere; }
     .decision { border:1px solid #b8d8cc; background:#eff8f4; border-radius:8px; padding:14px; }
-    .decision.blocked { border-color:#e4c7a0; background:#fff8ea; }
+    .decision.warn { border-color:#e4c7a0; background:#fff8ea; }
     .decision.wait { border-color:#dfbaba; background:#fff1f1; }
-    .controls { display:flex; flex-wrap:wrap; gap:8px; }
-    button,select,input { font:inherit; }
-    button { border:1px solid #b7c6bf; border-radius:7px; background:#fff; padding:8px 11px; color:var(--ink); cursor:pointer; }
-    button:hover { border-color:var(--accent); color:var(--accent); }
-    button.primary { background:var(--accent); border-color:var(--accent); color:white; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
-    label { color:var(--muted); font-size:12px; }
-    label select,label input { display:block; width:100%; margin-top:4px; border:1px solid #b7c6bf; border-radius:7px; background:#fff; padding:8px; color:var(--ink); }
     table { width:100%; border-collapse:collapse; font-size:13px; }
     th,td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
     th { color:var(--muted); font-weight:650; }
-    .pill { display:inline-block; border-radius:999px; padding:2px 8px; background:#e9f4ef; color:var(--accent); font-size:12px; font-weight:700; }
-    .pill.hold { background:#fff2dc; color:var(--warn); }
-    .pill.reject { background:#f8e5e5; color:var(--bad); }
-    .tabs { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
-    .tabs button[aria-selected="true"] { background:var(--ink); color:#fff; border-color:var(--ink); }
-    .steps { display:grid; gap:8px; }
-    .step { display:flex; align-items:center; gap:10px; text-align:left; }
-    .step b { display:grid; place-items:center; min-width:24px; height:24px; border-radius:50%; background:#edf2ef; }
-    .step.done { color:var(--muted); text-decoration:line-through; }
-    .evidence-controls { display:flex; gap:8px; align-items:center; margin:10px 0; }
-    .small { color:var(--muted); font-size:13px; }
-    .full { grid-column:1 / -1; }
+    .source { padding:10px 0; border-bottom:1px solid var(--line); }
+    .source:last-child { border:0; padding-bottom:0; }
     footer { margin-top:24px; color:var(--muted); font-size:13px; }
-    @media (max-width:850px) { .grid { grid-template-columns:1fr; } .state,.field-grid { grid-template-columns:1fr; } }
+    @media (max-width:900px) { .grid { grid-template-columns:1fr; } .full { grid-column:auto; } .role-grid { grid-template-columns:repeat(2,1fr); } .field-grid,.state { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:560px) { .role-grid,.field-grid,.state { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
 <main>
-  <div class="eyebrow">Throwaway logic prototype · issue 224</div>
-  <h1>Model, effort and shared-capacity routing</h1>
-  <p class="lede"><strong>Question:</strong> which role/model/effort cells may a deterministic Inference governor admit, and what may it change when capacity, time, progress or evidence becomes uncertain?</p>
-  <div class="notice"><strong>Evidence boundary.</strong> One fresh micro-fixture per cell, 28 sequential calls, host-native pinned Codex CLI, no web. The production local Board and container harness were unavailable; effective Daybreak snapshot was unreported. The generic weekly window moved 3%→4% during Daybreak and stayed at 4% through Luna. This screens candidates; it does not Gate-approve them or set numeric burn shares.</div>
+  <div class="eyebrow">Reaction prototype v0.2 · issue 224</div>
+  <h1>Role-aware model, effort and capacity routing</h1>
+  <p class="lede">The governor never knows an exact number of Turns left. It combines OpenAI's broad Pro 20x planning ranges, live window telemetry when available, and local per-workload measurements. Its objective changes by role, phase, difficulty and fault impact.</p>
+  <div class="notice"><strong>What changed after review.</strong> Removed “capacity known” and “model state.” Effective snapshot identity is audit evidence, not an automatic work blocker. Replaced one permanent cell per role with workload menus. The easy one-run fixtures below cannot reject high reasoning for hard Challenges or the need for several high-effort Turns.</div>
 
   <div class="grid">
-    <section class="card">
-      <h2>Drive the governor</h2>
-      <p class="small">The pure decision function never treats unknown as spare capacity, never changes route on shared exhaustion, and never escalates from model-authored uncertainty alone.</p>
-      <div class="field-grid" id="fields"></div>
-      <div class="controls" id="actions"></div>
+    <section class="card full">
+      <h2>What the four roles actually mean</h2>
+      <div class="role-grid">
+        <div class="role"><strong>Triage Judge</strong><span class="small">One adaptive batched judge for newly seen ambiguous Challenges. At Run start it protects startup latency; later it runs only for a new ambiguous release batch. Stated difficulty or qualified crowd evidence can eliminate the call.</span></div>
+        <div class="role"><strong>Solve Lead</strong><span class="small">The generalist assigned one bounded solving Turn. The Run controller—not this Agent—owns the durable Attempt and may schedule another Turn.</span></div>
+        <div class="role"><strong>Specialist</strong><span class="small">A profile-specific solving Turn: web, pwn, crypto, rev, forensics, stego, OSINT, AI or misc. A hard Challenge may need several high-effort Specialist Turns, with Checkpoints between them.</span></div>
+        <div class="role"><strong>Recovery Agent</strong><span class="small">A fresh bounded invocation for a novel operational fault. It is not a failed-solve fallback. Whole-Run faults value wall time; an isolated noncritical Lane fault may value capacity more.</span></div>
+      </div>
     </section>
 
-    <section class="card">
-      <h2>Current state</h2>
+    <section class="card full">
+      <h2>Explore one routing boundary</h2>
+      <p class="small">This produces a candidate experiment, not a production admission. “Requested model” is the name sent to Codex; “effective snapshot reported” only records whether the moving alias identified what actually served the Turn.</p>
+      <div class="field-grid" id="fields"></div>
       <div class="state" id="state"></div>
       <div class="decision" id="decision"></div>
     </section>
 
     <section class="card full">
-      <h2>Guided walkthroughs</h2>
-      <div class="tabs" id="tabs" role="tablist"></div>
-      <p id="scenario-copy"></p>
-      <div class="steps" id="steps"></div>
+      <h2>Pro 20x planning envelope · official current estimates</h2>
+      <p>OpenAI publishes <em>local messages per five-hour period</em>, not a guaranteed allowance. Mixed models share the plan allowance; weekly limits may also apply. Cloud chats use Sol and may consume more. The remaining range below simply scales both published endpoints by the live unused percentage; it is a rough planning band, never an entitlement.</p>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>Model</th><th>Pro 20x local messages / 5h</th><th>Rough remaining at <span id="remaining-label">96%</span></th><th>API price / 1M tokens<br><span class="small">input · cached · output</span></th><th>Directional relative cost</th></tr></thead>
+        <tbody id="capacity"></tbody>
+      </table></div>
+      <p class="small" style="margin-top:10px">API price is only a cross-model proxy. OpenAI does not say personal-plan usage is debited by the API bill. Real consumption also depends on context, reasoning, tools, retrieval, caching and task complexity.</p>
     </section>
 
     <section class="card full">
-      <h2>Versioned admission table · draft v0.1</h2>
-      <table>
-        <thead><tr><th>Agent role</th><th>Provisional cell</th><th>Screen result</th><th>v2 status</th><th>Evidence still required</th></tr></thead>
+      <h2>Role × workload experiment menu · draft v0.2</h2>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>Boundary</th><th>Primary objective</th><th>Cells to compare next</th><th>Promotion evidence</th></tr></thead>
         <tbody>
-          <tr><td>Triage Judge</td><td>Daybreak · low</td><td>5/6; 24.3s</td><td><span class="pill hold">hold</span></td><td>Repeated batches; downstream Order and time-to-first-Flag effect.</td></tr>
-          <tr><td>Solve Lead</td><td>Daybreak · medium</td><td>1 Flag; 31.8s</td><td><span class="pill hold">candidate</span></td><td>Independent Challenge families and seeds; full-window Flag yield.</td></tr>
-          <tr><td>Specialist</td><td>Daybreak · low</td><td>1 Flag; 33.2s</td><td><span class="pill hold">candidate</span></td><td>Several profiles and difficulty bands. Max's 2.1s lead is one-run noise.</td></tr>
-          <tr><td>Recovery Agent</td><td>Daybreak · low</td><td>1 Checkpoint; 54.3s</td><td><span class="pill hold">candidate</span></td><td>Novel fault families, P95 reserve, repair correctness and probation.</td></tr>
-          <tr><td>All roles</td><td>Luna · high</td><td>Same outcomes; slower in all four</td><td><span class="pill reject">do not advance</span></td><td>Reopen only if matched Runs show subscription-capacity benefit.</td></tr>
-          <tr><td>All roles</td><td>Daybreak · ultra</td><td>Same outcomes; 75–150s</td><td><span class="pill reject">do not advance</span></td><td>Reopen only for a named workload where delegation improves outcome.</td></tr>
+          <tr><td>Run-start Triage</td><td>Wall time to ranked working set and first solving Lane</td><td>Daybreak low vs Terra/Luna low; one adaptive batch</td><td>Same ranking utility; lower time-to-first-Flag across full startup batches.</td></tr>
+          <tr><td>Later Triage batch</td><td>Do not disrupt active solving; capacity matters more when no urgent release</td><td>No call when evidence settles all; otherwise Luna/Terra low vs Daybreak low</td><td>Downstream Order remains useful; measure batch latency, waiting Lanes and burn.</td></tr>
+          <tr><td>Routine Solve Lead</td><td>Verified Flag or useful Checkpoint per wall/capacity envelope</td><td>Terra medium vs Daybreak low/medium</td><td>Independent easy/moderate Challenge families and seeds.</td></tr>
+          <tr><td>Hard Specialist</td><td>Flag probability first; wall/capacity second</td><td>Daybreak high/xhigh/max; multiple bounded Turns permitted</td><td>Difficulty-stratified failures and successes; progress-conditioned continuation value.</td></tr>
+          <tr><td>Run-stopping Recovery</td><td>Restore whole Run quickly and correctly</td><td>Daybreak medium/high</td><td>Novel fault families, repair correctness, P95 wall and probation outcome.</td></tr>
+          <tr><td>Isolated Lane Recovery</td><td>Preserve capacity unless Lane blocks high-value work</td><td>Terra medium vs Daybreak low/medium</td><td>Fault impact, delayed-Flag cost and recovery correctness.</td></tr>
         </tbody>
-      </table>
-      <p class="small" style="margin-top:10px">No cell is Gate-approved. High/xhigh/max remain experiment-only: no outcome uplift appeared, and single-run timing differences cannot justify promotion.</p>
+      </table></div>
+      <p class="small" style="margin-top:10px">These are test menus. No cell, numeric share or escalation threshold is Gate-approved yet.</p>
+    </section>
+
+    <section class="card">
+      <h2>Capacity governor</h2>
+      <p><strong>Always uncertain.</strong> Start with the published lower endpoint, reduce it by the live used percentage when available, subtract a measured Recovery-and-tail reserve, then update from observed Turn costs by role, difficulty, effort and context size.</p>
+      <p>If telemetry is absent, use the lower official endpoint plus tighter concurrency and Turn bounds. An explicit platform exhaustion response enters Quota wait. Neither case invents another model-specific pool.</p>
+      <p>API-equivalent price helps rank relative burn; it never converts the subscription into an exact dollar or message balance.</p>
+    </section>
+
+    <section class="card">
+      <h2>Effort and multi-Turn rule</h2>
+      <p>Difficulty sets the initial comparison band; trusted evidence and verified progress govern continuation. A trivial fixture can compare overhead, but cannot disqualify high/max/ultra for a hard Challenge.</p>
+      <p>A Checkpoint may justify another Turn at the same or higher effort. Repetition without new verified progress weakens continuation. Model-authored confidence alone never escalates.</p>
+      <p>Once a Turn begins, requested model and effort freeze. The next boundary may adapt using the durable Attempt record.</p>
     </section>
 
     <section class="card full">
-      <h2>Measured cells</h2>
-      <div class="evidence-controls"><label>Role <select id="role-filter"><option value="all">All</option><option value="triage">Triage Judge</option><option value="solve">Solve Lead</option><option value="specialist">Specialist</option><option value="recovery">Recovery Agent</option></select></label><span class="small">Tokens are CLI-reported; cached and uncached remain separate.</span></div>
-      <div style="overflow:auto"><table><thead><tr><th>Role</th><th>Model</th><th>Effort</th><th>Outcome</th><th>Wall</th><th>Uncached in</th><th>Cached in</th><th>Output</th><th>Reasoning</th></tr></thead><tbody id="evidence"></tbody></table></div>
+      <h2>Existing screen · useful only as an easy-workload warning</h2>
+      <p>Twenty-eight one-run micro-fixtures produced the same outcome within each role. Daybreak ultra took 75–150s; Luna high was slower than Daybreak low/medium in all four. That says those cells added overhead on these tiny fixtures. It says nothing about their solve rate on hard Challenges.</p>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>Role</th><th>Daybreak low</th><th>Daybreak medium</th><th>Daybreak high→max</th><th>Daybreak ultra</th><th>Luna high</th><th>Valid reading</th></tr></thead>
+        <tbody>
+          <tr><td>Triage</td><td>5/6 · 24s</td><td>5/6 · 26s</td><td>5/6 · 27–37s</td><td>5/6 · 97s</td><td>5/6 · 48s</td><td>Low is startup candidate for this tiny batch.</td></tr>
+          <tr><td>Solve Lead</td><td>Flag · 38s</td><td>Flag · 32s</td><td>Flag · 35–50s</td><td>Flag · 79s</td><td>Flag · 62s</td><td>No hard-Challenge conclusion.</td></tr>
+          <tr><td>Specialist</td><td>Flag · 33s</td><td>Flag · 33s</td><td>Flag · 31–36s</td><td>Flag · 75s</td><td>Flag · 51s</td><td>Fixture failed to exercise specialization.</td></tr>
+          <tr><td>Recovery</td><td>Checkpoint · 54s</td><td>Checkpoint · 66s</td><td>Checkpoint · 51–105s</td><td>Checkpoint · 150s</td><td>Checkpoint · 80s</td><td>Needs impact- and fault-stratified tests.</td></tr>
+        </tbody>
+      </table></div>
     </section>
 
-    <section class="card">
-      <h2>Burn envelope policy</h2>
-      <p><strong>Keep numeric shares unset.</strong> One trial per cell and a whole-percent account window cannot estimate role weights or a five-hour allowance.</p>
-      <p>Reserve is symbolic until matched repeated Runs measure it: one admitted Recovery Turn at its P95 usage and wall time, plus the fixed Run tail. A new discretionary Turn starts only when both remain provably available.</p>
-      <p>Once a Turn starts, its role/model/effort freezes. A Checkpoint continues the same cell; a Claim of uncertainty changes nothing. Shared exhaustion enters Quota wait. It never selects Luna, CPA or another effort as fictional capacity.</p>
-    </section>
-
-    <section class="card">
-      <h2>Unknown-state behavior</h2>
-      <p>Unknown catalog, effective model, applicable bucket, reset outcome or reserve blocks a <em>new</em> discretionary Turn. Work already in flight finishes inside its bound. Deterministic Intake, preparation and Recovery observation continue.</p>
-      <p>A reserved Recovery invocation may start only from a preflight-frozen, still-provable envelope. Otherwise the Run records why it cannot prove authority and waits; zero is never inferred.</p>
-      <p>Time pressure narrows starts by measured completion envelopes. It does not downgrade quality or turn one micro-fixture into a numeric threshold.</p>
+    <section class="card full">
+      <h2>Official-source boundary</h2>
+      <div class="source"><a href="https://learn.chatgpt.com/docs/pricing">OpenAI Codex pricing</a> — current Pro 20x five-hour message estimates, shared-limit caveats, model purposes and credit rates.</div>
+      <div class="source"><a href="https://help.openai.com/en/articles/11369540-codex-and-chatgpt-plan-usage-limits">Using Codex with your ChatGPT plan</a> — usage varies with model, execution location, complexity, context, reasoning, speed and tools; dashboard/reset telemetry is the live source.</div>
+      <div class="source"><a href="https://platform.openai.com/docs/pricing">OpenAI API pricing</a> — token prices used only as the relative-cost proxy shown above.</div>
     </section>
   </div>
-  <footer>Prototype only. State is in memory; reload resets it. The decision function is isolated below from the page shell.</footer>
+  <footer>Prototype only. Reload resets controls. Issue 224 remains open until the role/workload menu and evidence plan survive HITL review.</footer>
 </main>
 
 <script>
-// Portable pure module: state + action -> state, then state -> deterministic admission decision.
-const RoutingPolicy = (() => {
-  const MENU = Object.freeze({
-    triage:{role:"Triage Judge",model:"gpt-daybreak-blue-latest",effort:"low"},
-    solve:{role:"Solve Lead",model:"gpt-daybreak-blue-latest",effort:"medium"},
-    specialist:{role:"Specialist",model:"gpt-daybreak-blue-latest",effort:"low"},
-    recovery:{role:"Recovery Agent",model:"gpt-daybreak-blue-latest",effort:"low"}
-  });
-  const initial = () => ({role:"solve",catalogKnown:true,effectiveModelKnown:false,allowanceKnown:true,remainingPercent:96,modelBucketKnown:false,quotaExhausted:false,runMinutes:240,reservedTailMinutes:12,recoveryReserveKnown:false,progress:"none",uncertainty:"low",currentTurn:false});
-  const reduce = (state,action) => {
-    if (action.type === "reset") return initial();
-    if (action.type === "scenario") return {...initial(),...action.state};
-    if (action.type === "set") return {...state,[action.key]:action.value};
-    if (action.type === "spend") return {...state,remainingPercent:Math.max(0,state.remainingPercent-10),quotaExhausted:state.remainingPercent<=10};
-    if (action.type === "checkpoint") return {...state,progress:"checkpoint"};
-    if (action.type === "flag") return {...state,progress:"flag"};
-    return state;
-  };
-  const decide = state => {
-    const cell = MENU[state.role];
-    if (state.currentTurn) return {kind:"continue",title:"Continue the frozen Turn",detail:`${cell.role} stays on ${cell.model} · ${cell.effort}; state changes apply only at the next boundary.`};
-    if (state.quotaExhausted) return {kind:"wait",title:"Enter Quota wait",detail:"Shared exhaustion pauses new Inference. It does not change model, effort or route."};
-    const unknown = [];
-    if (!state.catalogKnown) unknown.push("catalog");
-    if (!state.effectiveModelKnown) unknown.push("effective model");
-    if (!state.allowanceKnown) unknown.push("applicable allowance");
-    if (!state.recoveryReserveKnown) unknown.push("Recovery reserve");
-    if (unknown.length) return {kind:"blocked",title:"Do not start a discretionary Turn",detail:`Unknown: ${unknown.join(", ")}. Continue deterministic work; use only a separately proven frozen reserve.`};
-    if (state.runMinutes <= state.reservedTailMinutes) return {kind:"blocked",title:"Reserved tail",detail:"No new Inference starts inside the fixed tail."};
-    return {kind:"admit",title:`Admit ${cell.role}`,detail:`Freeze ${cell.model} · ${cell.effort} for this Turn. ${state.progress === "checkpoint" ? "The verified Checkpoint supports continuation, not automatic effort escalation." : "No numeric escalation rule has earned admission."}`};
-  };
-  return {initial,reduce,decide,MENU};
-})();
+const models = {
+  astra:{label:"GPT-6 Astra",range:[100,900],price:[10,1,50],relative:"2.5× Sol"},
+  sol:{label:"GPT-5.6 Sol / Daybreak Blue",range:[200,2000],price:[4,.4,20],relative:"baseline"},
+  terra:{label:"GPT-5.6 Terra",range:[500,4000],price:[2,.2,12],relative:"0.5× input · 0.6× output"},
+  luna:{label:"GPT-5.6 Luna",range:[5000,40000],price:[.2,.02,1.2],relative:"0.05× input · 0.06× output"}
+};
 
-const results = [
-  ["triage","Daybreak","low","5/6",24.321,15988,45834,652,70],["triage","Daybreak","medium","5/6",25.979,15978,30158,776,176],["triage","Daybreak","high","5/6",27.404,16061,30151,805,199],["triage","Daybreak","xhigh","5/6",35.791,16545,62348,1204,289],["triage","Daybreak","max","5/6",36.910,16590,61734,1348,654],["triage","Daybreak","ultra","5/6",97.267,18750,179479,1882,786],["triage","Luna","high","5/6",47.736,9348,64256,1531,466],
-  ["solve","Daybreak","low","1 Flag",37.602,16171,76346,912,73],["solve","Daybreak","medium","1 Flag",31.792,15920,60653,831,66],["solve","Daybreak","high","1 Flag",49.935,16831,125550,1500,272],["solve","Daybreak","xhigh","1 Flag",34.641,16134,76701,1024,213],["solve","Daybreak","max","1 Flag",46.211,16459,77110,1417,492],["solve","Daybreak","ultra","1 Flag",79.302,36190,158494,2336,636],["solve","Luna","high","1 Flag",61.822,15669,113408,1720,370],
-  ["specialist","Daybreak","low","1 Flag",33.158,15949,61128,892,120],["specialist","Daybreak","medium","1 Flag",33.337,15965,60978,837,75],["specialist","Daybreak","high","1 Flag",35.799,16130,61289,973,207],["specialist","Daybreak","xhigh","1 Flag",35.549,16006,61189,1001,123],["specialist","Daybreak","max","1 Flag",31.088,16409,61014,1124,259],["specialist","Daybreak","ultra","1 Flag",75.305,17518,159775,1825,361],["specialist","Luna","high","1 Flag",50.991,8932,76288,1468,319],
-  ["recovery","Daybreak","low","1 Checkpoint",54.256,19359,103990,1787,568],["recovery","Daybreak","medium","1 Checkpoint",65.736,19670,123791,2066,609],["recovery","Daybreak","high","1 Checkpoint",51.345,20311,107835,2860,899],["recovery","Daybreak","xhigh","1 Checkpoint",90.940,23862,110651,4375,2124],["recovery","Daybreak","max","1 Checkpoint",105.232,22180,165444,4519,2464],["recovery","Daybreak","ultra","1 Checkpoint",149.714,25311,247955,4614,2656],["recovery","Luna","high","1 Checkpoint",79.891,13042,102656,3059,1470]
-];
+const route = state => {
+  if (state.explicitExhaustion) return {kind:"wait",title:"Quota wait",detail:"The platform reported exhaustion. Finish only an already-running Turn; do not infer a separate cheaper-model allowance."};
+  const impact = state.impact;
+  if (state.role === "triage") {
+    if (state.ambiguity === "settled") return {kind:"admit",title:"No Triage inference",detail:"Board metadata or qualified crowd evidence settles the batch. Replay the durable judgment and keep solving."};
+    if (state.phase === "startup") return {kind:"admit",title:"Experiment: Daybreak low",detail:"Startup objective is ranked-working-set latency. Compare against Terra/Luna low only on full batches with equal downstream ranking utility."};
+    return {kind:"warn",title:"Experiment: later-batch low-effort menu",detail:"Batch once. Compare no-call/Terra/Luna/Daybreak using active-Lane disruption and downstream Order—not raw judge latency alone."};
+  }
+  if (state.role === "specialist") {
+    const effort = state.difficulty === "trivial" ? "low/medium" : state.difficulty === "moderate" ? "medium/high" : state.difficulty === "hard" ? "high/xhigh" : "xhigh/max/ultra";
+    const continuation = state.progress === "checkpoint" ? "A verified Checkpoint supports another bounded Turn; compare same versus one-step-higher effort." : state.progress === "none" ? "Require a new hypothesis or artifact before repeating." : "Flag ends the Attempt.";
+    return {kind:state.difficulty === "trivial"?"admit":"warn",title:`Experiment: Daybreak ${effort}`,detail:`Difficulty-stratified Specialist menu. ${continuation}`};
+  }
+  if (state.role === "recovery") {
+    return impact === "whole-run"
+      ? {kind:"warn",title:"Experiment: Daybreak medium/high",detail:"Whole-Run restoration makes correctness and wall time primary; reserve must cover measured P95, not an assumed message count."}
+      : {kind:"admit",title:"Experiment: Terra medium vs Daybreak low",detail:"For one noncritical Lane, compare capacity against delayed-Flag cost. Escalate only if the blocked work is valuable or the fault spreads."};
+  }
+  const effort = state.difficulty === "trivial" ? "Terra medium vs Daybreak low" : state.difficulty === "moderate" ? "Daybreak medium/high" : "Daybreak high, then Specialist";
+  return {kind:state.difficulty === "hard"||state.difficulty === "extreme"?"warn":"admit",title:`Experiment: ${effort}`,detail:"Solve Lead is the generalist Turn. Route to a profile-specific Specialist when Challenge evidence identifies the needed domain; the controller retains the Attempt."};
+};
 
-const scenarios = [
-  {name:"Admitted Solve Turn",copy:"Make every prerequisite known, then observe the provisional Solve Lead cell freeze for one Turn.",state:{role:"solve",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true},steps:[{label:"Load proven preflight state",action:{type:"scenario",state:{role:"solve",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true}}},{label:"Record a verified Checkpoint",action:{type:"checkpoint"}},{label:"Start the Turn",action:{type:"set",key:"currentTurn",value:true}}]},
-  {name:"Effective model unknown",copy:"A moving alias without effective identity cannot become a Gate-approved cell.",state:{role:"specialist",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true},steps:[{label:"Load Specialist boundary",action:{type:"scenario",state:{role:"specialist",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true}}},{label:"Lose effective model identity",action:{type:"set",key:"effectiveModelKnown",value:false}}]},
-  {name:"Shared exhaustion",copy:"Shared account exhaustion pauses inference; it is neither a model downgrade nor a route change.",state:{role:"solve",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true},steps:[{label:"Load healthy capacity",action:{type:"scenario",state:{role:"solve",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true,remainingPercent:6}}},{label:"Observe hard exhaustion",action:{type:"set",key:"quotaExhausted",value:true}}]},
-  {name:"Unknown telemetry",copy:"Unknown limit or reserve data cannot be interpreted as zero spend or free room.",state:{role:"triage",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true},steps:[{label:"Load known Triage boundary",action:{type:"scenario",state:{role:"triage",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true}}},{label:"Lose applicable allowance",action:{type:"set",key:"allowanceKnown",value:false}},{label:"Lose Recovery reserve proof",action:{type:"set",key:"recoveryReserveKnown",value:false}}]},
-  {name:"Time closes",copy:"Remaining time may block a new Turn at the fixed tail; it does not select a weaker model.",state:{role:"recovery",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true},steps:[{label:"Load Recovery boundary",action:{type:"scenario",state:{role:"recovery",catalogKnown:true,effectiveModelKnown:true,allowanceKnown:true,recoveryReserveKnown:true}}},{label:"Reach the reserved tail",action:{type:"set",key:"runMinutes",value:10}}]}
-];
-
-let state = RoutingPolicy.initial();
-let activeScenario = 0;
-let completedSteps = 0;
+let state = {role:"triage",phase:"startup",difficulty:"moderate",impact:"one-lane",ambiguity:"ambiguous",progress:"none",usedPercent:4,telemetry:"live",requestedModel:"daybreak-blue",effectiveReported:"no",explicitExhaustion:false};
 const fields = [
-  ["role","Agent role","select",[["triage","Triage Judge"],["solve","Solve Lead"],["specialist","Specialist"],["recovery","Recovery Agent"]]],
-  ["remainingPercent","Generic remaining %","number"],["runMinutes","Run minutes left","number"],
-  ["progress","Verified progress","select",[["none","None"],["checkpoint","Checkpoint"],["flag","Flag"]]],
-  ["catalogKnown","Catalog known","select",[[true,"Yes"],[false,"No"]]],["effectiveModelKnown","Effective model known","select",[[true,"Yes"],[false,"No"]]],
-  ["allowanceKnown","Allowance known","select",[[true,"Yes"],[false,"No"]]],["recoveryReserveKnown","Recovery reserve proven","select",[[true,"Yes"],[false,"No"]]],
-  ["quotaExhausted","Quota exhausted","select",[[false,"No"],[true,"Yes"]]],["currentTurn","Turn already running","select",[[false,"No"],[true,"Yes"]]]
+  ["role","Agent role",[["triage","Triage Judge"],["solve","Solve Lead"],["specialist","Specialist"],["recovery","Recovery Agent"]]],
+  ["phase","Run phase",[["startup","Startup"],["later","Later batch"]]],
+  ["difficulty","Challenge/fault difficulty",[["trivial","Trivial"],["moderate","Moderate"],["hard","Hard"],["extreme","Extreme / unknown"]]],
+  ["impact","Fault impact",[["one-lane","One noncritical Lane"],["whole-run","Whole Run / critical path"]]],
+  ["ambiguity","Triage need",[["ambiguous","Ambiguous batch"],["settled","Already settled"]]],
+  ["progress","Verified progress",[["none","None"],["checkpoint","Checkpoint"],["flag","Flag"]]],
+  ["telemetry","Window telemetry",[["live","Live used % observed"],["missing","Unavailable"]]],
+  ["usedPercent","Five-hour window used %","number"],
+  ["requestedModel","Requested model",[["daybreak-blue","Daybreak Blue alias"],["sol","GPT-5.6 Sol"],["terra","GPT-5.6 Terra"],["luna","GPT-5.6 Luna"]]],
+  ["effectiveReported","Effective snapshot reported",[["yes","Yes — retain for audit"],["no","No — alias only"]]],
+  ["explicitExhaustion","Platform exhaustion",[[false,"No"],[true,"Yes"]]]
 ];
 
-function dispatch(action){ state=RoutingPolicy.reduce(state,action); render(); }
 function renderFields(){
-  document.querySelector("#fields").innerHTML=fields.map(([key,label,type,options])=>`<label>${label}${type==="select"?`<select data-key="${key}">${options.map(([value,text])=>`<option value="${value}" ${String(state[key])===String(value)?"selected":""}>${text}</option>`).join("")}</select>`:`<input data-key="${key}" type="number" min="0" value="${state[key]}">`}</label>`).join("");
-  document.querySelectorAll("[data-key]").forEach(control=>control.addEventListener("change",event=>{
+  document.querySelector("#fields").innerHTML=fields.map(([key,label,options])=>{
+    if(options==="number") return `<label>${label}<input data-key="${key}" type="number" min="0" max="100" value="${state[key]}"></label>`;
+    return `<label>${label}<select data-key="${key}">${options.map(([value,text])=>`<option value="${value}" ${String(state[key])===String(value)?"selected":""}>${text}</option>`).join("")}</select></label>`;
+  }).join("");
+  document.querySelectorAll("[data-key]").forEach(control=>control.onchange=event=>{
     const key=event.target.dataset.key; let value=event.target.value;
-    if(event.target.type==="number") value=Number(value); else if(value==="true"||value==="false") value=value==="true";
-    dispatch({type:"set",key,value});
-  }));
+    if(event.target.type==="number") value=Math.max(0,Math.min(100,Number(value)));
+    if(value==="true"||value==="false") value=value==="true";
+    state={...state,[key]:value}; render();
+  });
 }
+
+function renderCapacity(){
+  const remaining = state.telemetry === "live" ? Math.max(0,100-state.usedPercent)/100 : 1;
+  document.querySelector("#remaining-label").textContent=state.telemetry === "live" ? `${Math.round(remaining*100)}%` : "unknown telemetry";
+  document.querySelector("#capacity").innerHTML=Object.values(models).map(model=>{
+    const scaled=model.range.map(n=>Math.floor(n*remaining));
+    const rough=state.telemetry === "live" ? `${scaled[0].toLocaleString()}–${scaled[1].toLocaleString()}` : `${model.range[0].toLocaleString()}–${model.range[1].toLocaleString()} before reserve`;
+    return `<tr><td>${model.label}</td><td>${model.range[0].toLocaleString()}–${model.range[1].toLocaleString()}</td><td>${rough}</td><td>$${model.price[0]} · $${model.price[1]} · $${model.price[2]}</td><td>${model.relative}</td></tr>`;
+  }).join("");
+}
+
 function render(){
-  renderFields();
-  document.querySelector("#actions").innerHTML=`<button data-action="spend">Spend 10%</button><button data-action="checkpoint">Verify Checkpoint</button><button data-action="flag">Verify Flag</button><button data-action="reset">Reset</button>`;
-  document.querySelectorAll("[data-action]").forEach(button=>button.onclick=()=>dispatch({type:button.dataset.action}));
-  const cell=RoutingPolicy.MENU[state.role];
-  const rows=[["Role",cell.role],["Requested cell",`${cell.model} · ${cell.effort}`],["Generic remaining",state.allowanceKnown?`${state.remainingPercent}%`:"unknown"],["Model bucket",state.modelBucketKnown?"known":"unknown / unassociated"],["Run time",`${state.runMinutes} min; ${state.reservedTailMinutes} min tail`],["Verified progress",state.progress],["Catalog",state.catalogKnown?"known":"unknown"],["Effective model",state.effectiveModelKnown?"known":"unknown"],["Recovery reserve",state.recoveryReserveKnown?"proven":"unknown"],["Turn",state.currentTurn?"in flight":"boundary"]];
+  renderFields(); renderCapacity();
+  const rows=[
+    ["Role",{triage:"Triage Judge",solve:"Solve Lead",specialist:"Specialist",recovery:"Recovery Agent"}[state.role]],
+    ["Capacity knowledge","Never exact"],
+    ["Planning basis",state.telemetry==="live"?`official range × ${100-state.usedPercent}% unused, then measured reserve`:"official lower bound, tighter concurrency, then measured reserve"],
+    ["Requested model",state.requestedModel],
+    ["Effective identity",state.effectiveReported==="yes"?"reported; retain for reproducibility":"unreported; audit gap, not automatic stop"],
+    ["Progress",state.progress]
+  ];
   document.querySelector("#state").innerHTML=rows.map(([label,value])=>`<div class="datum"><span>${label}</span><strong>${value}</strong></div>`).join("");
-  const decision=RoutingPolicy.decide(state), node=document.querySelector("#decision");
-  node.className=`decision ${decision.kind==="wait"?"wait":decision.kind==="blocked"?"blocked":""}`;
-  node.innerHTML=`<h3>Governor result</h3><strong>${decision.title}</strong><p>${decision.detail}</p>`;
+  const decision=route(state),node=document.querySelector("#decision");
+  node.className=`decision ${decision.kind}`;
+  node.innerHTML=`<h3>Candidate at this boundary</h3><strong>${decision.title}</strong><p>${decision.detail}</p><p class="small">No production admission until matched local-Board Runs validate outcome, wall time, per-Turn usage and reserve impact.</p>`;
 }
-function renderScenario(){
-  document.querySelector("#tabs").innerHTML=scenarios.map((scenario,index)=>`<button aria-selected="${index===activeScenario}" data-tab="${index}">${scenario.name}</button>`).join("");
-  document.querySelectorAll("[data-tab]").forEach(button=>button.onclick=()=>{activeScenario=Number(button.dataset.tab);completedSteps=0;dispatch({type:"scenario",state:scenarios[activeScenario].state});renderScenario();});
-  const scenario=scenarios[activeScenario]; document.querySelector("#scenario-copy").textContent=scenario.copy;
-  document.querySelector("#steps").innerHTML=scenario.steps.map((step,index)=>`<button class="step ${index<completedSteps?"done":""}" data-step="${index}" ${index>completedSteps?"disabled":""}><b>${index+1}</b>${step.label}</button>`).join("");
-  document.querySelectorAll("[data-step]").forEach(button=>button.onclick=()=>{const index=Number(button.dataset.step);dispatch(scenario.steps[index].action);completedSteps=Math.max(completedSteps,index+1);renderScenario();});
-}
-function renderEvidence(){
-  const filter=document.querySelector("#role-filter").value;
-  document.querySelector("#evidence").innerHTML=results.filter(row=>filter==="all"||row[0]===filter).map(row=>`<tr><td>${{triage:"Triage",solve:"Solve Lead",specialist:"Specialist",recovery:"Recovery"}[row[0]]}</td><td>${row[1]}</td><td>${row[2]}</td><td>${row[3]}</td><td>${row[4].toFixed(1)}s</td><td>${row[5].toLocaleString()}</td><td>${row[6].toLocaleString()}</td><td>${row[7].toLocaleString()}</td><td>${row[8].toLocaleString()}</td></tr>`).join("");
-}
-document.querySelector("#role-filter").onchange=renderEvidence;
-render(); renderScenario(); renderEvidence();
+render();
 </script>
 </body>
 </html>
