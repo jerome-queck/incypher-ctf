@@ -47,18 +47,18 @@
 </head>
 <body>
 <main>
-  <div class="eyebrow">Reaction prototype v0.2 · issue 224</div>
+  <div class="eyebrow">Reaction prototype v0.3 · issue 224</div>
   <h1>Role-aware model, effort and capacity routing</h1>
   <p class="lede">The governor never knows an exact number of Turns left. It combines OpenAI's broad Pro 20x planning ranges, live window telemetry when available, and local per-workload measurements. Its objective changes by role, phase, difficulty and fault impact.</p>
-  <div class="notice"><strong>What changed after review.</strong> Removed “capacity known” and “model state.” Effective snapshot identity is audit evidence, not an automatic work blocker. Replaced one permanent cell per role with workload menus. The easy one-run fixtures below cannot reject high reasoning for hard Challenges or the need for several high-effort Turns.</div>
+  <div class="notice"><strong>HITL decision.</strong> Every role/workload cell remains a Gate candidate until matched local-Board evidence promotes it. Luna's published capacity and API-price advantage is a strong prior, never an exact Luna-max versus Daybreak-low subscription debit. Ultra is excluded. Astra receives only a small refusal screen before any solve-quality trial.</div>
 
   <div class="grid">
     <section class="card full">
       <h2>What the four roles actually mean</h2>
       <div class="role-grid">
         <div class="role"><strong>Triage Judge</strong><span class="small">One adaptive batched judge for newly seen ambiguous Challenges. At Run start it protects startup latency; later it runs only for a new ambiguous release batch. Stated difficulty or qualified crowd evidence can eliminate the call.</span></div>
-        <div class="role"><strong>Solve Lead</strong><span class="small">The generalist assigned one bounded solving Turn. The Run controller—not this Agent—owns the durable Attempt and may schedule another Turn.</span></div>
-        <div class="role"><strong>Specialist</strong><span class="small">A profile-specific solving Turn: web, pwn, crypto, rev, forensics, stego, OSINT, AI or misc. A hard Challenge may need several high-effort Specialist Turns, with Checkpoints between them.</span></div>
+        <div class="role"><strong>Solve Lead</strong><span class="small">The generalist carried by one persistent thread inside an Attempt. Its model stays fixed for that Attempt; effort may change between bounded Turns. The Run controller owns lifecycle and admission.</span></div>
+        <div class="role"><strong>Specialist</strong><span class="small">A profile-specific solving invocation: web, pwn, crypto, rev, forensics, stego, OSINT, AI or misc. It is reachable from every difficulty/Tier; evidence decides whether admission is worthwhile.</span></div>
         <div class="role"><strong>Recovery Agent</strong><span class="small">A fresh bounded invocation for a novel operational fault. It is not a failed-solve fallback. Whole-Run faults value wall time; an isolated noncritical Lane fault may value capacity more.</span></div>
       </div>
     </section>
@@ -82,38 +82,38 @@
     </section>
 
     <section class="card full">
-      <h2>Role × workload experiment menu · draft v0.2</h2>
+      <h2>Role × workload experiment menu · accepted v0.3</h2>
       <div style="overflow:auto"><table>
-        <thead><tr><th>Boundary</th><th>Primary objective</th><th>Cells to compare next</th><th>Promotion evidence</th></tr></thead>
-        <tbody>
-          <tr><td>Run-start Triage</td><td>Wall time to ranked working set and first solving Lane</td><td>Daybreak low vs Terra/Luna low; one adaptive batch</td><td>Same ranking utility; lower time-to-first-Flag across full startup batches.</td></tr>
-          <tr><td>Later Triage batch</td><td>Do not disrupt active solving; capacity matters more when no urgent release</td><td>No call when evidence settles all; otherwise Luna/Terra low vs Daybreak low</td><td>Downstream Order remains useful; measure batch latency, waiting Lanes and burn.</td></tr>
-          <tr><td>Routine Solve Lead</td><td>Verified Flag or useful Checkpoint per wall/capacity envelope</td><td>Terra medium vs Daybreak low/medium</td><td>Independent easy/moderate Challenge families and seeds.</td></tr>
-          <tr><td>Hard Specialist</td><td>Flag probability first; wall/capacity second</td><td>Daybreak high/xhigh/max; multiple bounded Turns permitted</td><td>Difficulty-stratified failures and successes; progress-conditioned continuation value.</td></tr>
-          <tr><td>Run-stopping Recovery</td><td>Restore whole Run quickly and correctly</td><td>Daybreak medium/high</td><td>Novel fault families, repair correctness, P95 wall and probation outcome.</td></tr>
-          <tr><td>Isolated Lane Recovery</td><td>Preserve capacity unless Lane blocks high-value work</td><td>Terra medium vs Daybreak low/medium</td><td>Fault impact, delayed-Flag cost and recovery correctness.</td></tr>
-        </tbody>
+        <thead><tr><th>Boundary</th><th>Primary objective</th><th>Model / effort cells</th><th>State</th><th>Promotion evidence</th></tr></thead>
+        <tbody id="routing-menu"></tbody>
       </table></div>
-      <p class="small" style="margin-top:10px">These are test menus. No cell, numeric share or escalation threshold is Gate-approved yet.</p>
+      <p class="small" style="margin-top:10px">No cell, numeric share or escalation threshold is Gate-approved yet. Material catalog/effective-model drift returns the affected cell to <em>needs recheck</em>.</p>
     </section>
 
     <section class="card">
       <h2>Capacity governor</h2>
-      <p><strong>Always uncertain.</strong> Treat the published lower endpoint as a conservative trial scenario, combine it with <code>account/rateLimits/read</code> fields such as <code>usedPercent</code> and <code>resetsAt</code>, subtract a measured Recovery-and-tail reserve, then update from observed Turn costs by role, difficulty, effort and context size.</p>
-      <p>If telemetry is absent, use the lower official endpoint plus tighter concurrency and Turn bounds. An explicit platform exhaustion response enters Quota wait. Neither case invents another model-specific pool.</p>
-      <p>API-equivalent price helps rank relative burn; it never converts the subscription into an exact dollar or message balance.</p>
+      <p><strong>Always uncertain.</strong> Combine the published planning range with <code>account/rateLimits/read</code> fields such as <code>usedPercent</code> and <code>resetsAt</code>, then subtract a measured Recovery-and-tail reserve. Shared window movement is observed, never assigned as an invented exact per-Turn debit.</p>
+      <p>If telemetry is absent, use the conservative published band plus tighter admission. An explicit platform exhaustion response enters Quota wait. Capacity changes future admission, never silently downgrades an active Turn.</p>
+      <p>Luna's API and published-message advantage strongly prioritises it for comparison. Effort-specific subscription cost remains unpublished, so useful local outcomes and observed shared-limit movement still decide promotion.</p>
     </section>
 
     <section class="card">
       <h2>Effort and multi-Turn rule</h2>
-      <p>Difficulty sets the initial comparison band; trusted evidence and verified progress govern continuation. A trivial fixture can compare overhead, but cannot disqualify high/max/ultra for a hard Challenge.</p>
+      <p>Difficulty sets the initial comparison band; trusted evidence and verified progress govern continuation. Specialists remain reachable at every difficulty/Tier. A trivial fixture can compare overhead but cannot disqualify high/max for a hard Challenge.</p>
       <p>A Checkpoint may justify another Turn at the same or higher effort. Repetition without new verified progress weakens continuation. Model-authored confidence alone never escalates.</p>
-      <p>Once a Turn begins, requested model and effort freeze. The next boundary may adapt using the durable Attempt record.</p>
+      <p>Once a Turn begins, requested model and effort freeze. A persistent Solve Lead keeps one model for its Attempt while effort may change between Turns. A different model receives a fresh Specialist invocation or later Attempt.</p>
+    </section>
+
+    <section class="card full">
+      <h2>Evidence record and repetition rule</h2>
+      <p><strong>Calibration isolates one cell at a time.</strong> A paired pilot first estimates within-cell variance by authorized workload family and seed. Before confirmatory Runs, the evaluator predeclares repetitions, stopping rules and exclusions from that variance; it never stops because a preferred model happens to lead.</p>
+      <p><strong>Every Turn records</strong> requested alias/model/effort, catalog family and snapshot, effective family and snapshot when reported, Run/Attempt/Turn and workload identity, outcome and Checkpoint provenance, queue/start/finish time, calls, uncached-input/cached-input/output/reasoning/unknown tokens, shared-limit snapshots before and after, and the measured Recovery reserve. Production records the same fields; it does not attribute shared-window movement as an exact Turn debit.</p>
+      <p>Each cell is <em>candidate</em>, <em>Gate-approved</em>, <em>excluded</em> or <em>unknown</em>. A material catalog or effective-identity change moves a previously tested cell to <em>needs recheck</em>; only matched evidence may promote it again.</p>
     </section>
 
     <section class="card full">
       <h2>Existing screen · useful only as an easy-workload warning</h2>
-      <p>Twenty-eight one-run micro-fixtures produced the same outcome within each role. Daybreak ultra took 75–150s; Luna high was slower than Daybreak low/medium in all four. That says those cells added overhead on these tiny fixtures. It says nothing about their solve rate on hard Challenges.</p>
+      <p>Twenty-eight one-run micro-fixtures produced the same outcome within each role. Daybreak ultra took 75–150s; Luna high was slower than Daybreak low/medium in all four. That excludes Ultra from the initial menu and says those cells added overhead on tiny fixtures; it does not settle Luna max, persistent Leads or hard-Challenge solve rate.</p>
       <div style="overflow:auto"><table>
         <thead><tr><th>Role</th><th>Daybreak low</th><th>Daybreak medium</th><th>Daybreak high→max</th><th>Daybreak ultra</th><th>Luna high</th><th>Valid reading</th></tr></thead>
         <tbody>
@@ -132,51 +132,162 @@
       <div class="source"><a href="https://platform.openai.com/docs/pricing">OpenAI API pricing</a> — token prices used only as the relative-cost proxy shown above.</div>
     </section>
   </div>
-  <footer>Prototype only. Reload resets controls. Issue 224 remains open until the role/workload menu and evidence plan survive HITL review.</footer>
+  <footer>Decision prototype only. Reload resets controls. Numeric dials remain unset until matched local-Board evidence measures variance, outcomes and quota movement.</footer>
 </main>
 
 <script>
 const models = {
-  astra:{label:"GPT-6 Astra",range:[100,900],price:[10,1,50],relative:"2.5× Sol"},
-  sol:{label:"GPT-5.6 Sol / Daybreak Blue",range:[200,2000],price:[4,.4,20],relative:"baseline"},
-  terra:{label:"GPT-5.6 Terra",range:[500,4000],price:[2,.2,12],relative:"0.5× input · 0.6× output"},
-  luna:{label:"GPT-5.6 Luna",range:[5000,40000],price:[.2,.02,1.2],relative:"0.05× input · 0.06× output"}
+  astra:{label:"GPT-6 Astra",short:"Astra",range:[100,900],price:[10,1,50],relative:"2.5× Sol"},
+  sol:{label:"GPT-5.6 Sol / Daybreak Blue",short:"Daybreak",range:[200,2000],price:[4,.4,20],relative:"baseline"},
+  terra:{label:"GPT-5.6 Terra",short:"Terra",range:[500,4000],price:[2,.2,12],relative:"0.5× input · 0.6× output"},
+  luna:{label:"GPT-5.6 Luna",short:"Luna",range:[5000,40000],price:[.2,.02,1.2],relative:"0.05× input · 0.06× output"}
+};
+
+const routingCells = {
+  triageStartup:{boundary:"Run-start Triage",objective:"Ranked-working-set latency, ranking utility and capacity",cells:[{model:"luna",effort:"max"},{model:"sol",effort:"low"}],suffix:"; Luna preferred; one adaptive batch",state:"Candidate",evidence:"Comparable ranking and time-to-first-Flag; wall time and shared-limit movement."},
+  triageLater:{boundary:"Later Triage batch",objective:"Avoid active-solve disruption; capacity dominates when no release is urgent",cells:[{model:"luna",effort:"max"}],prefix:"No call when evidence settles all; otherwise ",state:"Candidate",evidence:"Useful downstream Order; batch latency, waiting Lanes and burn."},
+  solveRoutine:{boundary:"Routine Solve Lead",objective:"Verified Flag or useful Checkpoint per wall/capacity envelope",cells:[{model:"sol",effort:"medium"},{model:"terra",effort:"medium"}],suffix:"; Daybreak baseline",state:"Candidate",evidence:"Independent easy/moderate Challenge families and seeds."},
+  solveAdaptive:{boundary:"Later Solve Lead effort",objective:"Continue an evidenced path without changing the Attempt model",cells:[{model:"sol",effort:"low"},{model:"sol",effort:"high"},{model:"sol",effort:"xhigh"},{model:"sol",effort:"max"},{model:"terra",effort:"low"},{model:"terra",effort:"high"},{model:"terra",effort:"xhigh"},{model:"terra",effort:"max"}],prefix:"Same fixed Lead model; compare ",state:"Unknown",evidence:"Verified progress or concrete blocker; matched continuation value before promotion."},
+  specialistRoutine:{boundary:"Routine Specialist",objective:"Profile-specific Flag/Checkpoint yield",cells:[{model:"luna",effort:"max"},{model:"sol",effort:"low"}],suffix:"; neither admitted beforehand",state:"Candidate",evidence:"Matched authorized tasks; Flags, Checkpoints, latency, usage and refusals."},
+  specialistHard:{boundary:"Hard Specialist",objective:"Flag probability first; wall/capacity second",cells:[{model:"sol",effort:"high"},{model:"sol",effort:"xhigh"},{model:"sol",effort:"max"}],joiner:" → ",state:"Candidate",evidence:"Difficulty-stratified outcomes and progress-conditioned continuation value."},
+  astraScreen:{boundary:"Astra pre-admission",objective:"Reject guaranteed refusal without wasting competition capacity",cells:[{model:"astra",effort:"high"},{model:"astra",effort:"max"}],prefix:"Authorized hard/extreme ",joiner:" / ",evidence:"One platform rejection, or model refusal repeated once independently, excludes."},
+  ultra:{boundary:"Ultra effort",objective:"Avoid measured overhead with no demonstrated solve gain",cells:[],emptyPlan:"No v2 role/model cell",state:"Excluded",evidence:"Reconsider only after new evidence changes the hard/max frontier."},
+  recoveryCritical:{boundary:"Run-stopping Recovery",objective:"Restore the whole Run quickly and correctly",cells:[{model:"sol",effort:"medium"},{model:"sol",effort:"high"}],state:"Candidate",evidence:"Novel faults, repair correctness, P95 wall and probation outcome."},
+  recoveryIsolated:{boundary:"Isolated Lane Recovery",objective:"Preserve capacity unless the Lane blocks high-value work",cells:[{model:"luna",effort:"max"},{model:"sol",effort:"low"},{model:"sol",effort:"medium"}],state:"Candidate",evidence:"Fault impact, delayed-Flag cost and recovery correctness."}
+};
+
+const formattedCells = cell => cell.cells.map(({model,effort})=>`${models[model].short} ${effort}`).join(cell.joiner || " vs ");
+const routingPlan = cell => {
+  const cells = cell.cells.length ? formattedCells(cell) : cell.emptyPlan;
+  return `${cell.prefix || ""}${cells}${cell.suffix || ""}`;
+};
+const astraDisposition = refusalOutcome => {
+  if (refusalOutcome === "platform" || refusalOutcome === "repeated") return {state:"Excluded",action:"exclude"};
+  if (refusalOutcome === "passed") return {state:"Candidate",action:"trial"};
+  if (refusalOutcome === "first-model") return {state:"Unknown",action:"confirm"};
+  return {state:"Unknown",action:"screen"};
+};
+const cellState = (state,cell) => cell === routingCells.astraScreen ? astraDisposition(state.refusalOutcome).state : cell.state;
+const isHardDifficulty = difficulty => difficulty === "hard" || difficulty === "extreme";
+const hardSpecialistEfforts = routingCells.specialistHard.cells.map(candidate => candidate.effort);
+
+const requestedFamily = requested => requested === "daybreak-blue" ? "sol" : requested;
+const identityDrifted = state => [state.catalogModel,state.effectiveModel].some(model => model !== "unreported" && model !== requestedFamily(state.requestedModel));
+const capacityCaveat = state => {
+  const caveats = [];
+  if (state.telemetry === "missing") caveats.push("Telemetry is missing: use the conservative published band, tighten admission and retain the measured reserve.");
+  if (state.limitSignal === "unknown") caveats.push("Applicable-limit scope is unknown: do not invent a separate model pool.");
+  if (state.reservePosture === "unknown") caveats.push("Reserve posture is unknown: optional admissions wait for a bounded measurement.");
+  return caveats.join(" ");
+};
+
+const admissionGuard = state => {
+  if (state.turnBoundary === "active") {
+    const next = state.explicitExhaustion ? "Finish only this running Turn, then enter Quota wait." : "Capacity, catalog or evidence changes apply only at the next boundary.";
+    return {kind:"warn",title:"Active Turn frozen",detail:`Requested model and effort do not change mid-Turn. ${next}`};
+  }
+  if (state.explicitExhaustion) return {kind:"wait",title:"Quota wait",detail:"The shared platform allowance is exhausted. Do not infer a cheaper-model pool or admit another Turn."};
+  if (state.requestedModel === "astra" && astraDisposition(state.refusalOutcome).action === "exclude") return {kind:"wait",title:"Astra excluded from v2",detail:"Remove Astra from every menu and spend no further Gate or scored capacity on it."};
+  if (state.requestedModel === "astra" && (state.role !== "specialist" || !isHardDifficulty(state.difficulty) || !cellAccepts(state,routingCells.astraScreen))) return {kind:"wait",title:"Astra screen boundary refused",detail:`Astra is permitted only for the tiny authorized hard/extreme Specialist screen: ${routingPlan(routingCells.astraScreen)}.`};
+  if (state.role === "solve" && state.attemptLeadModel !== "unassigned" && requestedFamily(state.requestedModel) !== state.attemptLeadModel) return {kind:"wait",title:"Solve Lead model change refused",detail:"This Attempt already fixed its Lead model. A different model requires a Specialist invocation or later Attempt."};
+  if (state.role === "solve" && state.turnBoundary === "between" && state.attemptLeadModel === "unassigned") return {kind:"wait",title:"Attempt Lead identity missing",detail:"Load the durable Attempt model before admitting another Lead Turn; never infer it from the new request."};
+  if (state.limitSignal === "requested-blocked") return {kind:"wait",title:"Requested cell unavailable",detail:"Do not start or silently substitute this model. Recompute at the boundary from independently Gate-approved cells; none exist yet."};
+  if (identityDrifted(state)) return {kind:"warn",title:"Cell needs recheck",detail:"The catalog or effective family differs materially from the requested family. Preserve all three identities and withhold prior promotion until matched evidence is rerun."};
+  const criticalRecovery = state.role === "recovery" && state.impact === "whole-run";
+  if ((state.telemetry === "missing" || state.limitSignal === "unknown" || state.reservePosture === "unknown") && !criticalRecovery) return {kind:"wait",title:"Unknown capacity: defer optional candidate",detail:`Use the conservative published band, tighter admission and measured Recovery reserve. ${capacityCaveat(state)}`};
+  if (state.reservePosture === "reserve" && !criticalRecovery) return {kind:"wait",title:"Protect measured Recovery reserve",detail:"Defer this candidate at the next boundary. Do not downgrade an active Turn or infer an exact number of Turns remaining."};
+  if (state.phase === "tail" && state.progress !== "checkpoint" && !criticalRecovery) return {kind:"wait",title:"Tail: no fresh calibration admission",detail:"Protect time for an active evidenced path and Recovery. A new candidate needs stronger expected-Flag evidence; numeric cutoffs remain unset."};
+  return null;
+};
+
+const requestedCell = state => ({model:requestedFamily(state.requestedModel),effort:state.requestedEffort});
+const cellAccepts = (state,cell) => {
+  const requested = requestedCell(state);
+  return cell.cells.some(candidate => candidate.model === requested.model && candidate.effort === requested.effort);
+};
+const decisionFromCell = (state,cell,detail,kind="admit") => {
+  const requested = requestedCell(state);
+  if (!cellAccepts(state,cell)) return {kind:"wait",title:"Requested cell outside this boundary menu",detail:`The requested ${requested.model} ${requested.effort} cell is not admitted here. Expected: ${routingPlan(cell)}.`};
+  return {kind,title:`${cellState(state,cell)}: ${routingPlan(cell)}`,detail:`${detail} ${capacityCaveat(state)}`.trim()};
+};
+
+const hardSpecialistProgressionGuard = state => {
+  if (state.role !== "specialist" || !isHardDifficulty(state.difficulty) || requestedFamily(state.requestedModel) !== "sol") return null;
+  const previous = state.previousSpecialistEffort;
+  const requested = state.requestedEffort;
+  const first = hardSpecialistEfforts[0];
+  if (previous === "none") return requested === first ? null : {kind:"wait",title:`Hard Specialist starts at ${first}`,detail:`The ordered Daybreak sequence is ${hardSpecialistEfforts.join(" → ")}; a first Turn cannot skip ahead.`};
+  if (state.turnBoundary !== "between") return {kind:"wait",title:"Specialist history needs a Turn boundary",detail:"A recorded prior effort can change only between bounded Turns."};
+  const previousIndex = hardSpecialistEfforts.indexOf(previous);
+  const next = hardSpecialistEfforts[previousIndex + 1];
+  if (requested !== previous && requested !== next) return {kind:"wait",title:"Hard Specialist effort jump refused",detail:`After ${previous}, retain ${previous}${next?` or advance only to ${next}`:"; no higher effort exists in v2"}.`};
+  if (requested === next && state.progress !== "checkpoint") return {kind:"wait",title:"Hard Specialist escalation lacks evidence",detail:"Advance one effort step only from a verified Checkpoint; confidence or repetition alone is insufficient."};
+  return null;
 };
 
 const route = state => {
-  if (state.explicitExhaustion) return {kind:"wait",title:"Quota wait",detail:"The platform reported exhaustion. Finish only an already-running Turn; do not infer a separate cheaper-model allowance."};
-  const impact = state.impact;
+  const guarded = admissionGuard(state);
+  if (guarded) return guarded;
+  if (state.progress === "flag") return {kind:"admit",title:"Attempt complete",detail:"The verified Flag ends this Attempt; no further inference cell is admitted."};
   if (state.role === "triage") {
     if (state.ambiguity === "settled") return {kind:"admit",title:"No Triage inference",detail:"Board metadata or qualified crowd evidence settles the batch. Replay the durable judgment and keep solving."};
-    if (state.phase === "startup") return {kind:"admit",title:"Experiment: Daybreak low",detail:"Startup objective is ranked-working-set latency. Compare against Terra/Luna low only on full batches with equal downstream ranking utility."};
-    return {kind:"warn",title:"Experiment: later-batch low-effort menu",detail:"Batch once. Compare no-call/Terra/Luna/Daybreak using active-Lane disruption and downstream Order—not raw judge latency alone."};
+    const cell = state.phase === "startup" ? routingCells.triageStartup : routingCells.triageLater;
+    return decisionFromCell(state,cell,state.phase === "startup" ? "Promote only on full batches with comparable downstream ranking utility." : "Batch once and judge active-Lane disruption plus downstream Order, not raw latency alone.",state.phase === "startup" ? "admit" : "warn");
   }
   if (state.role === "specialist") {
-    const effort = state.difficulty === "trivial" ? "low/medium" : state.difficulty === "moderate" ? "medium/high" : state.difficulty === "hard" ? "high/xhigh" : "xhigh/max/ultra";
-    const continuation = state.progress === "checkpoint" ? "A verified Checkpoint supports another bounded Turn; compare same versus one-step-higher effort." : state.progress === "none" ? "Require a new hypothesis or artifact before repeating." : "Flag ends the Attempt.";
-    return {kind:state.difficulty === "trivial"?"admit":"warn",title:`Experiment: Daybreak ${effort}`,detail:`Difficulty-stratified Specialist menu. ${continuation}`};
+    if (state.requestedModel === "astra") {
+      const disposition = astraDisposition(state.refusalOutcome);
+      if (disposition.action === "confirm") return {kind:"warn",title:"Confirm one model refusal",detail:"Run exactly one independent authorized fixture. A second refusal excludes Astra; do not jailbreak or repeatedly persuade it."};
+      if (disposition.action === "trial") return decisionFromCell(state,routingCells.astraScreen,"The bounded refusal screen passed; Astra may enter matched solve-quality trials but is not Gate-approved.","warn");
+      return decisionFromCell(state,routingCells.astraScreen,"Use only a tiny authorized high/max screen. One platform rejection excludes immediately; no jailbreak or repeated persuasion.","warn");
+    }
+    const progressionGuard = hardSpecialistProgressionGuard(state);
+    if (progressionGuard) return progressionGuard;
+    const routineDifficulty = !isHardDifficulty(state.difficulty);
+    const cell = routineDifficulty ? routingCells.specialistRoutine : routingCells.specialistHard;
+    const continuation = state.progress === "checkpoint" ? "A verified Checkpoint permits a bounded continuation comparison at this Turn boundary." : "Without new verified progress, require a new hypothesis or artifact before repeating.";
+    return decisionFromCell(state,cell,`${continuation} Ultra remains excluded.`,routineDifficulty ? "admit" : "warn");
   }
   if (state.role === "recovery") {
-    return impact === "whole-run"
-      ? {kind:"warn",title:"Experiment: Daybreak medium/high",detail:"Whole-Run restoration makes correctness and wall time primary; reserve must cover measured P95, not an assumed message count."}
-      : {kind:"admit",title:"Experiment: Terra medium vs Daybreak low",detail:"For one noncritical Lane, compare capacity against delayed-Flag cost. Escalate only if the blocked work is valuable or the fault spreads."};
+    const cell = state.impact === "whole-run" ? routingCells.recoveryCritical : routingCells.recoveryIsolated;
+    const detail = state.impact === "whole-run" ? "Correctness and wall time are primary; this is what the measured reserve exists to fund." : "Compare capacity against delayed-Flag cost; escalate only if blocked work is valuable or the fault spreads.";
+    return decisionFromCell(state,cell,detail,state.impact === "whole-run" ? "warn" : "admit");
   }
-  const effort = state.difficulty === "trivial" ? "Terra medium vs Daybreak low" : state.difficulty === "moderate" ? "Daybreak medium/high" : "Daybreak high, then Specialist";
-  return {kind:state.difficulty === "hard"||state.difficulty === "extreme"?"warn":"admit",title:`Experiment: ${effort}`,detail:"Solve Lead is the generalist Turn. Route to a profile-specific Specialist when Challenge evidence identifies the needed domain; the controller retains the Attempt."};
+  const cell = routingCells.solveRoutine;
+  let detail = "The Lead model stays fixed for the Attempt.";
+  if (state.turnBoundary === "between" && state.blocker === "profile") detail += " A concrete profile blocker may admit an evidence-matched Specialist; it does not replace the Lead model.";
+  else if (state.turnBoundary === "between" && state.blocker === "operational") detail += " An operational blocker routes to Recovery; it does not trigger a model swap.";
+  else if (state.turnBoundary === "between" && state.progress === "checkpoint") detail += " Verified progress permits effort reselection on that model for the next bounded Turn.";
+  else if (state.turnBoundary === "between") detail += " No progress or concrete blocker supports an effort escalation.";
+  else detail += " Initial effort is compared only on matched routine workloads.";
+  if (cellAccepts(state,cell)) return decisionFromCell(state,cell,detail,isHardDifficulty(state.difficulty)?"warn":"admit");
+  if (state.turnBoundary !== "between" || (state.progress !== "checkpoint" && state.blocker === "none")) return decisionFromCell(state,cell,detail);
+  return decisionFromCell(state,routingCells.solveAdaptive,`${detail} This effort cell remains unknown until matched continuation trials promote it.`,"warn");
 };
 
-let state = {role:"triage",phase:"startup",difficulty:"moderate",impact:"one-lane",ambiguity:"ambiguous",progress:"none",usedPercent:4,telemetry:"live",requestedModel:"daybreak-blue",effectiveReported:"no",explicitExhaustion:false};
+const modelOptions = [["daybreak-blue","Daybreak Blue alias"],...Object.entries(models).map(([value,model])=>[value,`${model.label}${value==="astra"?" · screen only":""}`])];
+const observedModelOptions = [["unreported","Unreported"],...modelOptions.filter(([value])=>value!=="daybreak-blue")];
+let state = {role:"triage",phase:"startup",turnBoundary:"before",difficulty:"moderate",impact:"one-lane",ambiguity:"ambiguous",progress:"none",blocker:"none",attemptLeadModel:"unassigned",previousSpecialistEffort:"none",usedPercent:4,telemetry:"live",reservePosture:"above",limitSignal:"available",requestedModel:"luna",requestedEffort:"max",catalogModel:"unreported",effectiveModel:"unreported",refusalOutcome:"none",explicitExhaustion:false};
 const fields = [
   ["role","Agent role",[["triage","Triage Judge"],["solve","Solve Lead"],["specialist","Specialist"],["recovery","Recovery Agent"]]],
-  ["phase","Run phase",[["startup","Startup"],["later","Later batch"]]],
+  ["phase","Run phase",[["startup","Startup"],["middle","Middle"],["tail","Tail"]]],
+  ["turnBoundary","Turn boundary",[["before","Before first Turn"],["between","Between Turns"],["active","Turn active / frozen"]]],
   ["difficulty","Challenge/fault difficulty",[["trivial","Trivial"],["moderate","Moderate"],["hard","Hard"],["extreme","Extreme / unknown"]]],
   ["impact","Fault impact",[["one-lane","One noncritical Lane"],["whole-run","Whole Run / critical path"]]],
   ["ambiguity","Triage need",[["ambiguous","Ambiguous batch"],["settled","Already settled"]]],
   ["progress","Verified progress",[["none","None"],["checkpoint","Checkpoint"],["flag","Flag"]]],
+  ["blocker","Concrete blocker",[["none","None"],["profile","Profile-specific solve blocker"],["operational","Operational fault"]]],
+  ["attemptLeadModel","Attempt's fixed Lead model",[["unassigned","Not assigned / first Turn"],["sol","Daybreak / Sol"],["terra","Terra"]]],
+  ["previousSpecialistEffort","Prior hard-Specialist effort",[["none","No prior Turn"],...hardSpecialistEfforts.map(effort=>[effort,effort==="xhigh"?"Extra high":effort[0].toUpperCase()+effort.slice(1)])]],
   ["telemetry","Rate-limit telemetry",[["live","App Server used % observed"],["missing","Unavailable"]]],
   ["usedPercent","Five-hour window used %","number"],
-  ["requestedModel","Requested model",[["daybreak-blue","Daybreak Blue alias"],["sol","GPT-5.6 Sol"],["terra","GPT-5.6 Terra"],["luna","GPT-5.6 Luna"]]],
-  ["effectiveReported","Effective snapshot reported",[["yes","Yes — retain for audit"],["no","No — alias only"]]],
+  ["reservePosture","Measured reserve posture",[["above","Above reserve"],["reserve","Would enter Recovery reserve"],["unknown","Unknown"]]],
+  ["limitSignal","Applicable limit signal",[["available","Available"],["requested-blocked","Requested model explicitly unavailable"],["unknown","Unknown scope"]]],
+  ["requestedModel","Requested model",modelOptions],
+  ["requestedEffort","Requested effort",[["low","Low"],["medium","Medium"],["high","High"],["xhigh","Extra high"],["max","Max"]]],
+  ["catalogModel","Catalog family / snapshot",observedModelOptions],
+  ["effectiveModel","Effective family / snapshot",observedModelOptions],
+  ["refusalOutcome","Astra refusal screen",[["none","Not run"],["platform","Platform rejection"],["first-model","One model-authored refusal"],["repeated","Refusal repeated independently"],["passed","Passed bounded screen"]]],
   ["explicitExhaustion","Platform exhaustion",[[false,"No"],[true,"Yes"]]]
 ];
 
@@ -203,14 +314,26 @@ function renderCapacity(){
   }).join("");
 }
 
+function renderRoutingMenu(state){
+  document.querySelector("#routing-menu").innerHTML=Object.values(routingCells).map(cell=>`<tr><td>${cell.boundary}</td><td>${cell.objective}</td><td>${routingPlan(cell)}</td><td>${cellState(state,cell)}</td><td>${cell.evidence}</td></tr>`).join("");
+}
+
 function render(){
-  renderFields(); renderCapacity();
+  renderFields(); renderCapacity(); renderRoutingMenu(state);
+  const displayModel = model => model === "unreported" ? "unreported" : modelOptions.find(([value])=>value===model)?.[1] || model;
   const rows=[
     ["Role",{triage:"Triage Judge",solve:"Solve Lead",specialist:"Specialist",recovery:"Recovery Agent"}[state.role]],
     ["Capacity knowledge","Never exact"],
-    ["Planning basis",state.telemetry==="live"?`official range × ${100-state.usedPercent}% unused, then measured reserve`:"official lower bound, tighter concurrency, then measured reserve"],
-    ["Requested model",state.requestedModel],
-    ["Effective identity",state.effectiveReported==="yes"?"reported; retain for reproducibility":"unreported; audit gap, not automatic stop"],
+    ["Planning basis",state.telemetry==="live"?`official range × ${100-state.usedPercent}% unused, then measured reserve`:"published range, tighter admission, then measured reserve"],
+    ["Reserve posture",state.reservePosture],
+    ["Applicable limit",state.limitSignal],
+    ["Requested model",displayModel(state.requestedModel)],
+    ["Requested effort",state.requestedEffort],
+    ["Attempt Lead model",state.attemptLeadModel],
+    ["Prior Specialist effort",state.previousSpecialistEffort],
+    ["Catalog identity",displayModel(state.catalogModel)],
+    ["Effective identity",displayModel(state.effectiveModel)],
+    ["Identity state",identityDrifted(state)?"needs recheck":state.effectiveModel==="unreported"?"audit gap; not automatic stop":"matched"],
     ["Progress",state.progress]
   ];
   document.querySelector("#state").innerHTML=rows.map(([label,value])=>`<div class="datum"><span>${label}</span><strong>${value}</strong></div>`).join("");
