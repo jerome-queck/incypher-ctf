@@ -78,7 +78,7 @@
         <thead><tr><th>Model</th><th>Pro 20x local messages / 5h</th><th>Rough remaining at <span id="remaining-label">96%</span></th><th>API price / 1M tokens<br><span class="small">input · cached · output</span></th><th>Directional relative cost</th></tr></thead>
         <tbody id="capacity"></tbody>
       </table></div>
-      <p class="small" style="margin-top:10px">API price is only a cross-model proxy. OpenAI does not say personal-plan usage is debited by the API bill. Real consumption also depends on context, reasoning, tools, retrieval, caching and task complexity.</p>
+      <p class="small" style="margin-top:10px">API price is only a cross-model proxy. The table shows Standard ordinary-context input and cache-read rates; it omits the &gt;272K-input surcharge, cache writes and Priority processing. OpenAI does not say personal-plan usage is debited by the API bill.</p>
     </section>
 
     <section class="card full">
@@ -99,7 +99,7 @@
 
     <section class="card">
       <h2>Capacity governor</h2>
-      <p><strong>Always uncertain.</strong> Start with the published lower endpoint, reduce it by the live used percentage when available, subtract a measured Recovery-and-tail reserve, then update from observed Turn costs by role, difficulty, effort and context size.</p>
+      <p><strong>Always uncertain.</strong> Treat the published lower endpoint as a conservative trial scenario, combine it with <code>account/rateLimits/read</code> fields such as <code>usedPercent</code> and <code>resetsAt</code>, subtract a measured Recovery-and-tail reserve, then update from observed Turn costs by role, difficulty, effort and context size.</p>
       <p>If telemetry is absent, use the lower official endpoint plus tighter concurrency and Turn bounds. An explicit platform exhaustion response enters Quota wait. Neither case invents another model-specific pool.</p>
       <p>API-equivalent price helps rank relative burn; it never converts the subscription into an exact dollar or message balance.</p>
     </section>
@@ -173,7 +173,7 @@ const fields = [
   ["impact","Fault impact",[["one-lane","One noncritical Lane"],["whole-run","Whole Run / critical path"]]],
   ["ambiguity","Triage need",[["ambiguous","Ambiguous batch"],["settled","Already settled"]]],
   ["progress","Verified progress",[["none","None"],["checkpoint","Checkpoint"],["flag","Flag"]]],
-  ["telemetry","Window telemetry",[["live","Live used % observed"],["missing","Unavailable"]]],
+  ["telemetry","Rate-limit telemetry",[["live","App Server used % observed"],["missing","Unavailable"]]],
   ["usedPercent","Five-hour window used %","number"],
   ["requestedModel","Requested model",[["daybreak-blue","Daybreak Blue alias"],["sol","GPT-5.6 Sol"],["terra","GPT-5.6 Terra"],["luna","GPT-5.6 Luna"]]],
   ["effectiveReported","Effective snapshot reported",[["yes","Yes — retain for audit"],["no","No — alias only"]]],
