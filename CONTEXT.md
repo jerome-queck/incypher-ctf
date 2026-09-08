@@ -548,6 +548,32 @@ or bypasses the deterministic guards that authorise an irreversible effect.
 _Avoid_: retry, restart, crash loop, repair. A replacement Boot is one action Recovery may permit;
 a Repair Agent is one possible mechanism whose scored-Run authority is separately decided.
 
+**Incident**:
+One Recovery-owned fault lifecycle, from deterministic detection and containment through a
+resolved, contained or terminal outcome. A materially changed cause or operating context opens a
+linked successor rather than silently changing the identity of the original Incident.
+_Avoid_: error, alert, retry, Recovery Engagement (the Engagement is one mechanism working it)
+
+**Failure fingerprint**:
+The stable, normalized signature used to recognise the same operational failure across processes
+and Boots: scope, component, operation, failure class, relevant authority state and image/config
+identity, excluding volatile timestamps, process ids and prose. Matching fingerprints coalesce
+recurrence only within an open Incident; recurrence after closure or a material field change opens
+a linked Incident.
+_Avoid_: error string, stack trace, incident id, deduplication key
+
+**Recovery probe**:
+One fixed, typed and bounded diagnostic read that deterministic control may execute for an Incident.
+It has an explicit authority scope, timeout, output limit and redaction policy; it is never an
+arbitrary model-authored command or general shell.
+_Avoid_: diagnostic command, investigation, shell access, tool call
+
+**Remedy**:
+One versioned, prebuilt state-changing action that deterministic control may authorise for matching
+Failure fingerprints after checking its typed inputs, preconditions, authority mode and bounded-use
+rule. A Recovery Agent may request a Remedy but cannot execute or widen it.
+_Avoid_: fix, retry, repair, model action
+
 ### How practice proves the Solver
 
 **Known-answer regression**:

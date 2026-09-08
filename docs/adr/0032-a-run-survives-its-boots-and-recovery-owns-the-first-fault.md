@@ -1,5 +1,10 @@
 # A Run survives its Boots, and Recovery owns the first fault
 
+> **[ADR-0046](0046-recovery-contains-the-smallest-safe-scope-and-changes-before-retrying.md)
+> resolves the Recovery policy left open here.** It defines Incident identity and fingerprints,
+> minimum-safe-blast-radius containment, typed probes and remedies, forced Agent escalation,
+> probation, practice repair, durable evidence and the fault-injection Gate.
+
 > **The inference credential, environment and shared-exhaustion mechanism are resolved by
 > [ADR-0040](0040-one-owner-one-subscription-and-one-observed-limit-state.md).** Codex Control reads
 > authoritative account-limit state when available, spends only pre-authorised journalled resets
