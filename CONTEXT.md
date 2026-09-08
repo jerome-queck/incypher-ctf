@@ -103,10 +103,9 @@ its own entry below.
 
 **Lease**:
 The Run coordinator's durable, epoch-fenced claim on an Instance, separate from the Attempt doing
-work and the Lane providing capacity. Its open phase is **reserved**, **attempt-bound** or
-**recoverable**; an Attempt may remain bound while paused, but a queued owner does not exist,
-orphaned and unattributed are reconciliation verdicts, and expired, terminated and
-never-deployed are terminal causes ([ADR-0044](docs/adr/0044-one-coordinator-fences-every-instance-lease.md)).
+work and the Lane providing capacity. It is **reserved**, **attempt-bound** (including while
+paused) or **recoverable**; ADR-0044 separates those phases from reconciliation verdicts and
+terminal causes ([ADR-0044](docs/adr/0044-one-coordinator-fences-every-instance-lease.md)).
 _Avoid_: hold, reservation, session, and *Instance* — the Instance is the Board's running copy of a
 Challenge, the Lease is our claim on it. The two end at different moments, which is the whole reason
 for the second word.
