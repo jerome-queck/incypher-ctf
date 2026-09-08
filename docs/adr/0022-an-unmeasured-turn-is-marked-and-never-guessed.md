@@ -49,8 +49,14 @@ record does.
 
 ## The count survives elsewhere, and we still do not take it
 
-`$CODEX_HOME/sessions/rollout-*.jsonl` — the vendor's own session log, which for the Solver lands in
-`/state/codex` — carries a `token_count` record after each model response, holding
+> [ADR-0045](0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md) classifies
+> raw Codex rollouts as private, potentially credential-bearing and nonpromotable. They remain
+> noncanonical diagnostic evidence under a bounded retention clock; recorder redaction never
+> proves them clean.
+
+In v1, `$CODEX_HOME/sessions/rollout-*.jsonl` — the vendor's own session log, which lands in
+`/state/codex`; v2 replaces that shared path with ADR-0045's private inference store — carries a
+`token_count` record after each model response, holding
 `total_token_usage` and `last_token_usage`. It is appended as the turn proceeds, so a killed turn's
 last count is on disk: over the **63 rollouts** under `state/codex/sessions/`, **60 carry a
 `token_count` payload** and **25 never reach a `task_complete`** — the same count of turns the four

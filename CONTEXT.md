@@ -426,31 +426,52 @@ mid-Run therefore loses the authority to continue, never merely the evidence. Th
 reads no code or tool from it. A Challenge's Working directory — the entry below — is separate:
 the model reads it for carry, but because the model can write it, it can never prove identity,
 submission or Lease ownership ([ADR-0032](docs/adr/0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md)).
+[ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)
+classifies that state's reachability, retention and publication boundary.
 _Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not what it is). Not
 "state" bare either — that reads as the Solver's in-memory state, which is a different thing and
 does not survive anything.
 
 **Working directory**:
-The one directory a Challenge's Attempts write in — `/state/work/<event>/<challenge_id>/`, holding
-the Board's own files copied in and everything the model makes beside them. The sandbox makes it the
-only path the vendor's agent may write, and it is **never cleared between Attempts**. A persistent
-Solve Lead carries context across Turns inside one Attempt; this directory carries Challenge work
-across Specialist Engagements, later Attempts, fresh thread segments and Boots. It is therefore the
-one part of Run state that is also Run *input*, and it is keyed by event rather than by
-`challenge_id` alone — that id is a per-installation auto-increment integer, so two Boards mint the
-same ones and one address would hold two Challenges
+The Challenge-scoped home of its **Work generations** — the entry below — keyed by event and
+Challenge because a `challenge_id` is a per-installation integer and two Boards mint the same ones.
+It is not itself one mutable directory carried forever. Each Attempt receives a fresh generation
+assembled from the Board's files and one bounded carry manifest over sealed earlier work; a
+Specialist receives a private generation and only controller-accepted artifacts cross back. The
+model therefore sees the memory deliberately handed forward, never every stale file a predecessor
+made. Working-directory material may help later work but, because a model can author it, never
+proves identity, submission, Lease ownership or another control fact
 ([ADR-0025](docs/adr/0025-the-event-namespaces-the-working-directory-and-it-is-run-input.md)).
 _Avoid_: workspace, scratch, sandbox (the sandbox is the container itself, ADR-0018). Not the Run's
 own record either: that lives under `/state/runs/`, deliberately outside this directory, so the
 model cannot rewrite the file its own stall is judged from.
 
+**Work generation**:
+One producer-owned body of mutable Challenge work while its Attempt or Specialist Engagement is
+open. Its closing barrier seals it; selected artifacts may enter a successor's bounded carry, while
+unselected, stale or late material remains inspectable only under its retention class and never
+silently enters later work. A generation is the unit the storage governor may quarantine or retire;
+the Working directory is the Challenge-level lineage containing those units
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: Attempt (the work period), Working directory (the lineage), checkpoint, snapshot
+
+**Artifact disposition**:
+The declared purpose governing one file in a Work generation. New files begin `ephemeral`; the
+model may nominate them as `carry`, `solve-evidence`, `training-evidence` or `discard`, and trusted
+control validates and applies that request within its count, byte, provenance and sensitivity
+bounds. An interrupted generation maps remaining ephemeral files to `quarantine`, so no file is
+unclassified and no crash promotes a directory into later context by default
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: useful file, keep, cleanup status, model verdict
+
 **Landing**:
 Where an Artefact's copy sits in a Challenge's Working directory — the path the model is told about
 and the one it can open. It carries the Board's own name for the file. Where staging finds that name
-already taken by something that is not this same file — another file the Board ships under it, or
-whatever an earlier Attempt left there — the copy lands under a name minted from its own digest
-instead, and the Attempt prompt says whose name it is. Overwriting what holds the name is the one
-thing staging may not do — that is the memory the Working directory exists to keep.
+already taken in the fresh generation by something that is not this same file — another Board file
+or an explicitly selected carry artifact — the copy lands under a name minted from its own digest
+instead, and the Attempt prompt says whose name it is. Earlier Attempt material enters only through
+the carry manifest; an old generation does not create a collision merely by surviving retention.
+Staging never overwrites a selected input.
 _Avoid_: destination, drop, staged file. Not *our copy* bare — Intake keeps one too, under
 `/state/runs/`, and that one is change detection's evidence rather than anything the model is
 pointed at. Not *Target* either: a Target is an Instance's address, not a file.
@@ -471,16 +492,33 @@ Challenge it was handed — is a third thing again, derived offline from a strea
 and never a Cut cause (ADR-0014).
 
 **Promotion**:
-Copying a finished Run's Step stream out of `/state` and into `runs/<run_id>.jsonl`, where it
-survives the laptop. It is a separate step run by an agent afterwards and never part of a Run — the
-Solver has no git binary and never commits while it is working (ADR-0009) — and it copies the stream
-**as written**, never a projection of it, because every number v1 turns on is uncalibrated and a
-projection freezes the one reading that was live when it was taken. Observation and Claim bodies
-stay behind in `/state`, so a promoted stream keeps its digests and can never be resolved back to
-the content they were taken over. Because nothing human stands between the file and the push,
-promotion **re-scans for a declared credential and refuses on a hit**.
-_Avoid_: export, archive, publish, upload. Not **Run state** either — promotion moves one file out
-of it and leaves the rest where it is.
+Moving a finished Run's sanitized **Run capsule** — the entry below — out of live Run state and
+across its publication boundary. It is a trusted post-Run operation, never part of solving, and
+preserves canonical facts rather than freezing one current metric projection. Promotion refuses a
+live, shrinking, incomplete or secret-bearing package and scans both raw and decoded values against
+current and retained historical credentials. A promoted capsule is independently durable before
+raw Run state may enter its retention clock
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: export, archive, publish, upload. Not **Run state** either — promotion deliberately
+excludes private or disposable classes.
+
+**Run capsule**:
+The smallest sanitized, durable package from which one Run's accepted evidence and later metric
+views can be reconstructed: its canonical stream, configuration and provenance manifests, Solve
+receipts and only the selected Evidence artifacts they require. Raw Observation bodies, general
+work, caches, credentials and vendor rollouts remain outside it. A trend table is a derived view of
+capsules, never a replacement truth
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: summary, report, training row, archive, Run state
+
+**Solve receipt**:
+The immutable machine-readable record sealed for one accepted Flag, binding the Board verdict to
+its Run, Boot, Lane, Attempt and Step identities; Instance and Target provenance; exact
+credential-free commands or scripts; selected Evidence-artifact references; and image, model,
+prompt and tool versions. It supports later writeup reconstruction without authoring narrative
+during the Run or copying credentials and raw bulk into the receipt
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: writeup, flag file, submission log, Isolation receipt
 
 **Reserved tail**:
 The last stretch of a Run's window, held back by the scheduler rather than found at the end, with
@@ -549,6 +587,23 @@ The trusted practice-rig component outside Solver and Target authority which own
 manifest, private oracle, isolation evidence and Gate receipt. It observes or replays evidence and
 never solves a Challenge or exists in a scored Run (ADR-0034).
 _Avoid_: judge, Observer, control plane
+
+**Practice catalogue**:
+The Evaluator-owned Challenges eligible to appear on the local Board. Every entry has a verified
+answer or reference result and reproducible Challenge material before admission; incomplete,
+answerless, dead-link and redundant candidates do not enter merely because an old workspace names
+them. Catalogue membership says a Challenge can be exercised, not that the Solver has seen it
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: training set, archive, old workspace, attempted corpus
+
+**Attempt corpus**:
+The compact historical record that grows when the Solver actually attempts a Practice-catalogue
+Challenge: its Run capsule, outcome and corpus role, never the old workdir or answer material. An
+unattempted catalogue entry is absent even where the Evaluator already holds it as a validation or
+Discovery holdout. Using an entry to choose a model, prompt, tool or dial makes it calibration data;
+repeating it thereafter is regression evidence rather than a fresh discovery test
+([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
+_Avoid_: training set, Board catalogue, challenge archive, model training
 
 **Run controller**:
 The trusted part of the Solver which owns Board operations, scheduling, submission and canonical
