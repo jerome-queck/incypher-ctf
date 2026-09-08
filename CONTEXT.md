@@ -224,6 +224,12 @@ banned; on a fixed clock, not being reached is simply what most of a Board does
 _Avoid_: queue, backlog, shortlist, and **eligible set** — that is every unsolved Challenge, which is
 the thing the working set is a slice of
 
+**Challenge claim**:
+The Run controller's durable, exclusive association between one Challenge and one open Attempt,
+held from pre-effect admission through Turn gaps and Quota wait until the Attempt closes. At most one
+exists per Challenge; it is neither a Lane identity nor a Lease, and admission candidates hold none.
+_Avoid_: assignment, queue entry, lock, reservation, Lease
+
 ### How the Solver works a Challenge
 
 **Agent role**:
@@ -239,6 +245,13 @@ one delegated investigation and a Recovery Engagement one incident; each may hol
 _Avoid_: session, invocation, agent run, task — a repository issue is a task, and a Turn is one
 vendor invocation inside the Engagement
 
+**Resource envelope**:
+The controller-admitted capacity bound to one owned Attempt, Engagement or service: its purpose and
+deadline plus measured soft targets and hard ceilings. It may borrow unused productive capacity
+globally while remaining outside the protected control and Recovery reserves; touching them is a
+calibration or admission failure.
+_Avoid_: quota, Lane budget, static share, resource limit
+
 **Specialist profile**:
 The changeable expertise and tool emphasis of a Specialist Engagement: web, pwn, cryptography,
 reverse engineering, forensics, steganography/media, OSINT, AI/ML, misc/protocols or an on-demand
@@ -247,10 +260,9 @@ one Challenge may span several techniques.
 _Avoid_: category agent, fixed specialist, category lock
 
 **Lane**:
-One place in the Solver's bounded capacity for running Attempts concurrently. A Lane carries at
-most one active Attempt; several Lanes let several Attempts make progress at once. The Lane is
-capacity, not durable identity — the Attempt identifies the work and the Lease identifies the
-Instance hold across moments when no command is running.
+One Run-scoped, ordinal-named place in the Solver's bounded capacity for one active Attempt. The
+Attempt identifies the work and the Lease identifies the Instance hold; a child Specialist
+Engagement consumes no additional Lane.
 _Avoid_: worker, thread, slot, agent (all name an implementation or collide with another domain
 word rather than naming the concurrency boundary)
 
@@ -281,10 +293,11 @@ _Avoid_: session, attempt (an Attempt is one Challenge inside a Run — see belo
 **Run state** either: that is what a Run *produces*, and it is a separate entry below.
 
 **Attempt**:
-One bounded run of the Solver at a single Challenge — from the recon that opens it to the moment it
-is cut or a Flag is submitted. A Challenge may be attempted many times: **an Attempt ends, a
-Challenge does not.** Keeping the two apart is what makes giving up cheap, because what is
-abandoned is an Attempt and never the Challenge (ADR-0005). **Consecutive Attempts on one Challenge
+One bounded run of the Solver at a single Challenge — from the controller's durable admission,
+before any effect, to the moment it is cut or a Flag is submitted. A Challenge may be attempted
+many times: **an Attempt ends, a Challenge does not.** Keeping the two apart is what makes giving
+up cheap, because what is abandoned is an Attempt and never the Challenge (ADR-0005).
+**Consecutive Attempts on one Challenge
 are ordinary**, not a special case — a cut Challenge is never terminal, so Order can pick one it has
 already worked. What carries across is the environment — the workdir is the memory — plus the
 approach labels, never a conclusion
@@ -406,6 +419,13 @@ nobody can watch (ADR-0009).
 _Avoid_: abandoned, gave up, failed, timeout, no-flag. "No flag" in particular is the *absence* of a
 cause rather than one, and naming it hides which counter actually fired — which is the only thing
 calibration needs to know.
+
+**Closing barrier**:
+The durable, sequenced point after which an Attempt and its descendants may no longer change
+canonical state or cause an external effect. Pre-barrier results may join; later bytes survive only
+as inert quarantined evidence, and the Lane and Challenge claim release only after bounded join or
+kill completes.
+_Avoid_: Attempt close, cancellation, timeout, kill
 
 **Run state**:
 Everything one Run produces and the image could not contain, because none of it exists until the

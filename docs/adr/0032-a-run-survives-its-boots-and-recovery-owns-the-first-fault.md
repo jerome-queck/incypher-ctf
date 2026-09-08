@@ -9,6 +9,10 @@
 > [ADR-0039](0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md).** Native Codex remains
 > primary; the CPA route uses a separate minimal Solver-owned Responses loop.
 
+> **[ADR-0043](0043-one-sequencer-owns-a-measured-rolling-working-set.md) resolves Lane admission and
+> measured concurrency.** “Exactly one worker” below means one live Boot-level Run control root and
+> predecessor, not one Attempt executor; several Lane-owned executors remain under that one writer.
+
 [#157](https://github.com/jerome-queck/incypher-ctf/issues/157) found that restarting today's
 Solver would preserve its wall-clock and stream sequence while losing nearly every control that
 makes the Run safe: Attempt identity, spend, carry, pending Flags, submission pacing, breaker
