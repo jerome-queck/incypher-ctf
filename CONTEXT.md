@@ -104,8 +104,8 @@ its own entry below.
 **Lease**:
 The Run coordinator's durable, epoch-fenced claim on an Instance, separate from the Attempt doing
 work and the Lane providing capacity. Its open phase is **reserved**, **attempt-bound** or
-**recoverable**; an Attempt may remain bound while paused, but a queued owner does not exist.
-Orphaned and unattributed are reconciliation verdicts, while expired, terminated and
+**recoverable**; an Attempt may remain bound while paused, but a queued owner does not exist,
+orphaned and unattributed are reconciliation verdicts, and expired, terminated and
 never-deployed are terminal causes ([ADR-0044](docs/adr/0044-one-coordinator-fences-every-instance-lease.md)).
 _Avoid_: hold, reservation, session, and *Instance* — the Instance is the Board's running copy of a
 Challenge, the Lease is our claim on it. The two end at different moments, which is the whole reason
@@ -113,9 +113,7 @@ for the second word.
 
 **Mana**:
 Chall-manager's optional capacity cap for held Instances. A positive total makes each Isolated
-Challenge spend its stated cost until termination; total zero disables Mana entirely. A deploy
-that exceeds an enabled total is **refused**, while existing Instances remain held because
-chall-manager has no eviction path
+Challenge spend its stated cost until termination; total zero disables Mana entirely
 ([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)).
 _Avoid_: quota, credits, points (points are score — see Board)
 

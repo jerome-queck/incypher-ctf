@@ -40,10 +40,11 @@ close is forbidden because it hides whether the Board may still hold the Instanc
 ## Reservation precedes effect; Order precedes reattachment
 
 Before deploy, the sequencer writes a crash-durable reserved Lease and deploy intent. A confirmed
-deploy binds the exact Target and deadline to the already-open Attempt and advances the epoch. If
-the response is lost, the intent plus a newly appearing, uniquely matching team ledger row may
-recover cleanup authority. It does not recover solving authority unless a trusted read also
-recovers the exact Target and deadline. Ambiguous rows remain unattributed.
+deploy supplies the exact Target and deadline, but the Lease becomes attempt-bound and advances its
+epoch only after a trusted team ledger read also shows the uniquely matching Instance. If the
+response is lost, the intent plus that matching row may recover cleanup authority. It does not
+recover solving authority unless a trusted read also recovers the exact Target and deadline.
+Ambiguous rows remain unattributed.
 
 An Attempt's closing barrier revokes its binding before the Lane and Challenge claim release. The
 coordinator may retain the Lease briefly, but that retention neither reserves future work nor
@@ -66,8 +67,9 @@ local TTL, or an empty, stale, `NOT_OURS` or `UNREADABLE` ledger cannot strength
 
 An Instance is **orphaned** only when it is positively attributable to this Run, has no current
 reserved, attempt-bound or recoverable Lease after a durable quarantine, and remains present after
-two ownership and Board reconciliations. The second reconciliation occurs no earlier than fifteen
-seconds after the first. Orphanhood authorises termination only; it never authorises adoption.
+two authenticated, structurally valid and source-matched Board reads paired with healthy ownership
+reconciliations. The second cycle occurs no earlier than fifteen seconds after the first.
+Orphanhood authorises termination only; it never authorises adoption.
 
 Fifteen seconds is a minimum grace, not absence proof. ADR-0007 records that chall-manager can
 render an authenticated empty ledger when its backend is unavailable, particularly while Mana is
