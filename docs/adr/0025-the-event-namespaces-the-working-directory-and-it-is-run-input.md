@@ -5,6 +5,10 @@
 > remains durable Challenge memory across Engagements, Attempts and Boots; persistent Lead context
 > inside one Attempt does not make model-written files authoritative.
 
+> **[ADR-0043](0043-one-sequencer-owns-a-measured-rolling-working-set.md) resolves the concurrency
+> revisit below in v2.** One Challenge has one active Attempt writer; concurrent Specialists use
+> private output generations and only controller-validated artifacts enter the shared directory.
+
 **`/state/work` gains one directory per event — `/state/work/<event>/<challenge_id>/` — and this
 record writes down the thing that made the missing namespace dangerous: the working directory is the
 one path under `/state` that a later Attempt reads back as *input*.** Both halves answer
@@ -116,5 +120,5 @@ nothing.
 - **v2 bounds what accumulates in `/state`.** ADR-0009 left that open and named Observation bodies
   as the bulk of it. 21G says the working directories are a second bulk, and a cap that knows about
   the event boundary can expire a finished event's memory rather than a live Board's.
-- **Concurrency at v3.** Two Attempts on one Challenge at once share this directory, and *the memory
-  that crosses a boundary* stops having one writer.
+- **Concurrency, resolved by ADR-0043.** Two Attempts may not own one Challenge concurrently;
+  Specialists use private output generations, preserving the directory's single-writer boundary.

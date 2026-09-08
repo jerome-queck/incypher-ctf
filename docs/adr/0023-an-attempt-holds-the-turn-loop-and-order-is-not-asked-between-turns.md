@@ -5,6 +5,10 @@
 > owns the Turn loop and Order remains outside it, but one persistent Solve Lead thread now carries
 > its Turns. A classified route-local failure is the only in-Attempt fresh thread segment.
 
+> **[ADR-0043](0043-one-sequencer-owns-a-measured-rolling-working-set.md) refines the single-Lane
+> working-set wording below.** An acquired Attempt remains protected, while the global working set
+> rolls forward whenever any Lane reaches an Attempt boundary.
+
 **When the vendor's agent ends a turn with budget left, the orchestrator re-invokes *inside the same
 Attempt*. The re-invocation is a new Turn, not a new Attempt: Order is not consulted, no second
 budget is granted, and `attempt_sequence` does not move.**
@@ -145,9 +149,8 @@ is the test the glossary already applies to Run and Attempt.
   holding a multi-turn Attempt to account, and if it proves too loose the answer is either a
   cross-turn novelty counter or a turn cap — both #105's territory, and both cheaper to argue with a
   Run in hand.
-- **v3 brings concurrency.** Order not being asked between turns is affordable while one Attempt
-  runs at a time; with several in flight, a working set that cannot be revised mid-Attempt is a
-  different proposition.
+- **Concurrent Lanes, resolved by ADR-0043.** Order remains outside each Attempt: any Lane reaching
+  an Attempt boundary rolls the global working set while acquired Attempts remain protected.
 - **A Board starts dropping Challenges mid-event often enough to notice.** That is the case where
   Order being locked out until the Attempt boundary costs something measurable rather than
   theoretical.
