@@ -13,6 +13,10 @@
 > measured concurrency.** “Exactly one worker” below means one live Boot-level Run control root and
 > predecessor, not one Attempt executor; several Lane-owned executors remain under that one writer.
 
+> **[ADR-0044](0044-one-coordinator-fences-every-instance-lease.md) resolves Instance ownership.**
+> The central coordinator owns every Lease; Attempts receive epoch-fenced bindings; Lanes never own
+> Instances; and Lease phases, Board reconciliation verdicts and terminal causes stay separate.
+
 [#157](https://github.com/jerome-queck/incypher-ctf/issues/157) found that restarting today's
 Solver would preserve its wall-clock and stream sequence while losing nearly every control that
 makes the Run safe: Attempt identity, spend, carry, pending Flags, submission pacing, breaker
@@ -89,27 +93,17 @@ written separately with provenance that identifies the damaged segment they foll
 ## Board truth plus global Lease ownership
 
 The Board remains authoritative about whether an Instance exists; the Solver's stream is
-authoritative about which Run/Lane claims it. Neither alone proves an orphan. Before any Boot
-acquires or deploys work, one central Lease coordinator reconciles every team-held Instance across
-all active, paused and reserved Lane assignments into these states:
+authoritative about why it may use or destroy it. Neither alone proves an orphan. One central Lease
+coordinator owns Run-unique Leases and hands Attempts epoch-fenced bindings; Lanes never own them.
+Its open phases are `reserved`, `attempt-bound` and `recoverable`. `orphaned` and `unattributed` are
+reconciliation verdicts, while `expired`, `terminated` and `never-deployed` are terminal causes.
 
-- **active** — durably owned by a live Attempt;
-- **reserved** — durably committed to work that has not released it;
-- **recoverable** — durably owned across a dead Boot and eligible for reattachment;
-- **expired** — a recorded Lease whose Instance a trusted, healthy Board read proves no longer
-  exists;
-- **orphaned** — still on the Board, attributable to this Run, and still proven to have no active,
-  reserved or recoverable owner after quarantine and recheck; or
-- **unattributed** — visible on the Board but not safely attributable to a durable claim.
-
-Active, reserved and recoverable Instances are retained or reattached; expired claims are closed.
-Only a positively proven orphan may be terminated. An unattributed Instance is never destroyed.
-An empty, stale, unauthenticated, `NOT_OURS` or `UNREADABLE` ledger is not trusted absence and
-cannot expire a claim. No command running, a paused Lane, silence, age or an absent in-memory object
-is proof of orphanhood. `unattributed` is an ownership result, separate from ADR-0007's transport
-and ledger-read states. A no-owner Instance first enters a durable quarantine/grace interval, then
-becomes orphaned only if a trusted Board and ownership recheck still proves no active, reserved or
-recoverable owner. The ownership ticket sets the interval; zero grace is not an option.
+Only a positively attributed Instance that remains durably ownerless after at least fifteen
+seconds and two reconciliations becomes orphaned and eligible for termination. An unattributed
+Instance is never adopted or destroyed. Empty ledger pages cannot prove absence: expiry requires a
+successful DELETE/404 or ledger absence corroborated by the per-Challenge endpoint after its cache
+horizon. Reattachment never preserves an Attempt identity or bypasses Order. ADR-0044 holds the
+full reservation, startup, fencing, reattachment and termination contract.
 
 v2 must be parallel-safe and ship concurrent Attempt execution, but start with one enabled Lane
 until measured gates justify raising it. One Lane as the default is calibration, not permission to

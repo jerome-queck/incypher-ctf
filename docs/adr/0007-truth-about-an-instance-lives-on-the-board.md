@@ -1,5 +1,10 @@
 # Truth about an Instance lives on the Board, split by question
 
+> **[ADR-0044](0044-one-coordinator-fences-every-instance-lease.md) resolves the parallel Lease
+> lifecycle and corrects Mana's scope.** Mana limits held Instances only when the Board configures
+> a positive total; total zero disables it. Ownership reconciliation and prompt cleanup remain
+> required whether or not that optional capacity mechanism is enabled.
+
 > **Amended for restart and parallel ownership by
 > [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md).** The Board remains
 > authoritative about whether an Instance exists. A durable Solver claim is separately

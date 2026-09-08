@@ -102,29 +102,20 @@ _Avoid_: container, deployment, box, and **Lease** — which is our *hold* on an
 its own entry below.
 
 **Lease**:
-The Solver's durable claim on an Instance — from reservation, deploy or recovery until a trusted
-Board read proves expiry or the central Lease coordinator explicitly releases or terminates it —
-and **not** the same span as an Attempt or Boot. The word was parked through v1's early design on
-the grounds that a hold one-to-one with an Attempt names nothing Attempt does not already name; it
-is coined here because a hold and the work done under it are different things: "the Instance
-expired", "the Attempt was cut" and "we let the Lease go" are three separate facts, and only the
-middle one is about the Challenge. A Lease may be active, reserved or recoverable while no command
-runs. Only a positively attributed, durably ownerless Lease that survives a grace interval and
-trusted recheck is orphaned; inactivity or an empty/unreadable ledger proves nothing. What a Lease
-costs is Mana, which is why safe reconciliation matters even between Attempts and Boots.
+The Run coordinator's durable, epoch-fenced claim on an Instance, separate from the Attempt doing
+work and the Lane providing capacity. Its open phase is **reserved**, **attempt-bound** or
+**recoverable**; an Attempt may remain bound while paused, but a queued owner does not exist.
+Orphaned and unattributed are reconciliation verdicts, while expired, terminated and
+never-deployed are terminal causes ([ADR-0044](docs/adr/0044-one-coordinator-fences-every-instance-lease.md)).
 _Avoid_: hold, reservation, session, and *Instance* — the Instance is the Board's running copy of a
 Challenge, the Lease is our claim on it. The two end at different moments, which is the whole reason
 for the second word.
 
 **Mana**:
-What chall-manager charges a team for holding Instances: every Isolated Challenge carries a mana
-cost, every team a mana total, and destroying an Instance reclaims what it cost. Mana is why
-holding an Instance is never free — an Instance nobody is working still costs what it cost to
-deploy. **Mana is the concurrency cap**, not a currency beside one: a Board that permits two
-Instances at a time expresses that as a total of two, and a Board that sets the total to zero has
-switched the whole feature off. A deploy that cannot afford itself is **refused**, and the
-Instances already held are left alone — chall-manager has no eviction path, which is what makes a
-leaked Instance cost capacity for the rest of the run
+Chall-manager's optional capacity cap for held Instances. A positive total makes each Isolated
+Challenge spend its stated cost until termination; total zero disables Mana entirely. A deploy
+that exceeds an enabled total is **refused**, while existing Instances remain held because
+chall-manager has no eviction path
 ([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)).
 _Avoid_: quota, credits, points (points are score — see Board)
 
