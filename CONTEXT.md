@@ -633,6 +633,27 @@ manifest, private oracle, isolation evidence and Gate receipt. It observes or re
 never solves a Challenge or exists in a scored Run (ADR-0034).
 _Avoid_: judge, Observer, control plane
 
+**Competition rig**:
+The private sibling product which supplies the local Board, real isolated Targets, dynamic
+scenarios, qualifying corpus, fault injection and hidden Evaluator used for v2 evidence. It
+reproduces pinned confirmed semantics, not unpublished official infrastructure, human strategy or
+production load ([ADR-0048](docs/adr/0048-one-hidden-competition-rig-produces-every-local-gate-receipt.md)).
+_Avoid_: mock Board, test server, official replica, benchmark
+
+**Scenario manifest**:
+The versioned declarative plan sealed before a practice Run, binding its seed, population,
+Challenge revisions and splits, releases, clocks, faults, resources, images, model/prompt/tool policy
+and expected observations. The Evaluator records deviations; neither Solver output nor a result may
+rewrite the plan (ADR-0048).
+_Avoid_: test config, Run state, event log, Gate receipt
+
+**Population profile**:
+One declared range and schedule for Board-native simulated registered and active teams and their
+solves. Its hidden simulated origin is Evaluator metadata; the Solver observes only ordinary Board
+surfaces. It tests reaction to a distribution and never claims to reproduce human strategy
+(ADR-0048).
+_Avoid_: fake scoreboard, synthetic Crowd source, load test
+
 **Practice catalogue**:
 The Evaluator-owned Challenges eligible to appear on the local Board. Every entry has a verified
 answer or reference result and reproducible Challenge material before admission; incomplete,
@@ -649,6 +670,25 @@ Discovery holdout. Using an entry to choose a model, prompt, tool or dial makes 
 repeating it thereafter is regression evidence rather than a fresh discovery test
 ([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
 _Avoid_: training set, Board catalogue, challenge archive, model training
+
+**Dataset snapshot**:
+One immutable content-addressed training view over qualifying Attempt-corpus records, binding exact
+Run/Attempt/Challenge identity, time-causal features, outcome, provenance, split, receipt and schema,
+policy and image hashes. A correction supersedes it; a later observation never becomes an earlier
+feature. Automatic fitting consumes snapshots only between sealed Runs (ADR-0048).
+_Avoid_: live memory, mutable training set, model state, Practice catalogue
+
+**Model candidate**:
+One automatically fitted but unpromoted model package binding a Dataset snapshot, feature schema,
+coefficients, normalisation, policy, metrics and rollback target. Eligibility may start its trials;
+only repeated untouched Gate evidence may make it the Model champion (ADR-0048).
+_Avoid_: Candidate, experiment, new model, champion
+
+**Model champion**:
+The reviewed model package currently admitted behind the bounded Order input. It remains fixed for a
+Run, ships with its prior champion and transparent fallback, and changes only between Runs through a
+versioned Gate (ADR-0048).
+_Avoid_: Model candidate, production model, live model, best model
 
 **Run controller**:
 The trusted part of the Solver which owns Board operations, scheduling, submission and canonical
