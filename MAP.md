@@ -10,7 +10,7 @@ Start here: `README.md`, then `AGENTS.md`.
 | Working here | Agent + contributor conventions, commit/attribution rules | `AGENTS.md` (= `CLAUDE.md`) |
 | Contributing | How work flows here — issue first, then a pull request | `CONTRIBUTING.md` |
 | Code standards | How code is written and reviewed | `CODING_STANDARDS.md` |
-| Domain language | The glossary — ubiquitous language and the boundaries between Run, Attempt, Lane, Lease, Recovery, Incidents and owned work | `CONTEXT.md` |
+| Domain language | The glossary — ubiquitous language and the boundaries between Run, Attempt, Lane, Lease, Recovery, Tool profiles, Incidents and owned work | `CONTEXT.md` |
 | Decisions | Architecture decision records | `docs/adr/` |
 | Agent conventions | The routines an agent follows here, one file per topic | `docs/agents/` |
 | Competitions | The boards we play — source snapshots, our provenance-labelled reading, and the tracked `<event>.board.json` a Board profile is configured from | `docs/competitions/` |

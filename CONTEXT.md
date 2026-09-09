@@ -247,6 +247,25 @@ profile for another open Category. A Board Category may seed the profile but nev
 one Challenge may span several techniques.
 _Avoid_: category agent, fixed specialist, category lock
 
+**Tool capability**:
+A distinct kind of Challenge work the Solver can make available, independent of which installed
+thing supplies it and whether one Engagement may use it now (ADR-0047).
+_Avoid_: package, binary, tool name, Capability handle
+
+**Tool component**:
+A binary, library, runtime, corpus or sysroot which supplies one or more Tool capabilities.
+_Avoid_: Artefact (a Board-supplied file), package (too narrow), dependency, tool
+
+**Tool profile**:
+A selection of Tool components offered together to an Engagement; membership does not itself grant
+authority. One Specialist profile may compose several Tool profiles.
+_Avoid_: Specialist profile, Category image, runtime install, toolbox
+
+**Tool view**:
+The Engagement-specific projection stating separately which Tool capabilities are installed,
+proved, enabled and currently authorised (ADR-0047).
+_Avoid_: PATH inventory, package list, Tool profile, permission list
+
 **Lane**:
 One Run-scoped, ordinal-named place in the Solver's bounded capacity for one active Attempt. The
 Attempt identifies the work and the Lease identifies the Instance hold; a child Specialist
