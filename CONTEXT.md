@@ -829,10 +829,16 @@ move known work forward. The final Gate is also a real go/no-go (ADR-0033).
 _Avoid_: milestone, review, sign-off. Emphatically not **Checkpoint**, which is a Run-level record
 this glossary already defines — a Gate is a verdict on a Run, a Checkpoint is a thing inside one.
 
+**Run authority profile**:
+The sealed declaration that fixes a Run's maximum control authority as `development`, `rehearsal`
+or `scored`; an Observer invocation may narrow it but never widen it.
+_Avoid_: mode, CLI mode, environment, Board profile
+
 **Observer CLI**:
-The host-side, canonical-record-derived view of a Run used for development, rehearsal and
-postmortem inspection. It owns no state; scored mode is read-only, while any control authority is
-an explicit non-scored mode unless written competition rules later permit more (ADR-0033).
+The host-side, always-sanitized view of one explicitly selected Run, derived from canonical Solver
+facts with Evaluator-attested practice evidence kept separate. It owns neither state nor control
+authority, and its Run authority profile bounds every request
+([ADR-0050](docs/adr/0050-one-sanitized-observer-projects-one-run-and-owns-nothing.md)).
 _Avoid_: dashboard, control plane, human interface, Recovery Agent
 
 **Seed**:
