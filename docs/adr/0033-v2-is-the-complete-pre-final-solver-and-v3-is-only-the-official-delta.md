@@ -44,9 +44,12 @@ not invent the organiser's ADK, PoW algorithm, unpublished rules or Challenge de
 
 v2 also provides a host-side **Observer CLI**. It derives Run, Boot, Lane, Attempt, Lease, fault,
 Recovery, solve, timing, token/usage and resource views from canonical records, trusted Board reads
-and Evaluator-attested practice receipts; it owns no parallel state. Scored mode is read-only.
-Development and rehearsal may expose explicit control commands, but scored configuration refuses
-them. Credentials, candidate Flags, model context and exploit material are redacted by default.
+and Evaluator-attested practice receipts; it owns no parallel state. The scored Run authority
+profile is read-only. Development and rehearsal profiles may expose explicit control commands, but
+the scored profile refuses them. Credentials, candidate Flags, model context and exploit material
+are always redacted.
+[ADR-0050](0050-one-sanitized-observer-projects-one-run-and-owns-nothing.md) fixes that Observer's
+projection, command, authority, automation and validation contract.
 
 Recovery may make bounded same-image operational repairs where the rules permit. Practice also
 rehearses diagnose → patch → build → test → probation → promote or rollback using a traceable
