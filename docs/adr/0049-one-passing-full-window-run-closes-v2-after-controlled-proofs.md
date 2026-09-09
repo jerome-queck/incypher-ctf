@@ -230,8 +230,8 @@ history cannot be rewritten.
   compatibility.
 - A failure keeps v2 open. The 13 September target may make v2 late, but it never converts a known
   failed clause into v3 work.
-- Final reconciliation of the source decisions into the executable Gate remains
-  [Reconcile the v2 Gate after its evidence contract is
+- The live roadmap, README Status, Brunner competition record and current forward references are
+  reconciled by [Reconcile the v2 Gate after its evidence contract is
   settled](https://github.com/jerome-queck/incypher-ctf/issues/208).
 
 ## Revisit when

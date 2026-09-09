@@ -1,6 +1,7 @@
 # BrunnerCTF 2026 — Global
 
-The Solver's first real test. This is our reading of the event; the rules themselves are
+The Solver's first real test, now retained as historical evidence. This is our reading of the event;
+the rules themselves are
 [`brunnerctf-2026-global.rules.txt`](brunnerctf-2026-global.rules.txt), captured verbatim so a
 change to them is a diff rather than a thing nobody noticed.
 
@@ -10,6 +11,7 @@ change to them is a diff rather than a thing nobody noticed.
 |---|---|
 | Platform | CTFd at `https://global.brunnerctf.dk` |
 | Window | 21 Aug 14:00 CEST → 23 Aug 14:00 CEST — **20:00 SGT Fri → 20:00 SGT Sun** |
+| Current status | **Ended.** The authenticated Challenge surface returned 403 on 5 Sep 2026. |
 | Flags | `brunner{.*}` — the body is *any* text, not just hex or alphanumerics |
 | Scoring | Dynamic (value falls with solves); the Onboarding track is static |
 | Teams | Team-based, no size limit |
@@ -17,12 +19,13 @@ change to them is a diff rather than a thing nobody noticed.
 | Stakes | CTFtime points. No prizes on this platform. |
 
 **The tracked profile is [`brunnerctf-2026-global.board.json`](brunnerctf-2026-global.board.json)**,
-and it states no `closes_at`. The scored window above ended on 23 August; the board stays up and is
-the practice board every Run since has been taken against, so a close stamped in the file would
-refuse every one of them for a competition that is already over. What the file carries instead is
-the window's *length*, which is what a practice Run is bounded by, and `RUN_SECONDS` shortens it.
-The IN-CYPHER profile does state a close, because there the moment scoring stops is the fact that
-matters most.
+and it states no `closes_at`. It is preserved as the input to the promoted historical Brunner Runs,
+whose scored window ended on 23 August. On 5 September a fresh browser login reached an authenticated
+Challenge page stating that the event had ended and returning 403, so the Board cannot supply a
+fresh Intake or release-candidate Run. Adding a close now would rewrite the input those retained
+Runs used; the profile instead keeps the event's window *length* and must not be selected as a live
+Gate venue. The IN-CYPHER profile does state a close, because there the moment scoring stops is the
+fact that matters most.
 
 **Play Global, never Danish.** `danmark.brunnerctf.dk` is a separate platform with its own
 scoreboard, and it carries a strict no-AI policy that would disqualify everything this repository
@@ -89,6 +92,18 @@ Checked 21 Aug 2026 at 20:10 SGT, ten minutes after the window opened, with a re
 Still open: the CTFd version, `incorrect_submissions_per_min`, and `max_attempts` — `/api/v1/configs`
 is admin-only, so assume CTFd's default of 10 wrong submissions per minute.
 
+## Verified after the board ended
+
+Checked 5 Sep 2026 with the fresh account prepared for a new Run. The stored API token received 401
+from both `/api/v1/users/me` and `/api/v1/challenges`. After a fresh browser login, the authenticated
+Challenge page stated **“BrunnerCTF 2026 - Global has ended”** and returned 403. No Run opened and no
+submission or Instance action was attempted.
+
+Brunner is therefore historical real-Board and regression evidence only. The local CTFd plus
+chall-manager competition rig is the only controllable live v2 Gate venue; a later suitable external
+Board may supplement it but is never a prerequisite. Neither local nor historical evidence proves
+official IN-CYPHER compatibility or discharges the Pending real-Instance clause.
+
 ### The Instance terms are *not exercised* here
 
 Checked 26 Aug 2026 against the live board. **No chall-manager field reaches us on this board at
@@ -107,12 +122,14 @@ for all 74, so Order's tie-break falls through to the id on this board every tim
 The other half of the check *is* exercised, and passed: the fields are present on every row of every
 cycle, so a board that does populate them will be read rather than silently dropped.
 
-## Before playing
+## Historical drift check
 
 ```bash
 sh scripts/check-rules-drift.sh docs/competitions/brunnerctf-2026-global.rules.txt
 ```
 
-Rules "may be updated at any time by the BrunnerCTF crew", so this runs before the event and again
-each morning of it. `rules unchanged: <url>` and exit 0 means nothing changed; drift prints a diff
-and exits 1. The script is never silent on success, so silence means it did not run.
+Rules "may be updated at any time by the BrunnerCTF crew", so this ran before the event and each
+morning of it. The command remains useful when auditing the preserved evidence or if the Board
+unexpectedly reopens; it does not qualify Brunner as a current practice or Gate venue. `source
+unchanged: <url>` and exit 0 means nothing changed; drift prints a diff and exits 1. The script is
+never silent on success, so silence means it did not run.

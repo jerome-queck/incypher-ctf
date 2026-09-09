@@ -36,11 +36,12 @@ at the final gate.
 [ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md)
 carries the live roadmap and preserves the historical mappings from ADR-0006 and ADR-0030.
 **v2 is the complete pre-final Solver**: every capability specifiable and testable before the
-official release, gated as one immutable image against BrunnerCTF Global and a local CTFd plus
-chall-manager Board we build. The live practice calendar was measured and only three of its 42
-events run CTFd at all, so an external event is evidence and never a Gate. **v3 is only the
-evidence-backed official competition delta and freeze** after 14 September; its separate map is
-charted from the actual release, not guessed in advance.
+official release, gated as one immutable image through exhaustive controlled proofs and one passing
+5.5-hour Run on the local CTFd plus chall-manager competition rig. BrunnerCTF Global has ended;
+its promoted Runs remain historical real-Board context, while any later suitable external Board is
+optional evidence and never a v2 prerequisite. **v3 is only the evidence-backed official
+competition delta and freeze** after 14 September, including official compatibility and the Pending
+real-Instance proof; its separate map is charted from the actual release, not guessed in advance.
 
 The ADK, real PoW and unpublished competition facts are the parts that wait on somebody else. They
 are released from 14 September 2026, eight days before the scored run, and
