@@ -3,6 +3,11 @@
 > **Supersedes [ADR-0030](0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md).**
 > ADR-0030's practice-board decision and historical mapping stand. Its forward split between v3
 > integration and v4 freeze does not: both now belong to v3.
+>
+> **Amended by [ADR-0049](0049-one-passing-full-window-run-closes-v2-after-controlled-proofs.md).**
+> Brunner ended before v2 and cannot supply fresh release-candidate evidence. Exhaustive controlled
+> local proofs plus one passing 5.5-hour local-Board Run replace the stale required real-Board Run;
+> official compatibility and the real-Instance clause remain v3/Pending.
 
 The roadmap has exactly three Versions: landed v1, **v2: Complete pre-final Solver**, and
 **v3: Official competition delta and freeze**. Map
@@ -51,8 +56,8 @@ disabled unless later written organiser authority permits it.
 ### v2's Gate
 
 One immutable image must pass the repository, image and tool probes; the local-Board lifecycle,
-submission, concurrency, restart and Recovery proofs; the required unattended real-Board and
-local-Board Runs; and every threshold decided by
+submission, concurrency, restart and Recovery proofs; the controlled suites and one passing
+5.5-hour local-Board Run; and every threshold decided by
 [What evidence makes v2 ready to freeze](https://github.com/jerome-queck/incypher-ctf/issues/196).
 No known v2 criterion may remain incomplete. A green process exit is not a Gate.
 
