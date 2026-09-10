@@ -1,5 +1,11 @@
 # The image carries what a Run reached for, and a picture is attached
 
+> **The global run-time package-install path is superseded for v2 Gate and scored Runs by
+> [ADR-0047](0047-one-immutable-image-exposes-only-proved-free-tool-components.md).**
+> The measured resident floor and picture attachment stand; v2 requires every admitted component
+> to be pinned, prebuilt and proved inside the immutable image instead of installed during a Run.
+> This is a planning requirement, not a claim that the current image has passed it.
+
 > **The claim that every Turn is a fresh Codex process is superseded by
 > [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** Tool-image and picture
 > requirements stand; one persistent Solve Lead now spans an Attempt's Turns.
