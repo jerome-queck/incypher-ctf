@@ -1,5 +1,11 @@
 # Canonical state is sealed, classified and governed by reachability
 
+> **The Candidate proposal uncertainty lifecycle is bounded by
+> [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** After sixty seconds an
+> unresolved Candidate proposal becomes durably `unknown-and-spent`: it remains fail-closed against
+> resend, while a successor Submission epoch may admit unrelated Flags and late exact evidence may
+> append a historical correction.
+
 [What persists in `/state`, and how it stays bounded](https://github.com/jerome-queck/incypher-ctf/issues/175)
 decides the durable shape behind ADR-0032's restartable Run. **One sequenced append-only stream is
 the authority; immutable blobs supply its bytes; every other structure is a rebuildable projection,

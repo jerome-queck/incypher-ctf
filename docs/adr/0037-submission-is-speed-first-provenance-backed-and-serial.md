@@ -1,5 +1,11 @@
 # Submission is speed-first, provenance-backed and serial
 
+> **The ambiguous-response branch is resolved by
+> [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** It supersedes the
+> retry-after-non-grading clause below: any Candidate proposal whose body may have left the broker
+> is never resent. Endpoint-specific reconciliation runs inside one sixty-second Flag-POST barrier,
+> then `unknown-and-spent` and a fresh Submission epoch release unrelated submissions.
+
 [Bounding the submission path so the Solver cannot be mistaken for a
 brute-forcer](https://github.com/jerome-queck/incypher-ctf/issues/164) found that v1's reproduction
 gate proves repeatable output rather than correctness, suppresses legitimate model recognition, and
