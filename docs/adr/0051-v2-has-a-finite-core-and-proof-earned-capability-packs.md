@@ -1,5 +1,11 @@
 # v2 has a finite Core and proof-earned Capability Packs
 
+> **The selected configuration is sharpened into one exact profile by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Its manifest digest
+> binds routes and route-change policy, enabled topology, model, effort, prompts, Tools, decision
+> dials and behaviour-changing Packs; fresh whole-profile pairs and a new full Gate follow any
+> material change. Disabled Core support and separately proved host-only Packs remain distinct.
+
 > **The Core's reserved-tail lifecycle is refined by
 > [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** Core now
 > requires the sealed Attempt floor, hard-admissible Order selection, one bounded final-chance round,

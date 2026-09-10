@@ -1,5 +1,11 @@
 # Store what was observed, derive every judgement
 
+> **Board-score, Challenge-value and Order-value language is clarified by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** A current Challenge
+> value may inform scheduling, while the official closing Board score remains the objective and the
+> only official points fact. Missing or unsettled value falls back without becoming zero or halting
+> a Run; the observation/claim split and ban on fictional banked points stand.
+
 > **The fresh-Turn premise is superseded by
 > [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** The persistent Solve
 > Lead changes context continuity, not this record's Observation/Claim split or durable authority.

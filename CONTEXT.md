@@ -67,6 +67,21 @@ Global and the IN-CYPHER Board itself. Which one it is pointed at is `CTFD_URL`,
 wrong is a disqualification rather than a misconfiguration (`docs/competitions/`).
 _Avoid_: platform, site, server, instance (an "instance" is one deployed Challenge — see below)
 
+**Board score**:
+The team's authoritative competition total under one Board's scoring rule. The final official
+Board score at official close is the Solver's performance objective inside legality, autonomy,
+authority and safety constraints; an intermediate total or one Challenge's current value is not a
+final fact. If the Board does not expose a trustworthy score, the Run continues under its declared
+Score basis rather than treating missing score as zero (ADR-0055).
+_Avoid_: score (unqualified), points banked, Challenge value, Order value, rank
+
+**Challenge value**:
+The Board's authoritative current or eventual closing value for one Challenge under its scoring
+rule. It can be an input to Board score, Order or a sealed evaluation, but acceptance does not bank
+an immutable value where the Board may recompute it later. Its observation always carries source,
+time and missingness (ADR-0009, ADR-0055).
+_Avoid_: points, score, reward, Order value, value banked at submission
+
 **Board profile**:
 Everything the Solver knows about the Board it is pointed at: the Flag wrapper, whether
 `ctfd-chall-manager` is installed, whether an unauthenticated read is answered, the submission
@@ -114,7 +129,7 @@ for the second word.
 Chall-manager's optional capacity cap for held Instances. A positive total makes each Isolated
 Challenge spend its stated cost until termination; total zero disables Mana entirely
 ([ADR-0007](docs/adr/0007-truth-about-an-instance-lives-on-the-board.md)).
-_Avoid_: quota, credits, points (points are score — see Board)
+_Avoid_: quota, credits, points (points concern Board score, not held capacity)
 
 **PoW gate**:
 The proof-of-work a raw-TCP Challenge demands before its service will talk, bound to the Team key
@@ -198,6 +213,15 @@ provisional or unavailable Challenge without ever banning anything
 ([ADR-0038](docs/adr/0038-one-order-reads-crowd-quality-and-tier-recomputes.md)).
 _Avoid_: priority, queue position, queue (there isn't one), tier (the other half of the pair, and
 deliberately a different word)
+
+**Order value**:
+The internal scalar produced by Order solely to compare eligible Challenges at one Attempt
+boundary. It combines normalized Challenge value with crowd, Lease, progress, Category and spend
+evidence; when any eligible Challenge value in the coherent snapshot is absent or unsettled, that
+payoff component uses unit value for the whole snapshot. It is derived and never stored, and is
+not a Board score. The implementation field formerly called `Ranked.score` becomes
+`Ranked.order_value` (ADR-0055).
+_Avoid_: score, points, priority, Challenge value, Board score
 
 **Working set**:
 The Challenges the remaining clock is actually committed to — the top of **Order**, as many as the
@@ -651,6 +675,13 @@ whose generator, oracle and reference exploit are unreachable to the Solver. Onl
 may contribute to discovery solve rate, though model-training recall can never be proved absent.
 _Avoid_: unseen challenge, clean challenge, benchmark
 
+**Selection holdout**:
+One family-fresh Challenge used by exactly the incumbent and challenger arms of one predeclared
+matched whole-profile pair. Its family and generator lineage are disjoint from calibration and
+Discovery holdouts. Exposure or influence retires the whole family permanently; reset, rename,
+reflagging or a rejected result never restores freshness (ADR-0055).
+_Avoid_: test set, reusable holdout, Discovery holdout, calibration corpus
+
 **Gate-qualified solve**:
 An accepted practice Flag with Evaluator-attested Target evidence, a Discovery holdout role and a
 complete passing Isolation receipt. The qualification states what the Gate controlled; it never
@@ -684,11 +715,20 @@ ordinary Board, Target and inference surfaces
 [ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
 _Avoid_: mock Board, test server, official replica, benchmark
 
+**Score basis**:
+The sealed rule which values outcomes in one matched pair or Gate Run: reproducible published
+`official` scoring where available, otherwise predeclared `scenario-weighted` closing values as a
+local proxy, otherwise `unit` value per Gate-qualified solve. The first applicable basis wins and
+freezes before the arm starts. Missing or unsettled score never means zero and never stops a Run
+(ADR-0055).
+_Avoid_: scoring mode, guessed formula, fallback score, Order value
+
 **Scenario manifest**:
 The versioned declarative plan sealed before a practice Run, binding its seed, population,
 Challenge revisions and splits, releases, clocks, faults, resources, images, model/prompt/tool policy
-and expected observations. The Evaluator records deviations; neither Solver output nor a result may
-rewrite the plan (ADR-0048).
+and expected observations. A comparative manifest also binds Score basis, arm order, analysis and
+invalidation rules before unblinding. The Evaluator records deviations; neither Solver output nor a
+result may rewrite the plan (ADR-0048, ADR-0055).
 _Avoid_: test config, Run state, event log, Gate receipt
 
 **Population profile**:
@@ -852,7 +892,7 @@ run, so it sits behind the same adapter seam a Board does, and a Solver that can
 has bet the competition on an unseen release (ADR-0006).
 _Avoid_: SDK, framework
 
-Six terms are about how this repository is governed rather than about the domain:
+These terms are about how this repository is governed rather than about the domain:
 
 **v2 Core**:
 The finite mandatory capability set which makes the pre-final Solver safe and fieldable. Every
@@ -873,11 +913,28 @@ _Avoid_: stretch goal, plugin, feature flag, later Version
 **Release-candidate manifest**:
 The sealed declaration for one exact image and configuration which classifies every planned
 capability as Core or Pack and records its implementation, proof, evidence, enablement or omission,
-source issue and reason. It also fixes the selected primary Inference route, Lane/Specialist
-topology, model, effort and Tool policy. The manifest reports a Candidate; it cannot waive a Core
-obligation, describe a Flag Candidate or manufacture evidence
-([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
+source issue and reason. It binds the selected Release-candidate profile and links the
+Policy-qualification receipt which selected it. The manifest reports a release candidate; it cannot
+waive a Core obligation, describe a Flag Candidate or manufacture evidence
+([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md),
+[ADR-0055](docs/adr/0055-one-score-basis-qualifies-one-release-candidate-profile.md)).
 _Avoid_: Candidate manifest, roadmap, feature list, Gate report, image manifest
+
+**Release-candidate profile**:
+The exact enabled behaviour qualified for one release-candidate image. Its digest binds primary and
+alternate Inference routes and route-change policy; enabled Lane/Specialist topology; effective
+models, effort, prompts and Tools; Triage, Order, Tier, Cut, submission and Resource dials; and every
+enabled in-image Pack which can change scored behaviour. Core support outside that enabled profile
+still needs its own safety proof (ADR-0055).
+_Avoid_: operating policy, configuration, selected topology, candidate settings
+
+**Policy-qualification receipt**:
+The immutable machine-readable evidence that binds one incumbent/challenger whole-profile
+comparison: image and profile digests, Score basis and provenance, all six arm and Scenario
+receipts, analysis and validity rules, raw metrics, paired deltas, decision and permanent
+Selection-holdout retirement. A Release-candidate manifest links the receipt that selected its
+profile (ADR-0055).
+_Avoid_: Gate receipt, experiment notes, comparison report, benchmark result
 
 **Version**:
 A capability set and the **Gate** that closes it — never a date. A date and a venue are *bindings*

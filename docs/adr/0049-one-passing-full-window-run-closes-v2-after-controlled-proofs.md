@@ -1,5 +1,12 @@
 # One passing full-window Run closes v2 after controlled proofs
 
+> **Profile selection and full-window topology are amended by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Three predeclared
+> descriptive whole-profile pairs replace the Flags-first comparison and select one exact profile.
+> Its full-window Run exercises that enabled topology, while controlled suites separately prove all
+> Core support and the maximum two-Lane/two-Specialist safety configuration. Existing absolute Gate
+> floors, one full Run and honest claim boundaries stand.
+
 > **The storage-exhaustion proof is completed by
 > [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** The broad machine and rig
 > allocations below do not substitute for a writer-level Control write reserve. Controlled trials

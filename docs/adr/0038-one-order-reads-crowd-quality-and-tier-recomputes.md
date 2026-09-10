@@ -1,5 +1,11 @@
 # One Order reads crowd quality and Tier recomputes
 
+> **The payoff term and its missingness boundary are amended by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Order consumes
+> Challenge value without calling its scalar score: any absent or unsettled value makes the whole
+> coherent snapshot use unit value until the next Attempt boundary. Crowd qualification, neutral
+> missing evidence, deterministic recomputation and Tier rules stand.
+
 [Order and Tier when the board has no
 crowd](https://github.com/jerome-queck/incypher-ctf/issues/163) found that a solve-count field is
 not a crowd: IN-CYPHER served canned empty collections beside old per-Challenge solve rows, while

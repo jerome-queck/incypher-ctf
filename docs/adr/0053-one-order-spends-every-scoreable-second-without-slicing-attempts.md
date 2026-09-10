@@ -1,5 +1,11 @@
 # One Order spends every scoreable second without slicing Attempts
 
+> **The comparative objective and admission proof are resolved by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Final official Board
+> score leads within the hard constraints, with a non-blocking score-basis fallback. Three fresh
+> descriptive whole-profile pairs select the exact profile before its full-window Gate; this
+> record's Attempt allocation and terminal-window lifecycle are what that evidence exercises.
+
 > **The final-submission reserve's storage path is fixed by
 > [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** Its sealed Candidate set
 > reserves every worst-case authority, outcome, reconciliation, Incident and receipt write before
@@ -168,6 +174,5 @@ post-close cleanup. No scenario may divide time by Challenge count, park a claim
 progress, repeat a final-chance admission, invade protected reserves, miss a scoreable submission or
 leak an Instance.
 
-[What objective and evidence qualify the selected v2
-policy?](https://github.com/jerome-queck/incypher-ctf/issues/243) owns the comparative objective and
-admission proof. This record supplies the policy it evaluates rather than pre-judging its evidence.
+[ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md) fixes the comparative
+objective and admission proof. This record supplies the Attempt-allocation policy it evaluates.
