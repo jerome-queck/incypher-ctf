@@ -1,5 +1,11 @@
 # Canonical state is sealed, classified and governed by reachability
 
+> **Selection evidence and retirement are bounded by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Exposure or influence
+> retires an entire Selection-holdout family permanently; resetting, reflagging or renaming restores
+> no freshness. The canonical stream, content-addressed artifacts, classifications and governed
+> reachability below stand.
+
 > **The finite-storage edge is bounded by
 > [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** Open-Incident evidence
 > is bounded before it is pinned; every write and effect reserves bytes, inodes and metadata first;

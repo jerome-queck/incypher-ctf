@@ -1,5 +1,11 @@
 # There is no queue, and the clock chooses a working set
 
+> **The objective and Order payoff fallback are amended by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Final official Board
+> score leads inside the existing hard constraints. If any eligible Challenge value in a coherent
+> snapshot is absent or unsettled, Order uses unit value for that whole snapshot until the next
+> Attempt boundary; the pure total Order, no-queue rule and fixed acquired Attempt stand.
+
 > **Late-window admission and cleanup timing are replaced by
 > [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** The clock
 > still buys Attempts rather than seconds per Challenge, but a full Tier budget need not fit: one

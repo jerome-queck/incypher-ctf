@@ -1,5 +1,11 @@
 # Confirmed progress buys a bounded stall epoch
 
+> **The Flags-first objective is replaced by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Final official Board
+> score leads inside non-negotiable legality, autonomy, authority and safety constraints; score
+> availability never controls Run liveness. The stall guards, Checkpoint proof and carry lifecycle
+> below stand.
+
 The first promoted replay is good enough to expose broken composition, but not good enough to tune:
 27 Attempts and 539 model Steps produced three Checkpoints and one Flag, all before the tool-image
 repairs, while 22 Attempts lost their token measurement. The live `1 / 5 / 25` repetition, novelty

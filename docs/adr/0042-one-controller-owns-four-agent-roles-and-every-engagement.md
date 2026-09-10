@@ -1,5 +1,10 @@
 # One controller owns four Agent roles and every Engagement
 
+> **Whole-profile selection and the competition objective are amended by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Three fresh matched
+> pairs select one exact Release-candidate profile against final Score-basis value before its
+> full-window Gate. The four Agent roles, deterministic control and supported route surface stand.
+
 > **Route-primary selection and Pack admission are amended by
 > [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Release-candidate
 > qualification selects native or CPA as primary; Lead, Specialist, Triage and adaptive-routing

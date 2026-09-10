@@ -1,5 +1,11 @@
 # One sequencer owns a measured rolling working set
 
+> **Enabled-profile selection and its evidence rule are replaced by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Component matrices
+> calibrate but do not promote. Three descriptive matched whole-profile pairs replace the matched
+> 5.5-hour matrix and one-sided 95-percent bounds; the maximum two-Lane/two-Specialist row proves
+> safety support without forcing that topology into the selected profile or full-window Run.
+
 > **The full-budget no-skip calendar, no-final-round rule and generic reserved tail are superseded by
 > [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** The
 > sequencer now selects the highest hard-admissible normal Order member, may clip one ordinary

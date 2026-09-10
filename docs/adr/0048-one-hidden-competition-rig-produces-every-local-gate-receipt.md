@@ -1,5 +1,11 @@
 # One hidden competition rig produces every local Gate receipt
 
+> **The selection matrix and its receipt are replaced by
+> [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Component calibration
+> no longer promotes: three fresh descriptive matched whole-profile pairs select the exact
+> Release-candidate profile and emit one Policy-qualification receipt before the existing 5.5-hour
+> Gate. The hidden rig, corpus isolation, deterministic controls and local-claim ceiling stand.
+
 > **Candidate scope is amended by
 > [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** The rig remains
 > wholly external evidence infrastructure with zero Solver or official-backend-implementation
