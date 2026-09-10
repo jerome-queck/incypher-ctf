@@ -35,6 +35,13 @@ from pathlib import Path
 from typing import Any
 
 from solver.observation import OBSERVATION_LIMIT_BYTES, Observation, digest_of, elide
+from solver.event_store import (
+    CommittedEvent,
+    EventStore,
+    ObservationRecorded,
+    ProjectionMismatchError,
+    projection_fields,
+)
 from solver.redaction import Redactor
 
 # Bumped only for a change that the three stability rules cannot absorb — a field's meaning never
@@ -138,10 +145,18 @@ class Step:
     caller, so no Step can report time it did not spend.
     """
 
-    def __init__(self, recorder: Recorder, identity: dict[str, Any], began_mono: float) -> None:
+    def __init__(
+        self,
+        recorder: Recorder,
+        identity: dict[str, Any],
+        began_mono: float,
+        *,
+        canonical_event_id: str | None = None,
+    ) -> None:
         self._recorder = recorder
         self._identity = identity
         self._began_mono = began_mono
+        self._canonical_event_id = canonical_event_id
 
     def end(
         self,
@@ -153,7 +168,15 @@ class Step:
     ) -> Observation:
         """Everything here is a fact about what happened. The duration is not one a caller can
         report, so it is measured from the clock the begin took."""
-        return self._recorder._close_step(self._identity, self._began_mono, exit_code, output, usage, checkpoint)
+        return self._recorder._close_step(
+            self._identity,
+            self._began_mono,
+            exit_code,
+            output,
+            usage,
+            checkpoint,
+            canonical_event_id=self._canonical_event_id,
+        )
 
 
 class Recorder:
@@ -173,6 +196,7 @@ class Recorder:
         observation_limit: int = OBSERVATION_LIMIT_BYTES,
         now: Callable[[], dt.datetime] | None = None,
         mono: Callable[[], float] = time.monotonic,
+        event_store_hook: Callable[[str], None] | None = None,
     ) -> None:
         self.run_id = run_id
         self.run_dir = Path(state) / "runs" / run_id
@@ -186,7 +210,9 @@ class Recorder:
         self._mono = mono
         for channel in (OBSERVATIONS, CLAIMS):
             (self.run_dir / channel).mkdir(parents=True, exist_ok=True)
+        self.event_store = EventStore(Path(state), run_id=run_id, redactor=redactor, append_hook=event_store_hook)
         self._seq = _resume_after_a_crash(self.stream_path)
+        self._reconcile_canonical_observations()
 
     def run_open(self, *, board_profile: dict[str, Any]) -> None:
         """Open the Run with the whole Board profile **as discovered**.
@@ -375,7 +401,15 @@ class Recorder:
             "source": source,
         }
         self._write("step-begin", identity)
-        return Step(self, identity, self._mono())
+        # Keep the legacy Step identity exact.  This private token gives the migrated canonical
+        # family an idempotency key even where older callers reuse a step index, without widening
+        # either v1 record.
+        return Step(
+            self,
+            identity,
+            self._mono(),
+            canonical_event_id=f"{attempt_id}:{step_index}:{self._seq}",
+        )
 
     def _close_step(
         self,
@@ -385,36 +419,120 @@ class Recorder:
         output: bytes,
         usage: Usage,
         checkpoint: str | None,
+        *,
+        canonical_event_id: str | None = None,
     ) -> Observation:
-        observation = self._store(output)
+        duration_ms = round((self._mono() - began_mono) * 1000)
+        recorded = ObservationRecorded(
+            attempt_id=str(identity["attempt_id"]),
+            step_index=int(identity["step_index"]),
+            command_raw=str(identity["command_raw"]),
+            command_normalised=str(identity["command_normalised"]),
+            tool=str(identity["tool"]),
+            source=str(identity["source"]),
+            exit_code=exit_code,
+            duration_ms=duration_ms,
+            checkpoint=checkpoint,
+            model=usage.model,
+            tokens_in=usage.tokens_in,
+            tokens_out=usage.tokens_out,
+            cache_read=usage.cache_read,
+            cache_write=usage.cache_write,
+            usage_known=usage.known,
+            ts=self._now().isoformat(),
+            mono=self._mono(),
+            event_id=canonical_event_id,
+        )
+        try:
+            committed = self.event_store.append(recorded, body=output)
+        except OSError:
+            # Preserve v1's non-fatal ordinary Observation policy when the whole state mount has
+            # disappeared.  Canonical damage is typed and remains fail-closed instead of falling
+            # through this compatibility path.
+            body = self._redactor.redact(output)
+            ref = f"{OBSERVATIONS}/{self._seq + 1:06d}.out"
+            self._attempt_twice(lambda: (self.run_dir / ref).write_bytes(body))
+            observation = Observation(
+                digest=digest_of(body), nbytes=len(body), ref=ref, shown=elide(body, self._observation_limit)
+            )
+            self._write(
+                "step-end",
+                {
+                    **identity,
+                    "exit_code": exit_code,
+                    "duration_ms": duration_ms,
+                    "observation_digest": observation.digest,
+                    "observation_bytes": observation.nbytes,
+                    "observation_ref": observation.ref,
+                    "checkpoint": checkpoint,
+                    "model": usage.model,
+                    "tokens_in": usage.tokens_in,
+                    "tokens_out": usage.tokens_out,
+                    "cache_read": usage.cache_read,
+                    "cache_write": usage.cache_write,
+                    "usage_known": usage.known,
+                },
+            )
+            return observation
+        return self._project_observation(committed)
+
+    def _reconcile_canonical_observations(self) -> None:
+        """Rebuild missing v1 rows from canonical facts before a resumed Run can work."""
+        for event in self.event_store.events():
+            if event.event_type != "observation.recorded":
+                continue
+            if self.event_store.projection(event).row is None:
+                self._project_observation(event)
+
+    def _project_observation(self, event: CommittedEvent) -> Observation:
+        """Write exactly one v1 row/body derived from a verified canonical Observation."""
+        check = self.event_store.projection(event)
+        if check.row is not None:
+            return Observation(
+                digest=event.blob_digest,
+                nbytes=event.blob_bytes,
+                ref=str(check.reference),
+                shown=elide(event.body, self._observation_limit),
+            )
+        ref = f"{OBSERVATIONS}/{self._seq + 1:06d}.out"
+        body_path = self.run_dir / ref
+        if body_path.exists():
+            try:
+                body = body_path.read_bytes()
+            except OSError as error:
+                raise ProjectionMismatchError("v1 projection body cannot be read", sequence=event.sequence) from error
+            if body != event.body:
+                raise ProjectionMismatchError(
+                    "v1 projection body disagrees with canonical blob", sequence=event.sequence
+                )
+        else:
+            self._attempt_twice(lambda: body_path.write_bytes(event.body))
+            try:
+                body = body_path.read_bytes()
+            except OSError as error:
+                raise ProjectionMismatchError(
+                    "v1 projection body was not persisted", sequence=event.sequence
+                ) from error
+            if body != event.body:
+                raise ProjectionMismatchError(
+                    "v1 projection body disagrees with canonical blob", sequence=event.sequence
+                )
+        payload = event.payload
+        ts = payload.get("ts")
+        try:
+            moment = dt.datetime.fromisoformat(ts) if isinstance(ts, str) else None
+        except ValueError:
+            moment = None
+        mono = payload.get("mono")
         self._write(
             "step-end",
-            {
-                **identity,
-                "exit_code": exit_code,
-                "duration_ms": round((self._mono() - began_mono) * 1000),
-                "observation_digest": observation.digest,
-                "observation_bytes": observation.nbytes,
-                "observation_ref": observation.ref,
-                "checkpoint": checkpoint,
-                "model": usage.model,
-                "tokens_in": usage.tokens_in,
-                "tokens_out": usage.tokens_out,
-                "cache_read": usage.cache_read,
-                "cache_write": usage.cache_write,
-                "usage_known": usage.known,
-            },
+            projection_fields(event, ref),
+            moment=moment,
+            mono=mono if isinstance(mono, (int, float)) else None,
         )
-        return observation
-
-    def _store(self, output: bytes) -> Observation:
-        """Redact, keep the body whole on disk, and describe it for the line that will point at it.
-
-        The digest is taken over the redacted bytes, so it can never become an oracle for a secret
-        the redaction just removed.
-        """
-        ref, digest, nbytes, shown = self._body(output, OBSERVATIONS, ".out")
-        return Observation(digest=digest, nbytes=nbytes, ref=ref, shown=shown)
+        return Observation(
+            digest=event.blob_digest, nbytes=event.blob_bytes, ref=ref, shown=elide(event.body, self._observation_limit)
+        )
 
     def _body(self, output: bytes, folder: str, suffix: str) -> tuple[str, str, int, str]:
         """One body file, whole on disk under the redaction, described for the line pointing at it.
@@ -427,15 +545,22 @@ class Recorder:
         self._attempt_twice(lambda: (self.run_dir / ref).write_bytes(body))
         return ref, digest_of(body), len(body), elide(body, self._observation_limit)
 
-    def _write(self, kind: str, fields: dict[str, Any]) -> None:
+    def _write(
+        self,
+        kind: str,
+        fields: dict[str, Any],
+        *,
+        moment: dt.datetime | None = None,
+        mono: float | None = None,
+    ) -> None:
         self._seq += 1
-        moment = self._now()
+        moment = moment or self._now()
         record = _redacted(
             {
                 "schema_version": SCHEMA_VERSION,
                 "seq": self._seq,
                 "ts": moment.isoformat(),
-                "mono": self._mono(),
+                "mono": self._mono() if mono is None else mono,
                 "record": kind,
                 "run_id": self.run_id,
                 **fields,
