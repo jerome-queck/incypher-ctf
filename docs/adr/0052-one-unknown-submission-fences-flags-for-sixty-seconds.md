@@ -1,5 +1,11 @@
 # One unknown submission fences Flags for sixty seconds
 
+> **Every POST now has a complete storage reservation under
+> [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** Before wire send, the
+> sequencer reserves the pre-effect record, worst-case outcome, reconciliation, epoch, Incident and
+> receipt path. Failure to reserve fences the POST; it never spends an effect whose history cannot
+> fit.
+
 > **Tail entry and normal Run closure now follow
 > [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** A sealed
 > final-submission reserve replaces the generic pre-close tail, healthy cleanup starts after the

@@ -1,5 +1,11 @@
 # One passing full-window Run closes v2 after controlled proofs
 
+> **The storage-exhaustion proof is completed by
+> [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** The broad machine and rig
+> allocations below do not substitute for a writer-level Control write reserve. Controlled trials
+> attack bytes, inodes, metadata, durability and concurrent reservations; the qualifying full Run
+> may not touch its terminal floor or lose an authority fact.
+
 > **The reserved-tail proof resolves through
 > [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** The Gate
 > proves a sealed final-submission reserve, one bounded final-chance round and post-official-end
@@ -131,8 +137,9 @@ The release candidate passes the Run only when all of these hold:
   planned Boot replacement preserves and fences their state correctly;
 - one classified native-route-local fault invokes the independently implemented CPA route without
   duplicate work or effects, after which the Run continues to the same solve floor; and
-- the reserved tail completes submission reconciliation, Instance cleanup, evidence flush and
-  Promotion with every full-Run safety row passing.
+- the final-submission reserve completes every scoreable reconciliation before official close, and
+  post-close Instance cleanup, evidence flush and Promotion finish with every full-Run safety row
+  passing.
 
 A Run that ends before 5.5 hours is incomplete and fails the Gate. A Run that lasts 5.5 hours but
 misses a threshold is a full-window Run and fails the Gate. A rig or Evaluator defect may invalidate
@@ -146,8 +153,10 @@ passing full-window Run, not one attempt forever and not permission to erase fai
 The Gate binds to the pinned Colima allocation of 8 CPUs, 24 GiB RAM and 100 GiB disk. The Solver
 may use at most 6 CPUs, 16 GiB RAM, 2,048 PIDs and 40 GiB of writable Run state. The scenario
 reserves 2 CPUs, 8 GiB RAM and at least 20 GiB of disk for the rig, trusted control and Recovery.
-Touching a reserve, Board throttling caused by the Solver or any hard-envelope breach fails the
-applicable row.
+The Release-candidate manifest separately seals ADR-0054's writer-level storage reservations,
+per-transaction limits and terminal floor inside those allocations. Ordinary work
+touching protected capacity, Board throttling caused by the Solver or any hard-envelope breach
+fails the applicable row.
 
 Receipts report p50, p95, peak and distributions for wall time, time to first Flag, Flags/hour,
 tokens/Flag and every available token class, Board requests/latency, CPU, RAM, PIDs, disk, network,
