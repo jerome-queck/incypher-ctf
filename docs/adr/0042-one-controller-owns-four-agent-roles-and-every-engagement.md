@@ -1,5 +1,10 @@
 # One controller owns four Agent roles and every Engagement
 
+> **Route-primary selection and Pack admission are amended by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Release-candidate
+> qualification selects native or CPA as primary; Lead, Specialist, Triage and adaptive-routing
+> support remain Core, while model-assisted novel Recovery is a Capability Pack.
+
 [The v2 agent topology and routing
 policy](https://github.com/jerome-queck/incypher-ctf/issues/187) closes the model topology around four
 roles: **Triage Judge, Solve Lead, Specialist and Recovery Agent**. Everything that decides what may

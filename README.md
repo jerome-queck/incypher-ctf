@@ -33,15 +33,19 @@ is the verdict and its two rules: the first Board that can prove it discharges i
 at the final gate.
 
 **Two versions remain.**
-[ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md)
-carries the live roadmap and preserves the historical mappings from ADR-0006 and ADR-0030.
-**v2 is the complete pre-final Solver**: every capability specifiable and testable before the
-official release, gated as one immutable image through exhaustive controlled proofs and one passing
-5.5-hour Run on the local CTFd plus chall-manager competition rig. BrunnerCTF Global has ended;
-its promoted Runs remain historical real-Board context, while any later suitable external Board is
-optional evidence and never a v2 prerequisite. **v3 is only the evidence-backed official
-competition delta and freeze** after 14 September, including official compatibility and the Pending
-real-Instance proof; its separate map is charted from the actual release, not guessed in advance.
+[ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md),
+as amended by
+[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md), carries the
+live roadmap and historical mappings. **v2 is a finite mandatory fieldable Core plus three
+proof-earned Capability Packs**: model-assisted novel Recovery, the full host Observer and external
+practice candidate-image repair. Both native and CPA inference, productive topology, adaptive
+routing and the fieldable Tool surface remain Core; the exact proved profile selects what is
+enabled. The wholly external local competition rig supplies controlled proofs and one 5.5-hour Run
+without making the Solver depend on the rig or actual IN-CYPHER backend implementation. **v3 is
+only the evidence-backed official competition delta and freeze** from 14 September. Late v2 and v3
+work may proceed together; coordination targets do
+not block progress, and the hard deadline is a fieldable candidate before competition starts on 22
+September morning.
 
 The ADK, real PoW and unpublished competition facts are the parts that wait on somebody else. They
 are released from 14 September 2026, eight days before the scored run, and

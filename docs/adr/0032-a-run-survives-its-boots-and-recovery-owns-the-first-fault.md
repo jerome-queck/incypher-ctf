@@ -1,5 +1,11 @@
 # A Run survives its Boots, and Recovery owns the first fault
 
+> **The native-first route clause and unbounded v2 scope are superseded by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Both native and CPA
+> are Core and candidate qualification selects the primary route; model-assisted novel Recovery is
+> a Capability Pack. Deterministic fault ownership, containment and safe no-inference operation
+> stand.
+
 > **[ADR-0046](0046-recovery-contains-the-smallest-safe-scope-and-changes-before-retrying.md)
 > resolves the Recovery policy left open here.** It defines Incident identity and fingerprints,
 > minimum-safe-blast-radius containment, typed probes and remedies, forced Agent escalation,
