@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hostile execution profile prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101419;
+      --panel: #171d24;
+      --panel-2: #1e2630;
+      --line: #34404d;
+      --text: #edf3f8;
+      --muted: #aab7c4;
+      --accent: #65d6ad;
+      --warn: #f1c56b;
+      --bad: #ff7b78;
+      --info: #78b7ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 32px)); margin: 32px auto 64px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-size: clamp(28px, 5vw, 46px); letter-spacing: -0.04em; }
+    h2 { margin-bottom: 14px; font-size: 20px; }
+    h3 { margin-bottom: 8px; font-size: 16px; }
+    code { color: #c6dcff; }
+    a { color: var(--info); }
+    .eyebrow { color: var(--accent); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .lead { max-width: 880px; color: var(--muted); font-size: 17px; }
+    .question { border-left: 4px solid var(--accent); padding-left: 16px; color: var(--text); }
+    .grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 16px; margin: 22px 0; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+    .state { position: sticky; top: 12px; }
+    .verdict { border-radius: 10px; padding: 14px; margin-bottom: 14px; background: var(--panel-2); }
+    .verdict strong { display: block; font-size: 20px; }
+    .good { color: var(--accent); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+    .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .fact { background: var(--panel-2); border-radius: 9px; padding: 10px; }
+    .fact span { display: block; color: var(--muted); font-size: 12px; }
+    .fact strong { display: block; overflow-wrap: anywhere; }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #222c37;
+      color: var(--text);
+      padding: 10px 13px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { color: #07130f; background: var(--accent); border-color: var(--accent); }
+    button.danger { border-color: #8a4548; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+    td:first-child { font-weight: 750; }
+    .status { white-space: nowrap; font-weight: 800; }
+    .status.pass { color: var(--accent); }
+    .status.fail { color: var(--bad); }
+    .status.disabled, .status.unknown { color: var(--warn); }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+    .chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; color: var(--muted); font-size: 12px; }
+    .tabs { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 12px; }
+    .tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+    .walkthrough { min-height: 215px; }
+    .steps { display: grid; gap: 8px; margin-top: 14px; }
+    .step { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 9px; }
+    .step.done { opacity: .55; }
+    .step .number { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--panel-2); }
+    .callout { margin-top: 14px; padding: 12px; border: 1px solid #775e2b; background: #261f12; border-radius: 9px; }
+    .event { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    details { margin-top: 10px; }
+    summary { cursor: pointer; color: var(--info); }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: 1fr; }
+      .state { position: static; }
+      .facts { grid-template-columns: 1fr; }
+      .step { grid-template-columns: 28px 1fr; }
+      .step button { grid-column: 2; justify-self: start; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Prototype · issue 247 · throwaway</p>
+  <h1>Which hostile-execution profile works?</h1>
+  <p class="lead question">This demo tests the decision model around one question: when the pinned runtime can enforce every Attempt-executor boundary, which profile may proceed; when it cannot, must a claimed v2 Run refuse, or may an explicitly selected honest partial candidate run with hostile execution disabled?</p>
+  <p class="lead">The observations below came from the exact current arm64 Solver image on Colima 0.10.3. They establish prototype feasibility, not release qualification. Click profiles and failure cases to see the resulting policy.</p>
+
+  <section class="grid">
+    <div>
+      <div class="panel">
+        <h2>Free play</h2>
+        <p class="muted">Change the observed profile, Run claim, or preflight. Full state re-renders after every action.</p>
+        <div class="buttons">
+          <button class="primary" data-action="load-strict">Load proved direction</button>
+          <button data-action="load-ordinary">Load ordinary Docker</button>
+          <button data-action="select-partial">Seal honest partial</button>
+          <button class="danger" data-action="break-runtime">Remove runtime contract</button>
+          <button class="danger" data-action="fail-control">Fail one boundary</button>
+          <button data-action="preflight">Run preflight</button>
+          <button data-action="reset">Reset</button>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <h2>Authority matrix</h2>
+        <div id="matrix"></div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <h2>Guided walkthroughs</h2>
+        <div class="tabs" id="tabs"></div>
+        <div class="walkthrough" id="walkthrough"></div>
+      </div>
+    </div>
+
+    <aside class="panel state">
+      <h2>Current state</h2>
+      <div id="verdict"></div>
+      <div class="facts" id="facts"></div>
+      <h3 style="margin-top:16px">Capabilities</h3>
+      <div id="capabilities"></div>
+      <h3 style="margin-top:16px">Latest transition</h3>
+      <div class="event" id="event"></div>
+    </aside>
+  </section>
+
+  <section class="panel">
+    <h2>Observed receipt</h2>
+    <div class="facts">
+      <div class="fact"><span>Runtime</span><strong>Colima 0.10.3 · Linux 6.8.0-117</strong></div>
+      <div class="fact"><span>Docker</span><strong>CLI 29.7.2 · engine 29.5.2</strong></div>
+      <div class="fact"><span>Inner hostile probes</span><strong class="good">19 / 19 passed</strong></div>
+      <div class="fact"><span>Peer identity</span><strong>Target broker saw UID/GID 20000</strong></div>
+      <div class="fact"><span>Tree teardown</span><strong>4 processes → 0 via cgroup.kill</strong></div>
+      <div class="fact"><span>Memory / PIDs</span><strong>32 MiB OOM kill · pids.max blocked fork</strong></div>
+      <div class="fact"><span>CPU</span><strong>20% quota throttled 12 periods</strong></div>
+      <div class="fact"><span>I/O / disk</span><strong>4 MiB at 1 MiB/s: 4.215 s · 8 MiB tmpfs filled</strong></div>
+    </div>
+    <details open>
+      <summary>Outer contract the working direction required</summary>
+      <div class="chips">
+        <span class="chip">CAP_SYS_ADMIN</span><span class="chip">CAP_NET_ADMIN</span>
+        <span class="chip">seccomp=unconfined</span><span class="chip">systempaths=unconfined</span>
+        <span class="chip">apparmor=unconfined</span><span class="chip">dedicated cgroup parent</span>
+        <span class="chip">only that parent mounted read-write</span>
+      </div>
+    </details>
+    <div class="callout">
+      <strong>Unresolved before production.</strong>
+      <ul>
+        <li>The prototype uses a controller-only set-id <code>unshare</code> binary as a stand-in. Production needs a fixed-policy launcher with no caller-selected namespace, mount, identity, or command arguments.</li>
+        <li>The inner seccomp deny-list proves filter placement; it is not yet the tool-compatible release policy.</li>
+        <li>The outer contract disables Docker’s seccomp and AppArmor profiles. The fixed launcher, trusted-service capability drop, all tool profiles, both architectures, reboot, and hostile Target probes still require the full rig.</li>
+        <li>The official competition runtime has not promised these flags. Rootless Bubblewrap failed, and the ordinary container exposed read-only cgroup v2.</li>
+      </ul>
+    </div>
+    <p class="muted" style="margin-top:14px">Re-run: <code>bash scripts/hostile_execution_profile_prototype.sh</code>. Source: <code>scripts/hostile_execution_profile_prototype.sh</code>.</p>
+  </section>
+</main>
+
+<script>
+const Model = (() => {
+  const controls = [
+    ["user", "User identity", "Distinct outer UID; broker observed UID 20000."],
+    ["mount", "Mount boundary", "Only /usr, one /work, /tmp, /proc, /dev, and one broker socket were visible."],
+    ["pid", "PID boundary", "Private PID namespace hid trusted and sibling processes."],
+    ["network", "Network boundary", "Private network namespace denied public egress; pathname-UNIX broker remained reachable."],
+    ["syscall", "Syscall boundary", "Inner seccomp loaded after setup; mount and new namespace calls were denied."],
+    ["filesystem", "Filesystem boundary", "Tool root read-only; control, /state, Solver code, sibling work, and auth paths absent."],
+    ["credential", "Credential boundary", "Clear environment plus hidden outer proc/auth/control paths kept the sentinel secret absent."],
+    ["tree", "Process-tree ownership", "All four descendants remained in one Attempt cgroup; cgroup.kill left zero."],
+    ["resource", "Resource envelope", "cgroup v2 enforced CPU, memory, PIDs and I/O; bounded tmpfs enforced bytes."],
+  ];
+
+  const profiles = {
+    strict: {
+      name: "Namespace + cgroup direction",
+      runtime: "broad outer contract present",
+      statuses: Object.fromEntries(controls.map(([id]) => [id, "pass"])),
+      enabled: ["typed Board/Target/inference brokers", "bounded CTF tools", "Challenge file processing", "model-authored commands"],
+      disabled: ["direct Board/control access", "direct public/Target network", "raw credentials", "host/build authority"],
+    },
+    ordinary: {
+      name: "Ordinary Docker container",
+      runtime: "default Docker confinement only",
+      statuses: { user: "pass", mount: "fail", pid: "fail", network: "fail", syscall: "unknown", filesystem: "fail", credential: "unknown", tree: "fail", resource: "fail" },
+      enabled: ["typed brokers only if separately proved"],
+      disabled: ["no safe hostile-execution claim"],
+    },
+    partial: {
+      name: "Explicit broker-only partial",
+      runtime: "ordinary runtime; hostile executor absent",
+      statuses: Object.fromEntries(controls.map(([id]) => [id, "disabled"])),
+      enabled: ["deterministic Intake/Order", "typed Board and submission brokers", "tool-free inference over bounded trusted text"],
+      disabled: ["all model-authored commands", "Challenge executables", "local parsers over hostile bytes", "Specialists needing tools", "Gate-qualified isolation claims"],
+    },
+  };
+
+  const initial = () => ({
+    profile: "strict",
+    claim: "v2",
+    outerContract: true,
+    preflight: false,
+    failedControl: null,
+    event: "Loaded pinned-runtime observations; preflight not yet run.",
+  });
+
+  function statusFor(state, id) {
+    if (state.failedControl === id) return "fail";
+    return profiles[state.profile].statuses[id];
+  }
+
+  function evaluate(state) {
+    const complete = controls.every(([id]) => statusFor(state, id) === "pass");
+    if (state.claim === "partial") {
+      return {
+        tone: "warn",
+        title: "Honest partial may be selected—not v2",
+        body: "Start only after an explicit final go/no-go selects this sealed broker-only profile. Never enter it as automatic fallback.",
+      };
+    }
+    if (!state.outerContract || !complete || !state.preflight) {
+      return {
+        tone: "bad",
+        title: "Refuse a claimed v2 Run",
+        body: "A missing or failed boundary cannot reduce authority silently. The Release-candidate manifest remains incomplete.",
+      };
+    }
+    return {
+      tone: "good",
+      title: "Prototype direction is viable",
+      body: "Pinned-runtime preflight passes. Production admission still waits on a fixed launcher, tool-compatible policy, both architectures, and full-rig evidence.",
+    };
+  }
+
+  function reduce(state, action) {
+    switch (action.type) {
+      case "LOAD_STRICT": return { ...initial(), event: "Restored the 19/19 namespace+cgroup observation." };
+      case "LOAD_ORDINARY": return { ...state, profile: "ordinary", claim: "v2", outerContract: false, preflight: false, failedControl: null, event: "Rootless namespaces failed; cgroup v2 remained read-only." };
+      case "SELECT_PARTIAL": return { ...state, profile: "partial", claim: "partial", outerContract: false, preflight: true, failedControl: null, event: "Human go/no-go explicitly selected broker-only partial; v2 claim removed." };
+      case "BREAK_RUNTIME": return { ...state, outerContract: false, preflight: false, event: "Official runtime contract no longer supplies required outer controls." };
+      case "FAIL_CONTROL": return { ...state, failedControl: "network", preflight: true, event: "Adversarial preflight reached public network; whole profile failed." };
+      case "PREFLIGHT": return { ...state, preflight: true, event: state.profile === "strict" && state.outerContract && !state.failedControl ? "All prototype probes passed." : "Preflight completed without qualifying a strict v2 profile." };
+      case "RESET": return initial();
+      default: return state;
+    }
+  }
+
+  return { controls, profiles, initial, reduce, evaluate, statusFor };
+})();
+
+const scenarios = [
+  {
+    name: "Strict direction",
+    description: "Reproduce the only profile direction that exercised the complete matrix on the pinned runtime.",
+    watch: "A green result says the mechanism is viable, not production-qualified.",
+    steps: [["Load observed profile", "LOAD_STRICT"], ["Run hostile preflight", "PREFLIGHT"]],
+  },
+  {
+    name: "Runtime denies flags",
+    description: "Model the competition host offering an ordinary Docker container and none of the required outer contract.",
+    watch: "A claimed v2 Run refuses. It never falls back to UID/process-group theatre.",
+    steps: [["Load observed profile", "LOAD_STRICT"], ["Remove outer contract", "BREAK_RUNTIME"], ["Run preflight", "PREFLIGHT"]],
+  },
+  {
+    name: "Boundary breach",
+    description: "Let one hostile probe reach public network despite every other control passing.",
+    watch: "One unexpected access fails the whole profile; there is no reduced denominator.",
+    steps: [["Load observed profile", "LOAD_STRICT"], ["Inject network breach", "FAIL_CONTROL"]],
+  },
+  {
+    name: "Honest partial",
+    description: "Explore the distinct final go/no-go choice to field a safe broker-only candidate when strict isolation is unavailable.",
+    watch: "It can start only by explicit selection, disables hostile execution, and cannot claim a v2 pass.",
+    steps: [["Load ordinary runtime", "LOAD_ORDINARY"], ["Explicitly select partial", "SELECT_PARTIAL"]],
+  },
+];
+
+let state = Model.initial();
+let activeScenario = 0;
+let scenarioStep = 0;
+
+function dispatch(type) {
+  state = Model.reduce(state, { type });
+  render();
+}
+
+function render() {
+  const verdict = Model.evaluate(state);
+  const profile = Model.profiles[state.profile];
+  document.querySelector("#verdict").innerHTML = `<div class="verdict"><strong class="${verdict.tone}">${verdict.title}</strong><span class="muted">${verdict.body}</span></div>`;
+  document.querySelector("#facts").innerHTML = [
+    ["Profile", profile.name],
+    ["Manifest claim", state.claim === "v2" ? "v2 candidate" : "honest partial"],
+    ["Outer contract", state.outerContract ? "present" : "absent"],
+    ["Preflight", state.preflight ? "completed" : "not run"],
+  ].map(([label, value]) => `<div class="fact"><span>${label}</span><strong>${value}</strong></div>`).join("");
+
+  document.querySelector("#matrix").innerHTML = `<table><thead><tr><th>Control</th><th>Status</th><th>Prototype evidence</th></tr></thead><tbody>${Model.controls.map(([id, label, evidence]) => {
+    const status = Model.statusFor(state, id);
+    const words = { pass: "prototype pass", fail: "failed", unknown: "unproved", disabled: "hostile path disabled" };
+    return `<tr><td>${label}</td><td class="status ${status}">${words[status]}</td><td class="muted">${evidence}</td></tr>`;
+  }).join("")}</tbody></table>`;
+
+  document.querySelector("#capabilities").innerHTML = `<p class="muted"><strong class="good">Enabled</strong><br>${profile.enabled.join(" · ")}</p><p class="muted"><strong class="bad">Disabled / denied</strong><br>${profile.disabled.join(" · ")}</p>`;
+  document.querySelector("#event").textContent = state.event;
+  renderScenario();
+}
+
+function renderScenario() {
+  document.querySelector("#tabs").innerHTML = scenarios.map((scenario, index) => `<button data-tab="${index}" aria-selected="${index === activeScenario}">${scenario.name}</button>`).join("");
+  const scenario = scenarios[activeScenario];
+  document.querySelector("#walkthrough").innerHTML = `<h3>${scenario.name}</h3><p class="muted">${scenario.description}</p><p><strong>Watch:</strong> ${scenario.watch}</p><div class="steps">${scenario.steps.map(([label, action], index) => `<div class="step ${index < scenarioStep ? "done" : ""}"><span class="number">${index + 1}</span><span>${label}</span><button data-step="${index}" ${index !== scenarioStep ? "disabled" : ""}>Apply</button></div>`).join("")}</div>`;
+
+  document.querySelectorAll("[data-tab]").forEach(button => button.addEventListener("click", () => {
+    activeScenario = Number(button.dataset.tab);
+    scenarioStep = 0;
+    state = Model.initial();
+    render();
+  }));
+  document.querySelectorAll("[data-step]").forEach(button => button.addEventListener("click", () => {
+    const [, action] = scenario.steps[scenarioStep];
+    state = Model.reduce(state, { type: action });
+    scenarioStep += 1;
+    render();
+  }));
+}
+
+document.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => {
+  const actions = {
+    "load-strict": "LOAD_STRICT",
+    "load-ordinary": "LOAD_ORDINARY",
+    "select-partial": "SELECT_PARTIAL",
+    "break-runtime": "BREAK_RUNTIME",
+    "fail-control": "FAIL_CONTROL",
+    "preflight": "PREFLIGHT",
+    "reset": "RESET",
+  };
+  scenarioStep = 0;
+  dispatch(actions[button.dataset.action]);
+}));
+
+render();
+</script>
+</body>
+</html>
