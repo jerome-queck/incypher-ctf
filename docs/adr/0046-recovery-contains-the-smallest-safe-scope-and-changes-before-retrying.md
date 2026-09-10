@@ -1,5 +1,11 @@
 # Recovery contains the smallest safe scope and changes before retrying
 
+> **Indeterminate Flag-submission containment is narrowed by
+> [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** One unknown Candidate
+> proposal freezes Flag POSTs for at most sixty seconds, not all external effects. A broader
+> `run-shared` freeze still applies when broker ownership, the canonical writer or durable effect
+> recording is ambiguous.
+
 > **Capability admission is amended by
 > [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Deterministic
 > detection, containment, fixed remedies, restart and safe no-inference operation remain Core;

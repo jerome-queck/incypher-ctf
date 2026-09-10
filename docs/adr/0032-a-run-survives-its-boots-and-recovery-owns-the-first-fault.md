@@ -1,5 +1,11 @@
 # A Run survives its Boots, and Recovery owns the first fault
 
+> **The indeterminate Flag-submission branch is bounded by
+> [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** A possibly sent
+> Candidate proposal is never retried; only Flag POSTs pause for at most sixty seconds while
+> unaffected work continues. Broader effects stop only when broker ownership or durable recording
+> is itself ambiguous.
+
 > **The native-first route clause and unbounded v2 scope are superseded by
 > [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Both native and CPA
 > are Core and candidate qualification selects the primary route; model-assisted novel Recovery is

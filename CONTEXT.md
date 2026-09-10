@@ -389,7 +389,23 @@ _Avoid_: proof, Observation, confidence, chain of thought
 The exact string offered to the submission authority as a possible Flag, together with how it was
 obtained and its current disposition. It may be observed, derived, unsupported, Board-stated,
 crowded, templated or tied to an expired Instance; the Board alone turns it into a Flag (ADR-0037).
+`unknown-and-spent` means its exact grading remains unproved but its at-most-once authority is
+finished; later exact evidence may append a correction and can never reactivate it (ADR-0052).
+`refused-and-spent` means an exact refusal, pause or rate-limit response finished its at-most-once
+authority without consuming a Challenge-attempt floor or asserting an incorrect verdict (ADR-0052).
 _Avoid_: found flag, the flag (before a verdict), guess, candidate flag
+
+**Submission epoch**:
+The durable monotonic generation of one account's serial Flag-submission authority. A successor
+admits later Candidate proposals only after the prior barrier closes; late old-epoch results may
+refine history but never authorise a current effect (ADR-0052).
+_Avoid_: broker epoch (the Board broker owns more than submission), retry generation, Lease epoch
+
+**Submission breaker**:
+The durable account-wide admission stop opened by consecutive indeterminate Flag POSTs. It permits
+one real, provenance-admissible Candidate proposal after each 120-second probation interval until
+a conclusive outcome closes it; safe non-submission work continues (ADR-0052).
+_Avoid_: circuit breaker (scope unstated), Board outage, synthetic probe
 
 **Approach label**:
 The one model-authored field that crosses an Attempt boundary — a short line **declaring what the
