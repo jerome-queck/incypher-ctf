@@ -1,5 +1,11 @@
 # One Order spends every scoreable second without slicing Attempts
 
+> **The final-submission reserve's storage path is fixed by
+> [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** Its sealed Candidate set
+> reserves every worst-case authority, outcome, reconciliation, Incident and receipt write before
+> the time reserve begins. A Candidate without that reservation is fenced before POST, and cleanup
+> cannot borrow the terminal floor.
+
 [When may a Challenge claim release productive
 capacity?](https://github.com/jerome-queck/incypher-ctf/issues/245) resolves the idle-capacity branch
 left by ADR-0043. **There is no parked Attempt, no hidden Challenge pool and no division of the

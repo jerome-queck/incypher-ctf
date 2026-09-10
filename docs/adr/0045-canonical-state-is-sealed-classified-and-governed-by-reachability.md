@@ -1,5 +1,11 @@
 # Canonical state is sealed, classified and governed by reachability
 
+> **The finite-storage edge is bounded by
+> [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** Open-Incident evidence
+> is bounded before it is pinned; every write and effect reserves bytes, inodes and metadata first;
+> governed retirement uses a replayable tombstone; and a non-borrowable Control write reserve keeps
+> containment and terminality recordable. Authority outranks throughput.
+
 > **The Candidate proposal uncertainty lifecycle is bounded by
 > [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** After sixty seconds an
 > unresolved Candidate proposal becomes durably `unknown-and-spent`: it remains fail-closed against
@@ -79,23 +85,25 @@ otherwise possible.
 ## Every state class has one lifecycle
 
 `Durable` below means the sanitized capsule copy remains indefinitely; the redundant live copy may
-leave only after verified Promotion. `Eval + 30d` means through every declared dependent evaluation
-and then thirty days, extended while an incident remains open. No age rule overrides a pin.
+leave only after verified Promotion. `Eval + 30d` is the normal retention through every declared
+dependent evaluation and then thirty days, extended while an Incident remains open; ADR-0054 may
+shorten it under pressure only after releasing every protected dependency. No age rule overrides a
+pin, and ADR-0054 bounds every live Incident pin before admission.
 
 | Class | Writer and reader | Restart, sensitivity and executor reach | Promotion, retention and cleanup |
 | --- | --- | --- | --- |
 | Canonical records and manifests | sequencer writes; controller, Supervisor, Recovery and offline projections read | mandatory authority; sanitized but may reference private blobs; never executor-reachable | sanitized form is Durable; live duplicate only after verified capsule; governor records deletion |
-| Sealed content-addressed blobs | trusted producer seals; sequencer admits; named consumers read | required exactly when a live record reaches it; sensitivity is explicit; executors receive only capability-scoped copies | selected blobs enter capsule; unselected raw bodies are Eval + 30d |
+| Sealed content-addressed blobs | trusted producer seals; sequencer admits; named consumers read | required exactly when a live record reaches it; sensitivity is explicit; executors receive only capability-scoped copies | selected blobs enter capsule; unselected raw bodies are Eval + 30d normally, or ADR-0054 pressure-retirement once unreferenced |
 | Intake originals and Board statements | Intake writes; Attempt staging and replay read | immutable Run input; untrusted Board data; assigned Challenge only | retained while reachable by a selected artifact or active Practice entry; otherwise copies retire only after capsule and automated reconstruction succeed |
 | Work generations | one Attempt or Specialist writes; controller validates selected output | fresh per owner; model-reachable and untrusted; never authority | selected files change class; sealed unselected generation may retire after capsule; interrupted remainder becomes quarantine |
-| Quarantine | controller moves sealed late, corrupt or interrupted bytes; Recovery reads | never silently re-enters work or authority; sensitivity inherited; no executor reach | Eval + 30d; unresolved incident is pinned; only explicit revalidation changes class |
+| Quarantine | controller moves sealed late, corrupt or interrupted bytes; Recovery reads | never silently re-enters work or authority; sensitivity inherited; no executor reach | Eval + 30d; an unresolved Incident pins only its bounded admitted evidence set; only explicit revalidation changes class |
 | Solve receipts and selected Evidence | controller seals; replay, Gate and writeup tooling read | mandatory, immutable, sanitized; no executor write | Durable in capsule; never pressure-evicted |
 | Exact Candidate vault | submission authority writes; Supervisor and submission path read | encrypted, exact Candidate across Boots; stream holds keyed digest, provenance and disposition; no executor browse | purge only after the event and verified Promotion; capsule keeps no recoverable Candidate, including an accepted Flag |
-| Raw Observation/Claim bodies and tool chunks | recorder seals; current Turn projection, Recovery and evaluation read | potentially secret and adversarial; only bounded selected projections reach an Agent | excluded from capsule unless selected as Evidence; Eval + 30d |
-| Native rollouts and CPA logs | their isolated harness writes; trusted diagnosis reads | private, possibly credential-bearing, noncanonical; never executor- or capsule-reachable | Eval + 30d under private-store governor; incident pin applies |
+| Raw Observation/Claim bodies and tool chunks | recorder seals; current Turn projection, Recovery and evaluation read | potentially secret and adversarial; only bounded selected projections reach an Agent | excluded from capsule unless selected as Evidence; Eval + 30d normally, or ADR-0054 pressure-retirement once unreferenced |
+| Native rollouts and CPA logs | their isolated harness writes; trusted diagnosis reads | private, possibly credential-bearing, noncanonical; never executor- or capsule-reachable | Eval + 30d normally; the private-store governor may pressure-retire unreferenced detail outside a bounded Incident pin |
 | Native and CPA credentials/checkpoints | separate brokers write/read | secret, restart-required capability state; owner-only; no `/state` or executor reach | never promoted; broker-owned rotation and deletion |
 | Cache, dependencies, derived extraction and generated bulk | scoped tool or controller writes; owner reads | reconstructible and untrusted; no authority | first pressure class; delete after reachability check; no age promise |
-| Resource/process telemetry | Supervisor and brokers measure; governor, Recovery and Gate read | compact owner-linked evidence; executor cannot write canonical samples | lifecycle facts and compact samples enter capsule; raw high-rate samples are Eval + 30d |
+| Resource/process telemetry | Supervisor and brokers measure; governor, Recovery and Gate read | compact owner-linked evidence; executor cannot write canonical samples | lifecycle facts and compact samples enter capsule; raw high-rate samples are Eval + 30d normally, or ADR-0054 pressure-retirement once unreferenced |
 | Ephemeral IPC and temporary execution | owning process writes/reads | Boot- or Step-local; sensitive by default | never promoted; owner close removes it |
 | Evaluator catalogue, oracle and corpus splits | Evaluator writes/reads outside Solver authority | restart-required for the rig; answer material is unreachable during isolated Runs | catalogue manifest and Isolation receipt are durable Gate evidence; oracle never enters Solver state |
 | Attempt corpus and derived trends | offline tooling builds from capsules | reproducible projection, never control input during its source Run | capsule inputs are Durable; views may be regenerated |
@@ -198,22 +206,15 @@ formula rather than extrapolating confidence.
 ## Reachability and pressure, not age alone, govern deletion
 
 Only the trusted storage governor deletes Run or work material. Before deletion it proves the
-object unreferenced by open authority, unresolved Recovery, a carry manifest, a receipt, a selected
-Evidence set, an unpromoted capsule or a dependent evaluation, then writes the sequenced eviction
-record. Agent shell commands and cleanup prose have no deletion authority.
+object is not protected by open authority, bounded unresolved-Recovery evidence, a carry manifest,
+a receipt, selected Evidence, an unpromoted capsule or a dependent evaluation. Agent shell commands
+and cleanup prose have no deletion authority.
 
-Each Gate-approved runtime profile supplies an absolute Run-state envelope, protected control
-reserve, host/filesystem floor and soft/hard thresholds measured over full-window Runs. A missing or
+[ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md) owns the storage profile,
+admission reservations, bounded Incident pin, retirement transaction and order, Control write
+reserve, hard-pressure containment, final-submission storage and terminal boundary. A missing or
 unproved profile causes pre-Run Refusal; v2 does not invent a byte limit from today's 22 GiB legacy
-tree. Soft pressure removes, in order, caches and reconstructible derivations, failed-generation
-bulk, then unselected output. It never removes canonical authority, receipts, selected Evidence or
-unresolved quarantine during a live Run.
-
-Hard pressure blocks new bulk work and optional admission while preserving enough reserved capacity
-for the sequencer, Supervisor, Recovery, submission and Reserved tail. It may terminate the
-positively owned producer which exceeded its envelope after preserving bounded evidence; it does
-not corrupt truth to keep solving. Control-reserve contact, inability to record an effect, or
-ambiguous ownership is a Run-level Recovery fault.
+tree or corrupt reachable truth to keep solving.
 
 ## Promotion is a fail-closed publication transaction
 

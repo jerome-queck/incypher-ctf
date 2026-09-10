@@ -479,6 +479,13 @@ _Avoid_: cache, workspace, scratch, volume (a volume is how it is mounted, not w
 "state" bare either — that reads as the Solver's in-memory state, which is a different thing and
 does not survive anything.
 
+**Control write reserve**:
+The release-candidate-sealed pool of storage reservations unavailable to ordinary writers and held
+for authority, containment, submission reconciliation and terminal transactions. A reservation
+accounts separately for bytes, filesystem objects and proved metadata operations; its terminal and
+Recovery floors cannot be borrowed ([ADR-0054](docs/adr/0054-authority-remains-writable-when-storage-is-exhausted.md)).
+_Avoid_: free-space threshold, disk headroom, Resource envelope, Final-submission reserve
+
 **Working directory**:
 The Challenge-scoped home of its **Work generations** — the entry below — keyed by event and
 Challenge because a `challenge_id` is a per-installation integer and two Boards mint the same ones.

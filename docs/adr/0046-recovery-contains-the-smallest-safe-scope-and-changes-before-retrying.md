@@ -1,5 +1,11 @@
 # Recovery contains the smallest safe scope and changes before retrying
 
+> **Storage-pressure Recovery is bounded by
+> [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** An Incident pins only a
+> pre-admitted bounded evidence set; writes and effects reserve their whole storage path first; and
+> `contained` may resume only after durable semantic replay and probation. An unavailable terminal
+> write leaves the Run visibly unclosed and admits no work rather than fabricating safety.
+
 > **Indeterminate Flag-submission containment is narrowed by
 > [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** One unknown Candidate
 > proposal freezes Flag POSTs for at most sixty seconds, not all external effects. A broader
@@ -186,10 +192,12 @@ A probationary Boot remains visibly probationary until the shared invariants pas
 unsafe external effects merely because its process stayed alive.
 
 `terminal` is available only when predecessor ownership, canonical truth, credential authority,
-submission ambiguity, Lease safety, isolation or protected reserves cannot be restored and no
-admissible Remedy remains. Shared quota, a backend outage, an unavailable Board or exhausted blind
-replacement count is not alone terminal: the Run remains contained or in Quota wait until capacity
-returns, the window reaches its reserved tail, or a mandatory safety invariant genuinely fails.
+submission ambiguity, Lease safety, isolation or the Control write reserve cannot be restored and
+no admissible Remedy remains. Shared quota, a backend outage, an unavailable Board or exhausted
+blind replacement count is not alone terminal: the Run remains contained or in Quota wait until
+capacity returns, the final-submission cutoff arrives, or a mandatory safety invariant genuinely
+fails. A storage Incident follows ADR-0054's semantic write/replay probation and unwriteable-terminal
+path.
 
 ## Evidence is durable, bounded and visible
 
@@ -205,10 +213,11 @@ The canonical Incident record binds:
 - probation checks, recurrence, child/successor links and final outcome; and
 - process ownership through Run, Boot, Lane, Attempt, Engagement, Turn and Step where applicable.
 
-Raw tool bodies, hostile bytes and high-rate telemetry remain sealed or quarantined under
-ADR-0045. The Run capsule retains compact lifecycle facts and only selected Evidence artifacts.
-An open Incident pins its dependent evidence beyond ordinary retention; the trusted governor
-records any later eviction.
+Raw tool bodies, hostile bytes and high-rate telemetry remain sealed or quarantined under ADR-0045
+only after ADR-0054 admission. The Run capsule retains compact lifecycle facts and only selected
+Evidence artifacts. An open Incident pins its bounded trigger snapshot, bounded probe/action results
+and redacted head/tail projections beyond ordinary retention; transitive or oversized raw material
+never becomes an unbounded pin. The trusted governor records every later retirement.
 
 The Observer CLI receives sanitized typed notices: severity, scope, affected work, Incident state,
 elapsed deadlines, selected action and outcome. It remains read-only in scored mode and Recovery
@@ -241,8 +250,9 @@ repair and rollback.
 The Gate proves the `15 / 60 / 120 / 180` deadlines, exact fingerprint coalescing, no unchanged
 retry, no duplicate effect, bounded/redacted evidence, healthy-Lane continuity for local faults,
 global effect freeze only when shared authority requires it, deterministic child-Incident handling,
-successful rollback and one honest final outcome for every Incident. Happy-path Runs establish none
-of these properties.
+successful rollback and one honest final outcome for every Incident. ADR-0054 additionally attacks
+bytes, inodes, metadata, read-only and I/O failure, reservation races, retirement crash points and
+the unwriteable-terminal edge. Happy-path Runs establish none of these properties.
 
 This resolves planning only. The current v1 process remains PID 1 and implements none of this
 contract. Production records, governor, Supervisor, probe/remedy catalogue, recovery prompt,
