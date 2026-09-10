@@ -1,5 +1,11 @@
 # There is no queue, and the clock chooses a working set
 
+> **Late-window admission and cleanup timing are replaced by
+> [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** The clock
+> still buys Attempts rather than seconds per Challenge, but a full Tier budget need not fit: one
+> ordinary Attempt may clip to the final-submission cutoff above the sealed floor, followed by one
+> bounded sub-floor final-chance round. Healthy cleanup starts only after the official end.
+
 > **The v2 evidence terms, Tier movement and exploration eligibility are replaced by
 > [ADR-0038](0038-one-order-reads-crowd-quality-and-tier-recomputes.md).** There is still one
 > deterministic Order, no queue, no ban, a working set chosen by the remaining clock, and a frozen

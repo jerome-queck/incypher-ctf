@@ -1,5 +1,10 @@
 # One unknown submission fences Flags for sixty seconds
 
+> **Tail entry and normal Run closure now follow
+> [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** A sealed
+> final-submission reserve replaces the generic pre-close tail, healthy cleanup starts after the
+> official end, and no boundary refreshes this record's at-most-once identity or absolute barrier.
+
 [How long may one indeterminate submission block unrelated
 Flags?](https://github.com/jerome-queck/incypher-ctf/issues/244) closes the unbounded branch left by
 ADR-0037. **Once any part of a Flag POST body may have left the Board broker, that exact Candidate

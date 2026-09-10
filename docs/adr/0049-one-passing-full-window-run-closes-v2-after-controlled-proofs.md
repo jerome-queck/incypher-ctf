@@ -1,5 +1,10 @@
 # One passing full-window Run closes v2 after controlled proofs
 
+> **The reserved-tail proof resolves through
+> [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** The Gate
+> proves a sealed final-submission reserve, one bounded final-chance round and post-official-end
+> cleanup rather than a generic pre-close cleanup tail. Any early terminal Run remains a failure.
+
 > **The Gate scope is amended by
 > [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Core rows remain
 > mandatory; a Capability Pack contributes rows only when the exact Release-candidate manifest admits it.
