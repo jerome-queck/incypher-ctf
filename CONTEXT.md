@@ -208,14 +208,24 @@ Challenges puts every Attempt below the length at which anything is ever solved.
 own as the Run burns down, and the end-of-Run scramble is a consequence of the same arithmetic
 rather than a mode with rules of its own. A Challenge outside it is not banned and never becomes
 banned; on a fixed clock, not being reached is simply what most of a Board does
-([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)).
+([ADR-0015](docs/adr/0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)). Its count is
+lookahead, never a division of remaining seconds among Challenges; ADR-0053 preserves one hard
+ordinary Attempt floor and one bounded final-chance round.
 _Avoid_: queue, backlog, shortlist, and **eligible set** — that is every unsolved Challenge, which is
 the thing the working set is a slice of
+
+**Attempt floor**:
+The shortest ordinary Attempt the sealed release candidate may admit, initially five minutes. It is
+never divided by Challenge count or lowered during a Run; one final-chance round is its only bounded
+exception ([ADR-0053](docs/adr/0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md)).
+_Avoid_: per-Challenge share, minimum Tier, tail, timeout
 
 **Challenge claim**:
 The Run controller's durable, exclusive association between one Challenge and one open Attempt,
 held from pre-effect admission through Turn gaps and Quota wait until the Attempt closes. At most one
 exists per Challenge; it is neither a Lane identity nor a Lease, and admission candidates hold none.
+There is no parked Attempt: releasing a Lane closes its Attempt and then returns the Challenge to
+fresh Order ([ADR-0053](docs/adr/0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md)).
 _Avoid_: assignment, queue entry, lock, reservation, Lease
 
 ### How the Solver works a Challenge
@@ -269,7 +279,9 @@ _Avoid_: PATH inventory, package list, Tool profile, permission list
 **Lane**:
 One Run-scoped, ordinal-named place in the Solver's bounded capacity for one active Attempt. The
 Attempt identifies the work and the Lease identifies the Instance hold; a child Specialist
-Engagement consumes no additional Lane.
+Engagement consumes no additional Lane. An open Attempt keeps its Lane through Turn gaps, Quota wait
+and Recovery unless it closes; a changed Order or Checkpoint never preempts it
+([ADR-0053](docs/adr/0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md)).
 _Avoid_: worker, thread, slot, agent (all name an implementation or collide with another domain
 word rather than naming the concurrency boundary)
 
@@ -555,20 +567,23 @@ during the Run or copying credentials and raw bulk into the receipt
 ([ADR-0045](docs/adr/0045-canonical-state-is-sealed-classified-and-governed-by-reachability.md)).
 _Avoid_: writeup, flag file, submission log, Isolation receipt
 
-**Reserved tail**:
-The last stretch of a Run's window, held back by the scheduler rather than found at the end, with
-four jobs and no Attempts: submit the candidates the gate held back, destroy every Instance, flush
-telemetry, exit clean. `Dials.tail_seconds` is its length and `acquire` never returns a budget that
-eats into it, so the tail is about **doing** the four jobs rather than making room for them. It is
-where the submission reserve is released — there is no later Attempt for it to be reserved *for* —
-and where the leak sweep runs with nothing kept, because chall-manager never evicts and an Instance
-still held when the process exits is capacity nobody reclaims.
-Only window closure or deliberate shutdown enters it; a Boot failure does not. The tail is one
-durable, restartable Run phase with a hard deadline: an interrupted tail resumes safe unfinished
-work but never blindly repeats a submission whose outcome is unknown.
-_Avoid_: shutdown, cleanup, teardown, grace period. Not the **submission reserve** inside an
-Instance's own deadline either (`instance.Reserves.submission_seconds`) — that is a different
-reserve, held for a different reason, and the two are deliberately separate numbers.
+**Final-chance round**:
+The one admission round allowed after positive scoreable time falls below the Attempt floor. Each
+free enabled Lane may spend one entitlement on the highest hard-admissible Challenge in normal
+Order; no Cut opens a replacement and no exploration pick overrides it (ADR-0053).
+_Avoid_: scramble mode, short-Attempt loop, overtime, last queue
+
+**Final-submission reserve**:
+The measured, pre-Run-sealed interval before official Board close needed to transmit the bounded
+last-call Candidate proposal set. It ends scoreable Attempt work at the last safe submission moment
+but contains no cleanup and is not a generic five-minute tail (ADR-0053).
+_Avoid_: Reserved tail, cleanup window, submission reserve inside an Instance deadline
+
+**Post-competition cleanup**:
+The terminal reclamation, evidence flush and process teardown that starts only after the official
+competition end for a healthy Run. An irrecoverably early terminal Run starts it immediately as
+containment, and that early terminality is a Gate failure (ADR-0053).
+_Avoid_: Reserved tail, scoring window, final-submission reserve
 
 **Recovery**:
 The owner of an operational fault from its first detection until either a materially changed,
@@ -804,7 +819,7 @@ _Avoid_: control plane, Observer, Harness, quota monitor
 **Quota wait**:
 The live Run state entered when shared account capacity is exhausted: new Inference pauses while
 the Supervisor, deterministic work and Recovery continue until observed capacity returns or the
-Run reaches its reserved tail. It is neither a Cut nor a route change
+Run reaches its final-submission cutoff. It is neither a Cut nor a route change
 ([ADR-0040](docs/adr/0040-one-owner-one-subscription-and-one-observed-limit-state.md)).
 _Avoid_: quota failure, retry loop, fallback, Run close
 

@@ -1,5 +1,11 @@
 # One sequencer owns a measured rolling working set
 
+> **The full-budget no-skip calendar, no-final-round rule and generic reserved tail are superseded by
+> [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** The
+> sequencer now selects the highest hard-admissible normal Order member, may clip one ordinary
+> budget above the sealed floor, and permits one bounded sub-floor final-chance round. There is still
+> no parked Attempt or pending queue; open Attempts retain their Lane and claim.
+
 [How many Attempts work at once, and who owns the working
 set](https://github.com/jerome-queck/incypher-ctf/issues/188) decides how v2 becomes parallel-safe
 without turning concurrency into competing schedulers, duplicated Board effects or an unmeasured

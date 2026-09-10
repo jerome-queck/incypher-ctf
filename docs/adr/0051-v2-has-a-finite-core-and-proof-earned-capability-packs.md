@@ -1,5 +1,10 @@
 # v2 has a finite Core and proof-earned Capability Packs
 
+> **The Core's reserved-tail lifecycle is refined by
+> [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** Core now
+> requires the sealed Attempt floor, hard-admissible Order selection, one bounded final-chance round,
+> final-submission reserve and post-competition cleanup contract.
+
 [Bound v2 to a fieldable Core and earned Capability
 Packs](https://github.com/jerome-queck/incypher-ctf/issues/242) replaces the unbounded rule that
 every pre-release-specifiable capability is mandatory. **v2 has one finite mandatory Core; exactly

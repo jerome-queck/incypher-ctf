@@ -1,5 +1,11 @@
 # A Run survives its Boots, and Recovery owns the first fault
 
+> **The pre-close 300-second tail is replaced by
+> [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** Final
+> submissions receive a measured sealed reserve; a healthy Run reclaims Instances, flushes evidence
+> and tears down only after the official end. Irrecoverable early terminality cleans immediately and
+> is a zero-tolerance Gate failure. Restartability and exact-once terminal records stand.
+
 > **The indeterminate Flag-submission branch is bounded by
 > [ADR-0052](0052-one-unknown-submission-fences-flags-for-sixty-seconds.md).** A possibly sent
 > Candidate proposal is never retried; only Flag POSTs pause for at most sixty seconds while
