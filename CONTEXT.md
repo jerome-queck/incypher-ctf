@@ -557,7 +557,8 @@ pointed at. Not *Target* either: a Target is an Instance's address, not a file.
 **Refusal**:
 The Solver declining to start, before anything is spent — a missing or empty credential, no tracked
 profile for the Board `CTFD_URL` names, a Board that fails ADR-0016's read-contract control, a first
-Intake that could not be believed, or a `RUN_ID` nobody set. It is **not a Cut**: a Cut ends an
+Intake that could not be believed, a `RUN_ID` nobody set, or a sealed strict Isolation profile that
+cannot initialise or pass its allow/deny preflight. It is **not a Cut**: a Cut ends an
 Attempt and says what stopped it, and at a Refusal nothing has been attempted. Its whole value is
 its timing — the failure being designed against is a container that comes up at 10:30 with one
 variable quietly unset and runs the full window on a credential that was never there, silent from
@@ -807,7 +808,11 @@ _Avoid_: log, report, attestation
 
 **Isolation profile**:
 One pretested set of identity, filesystem, process, network, syscall and resource controls that
-enforces the Attempt executor's fixed authority ceiling on a particular runtime (ADR-0041).
+enforces the Attempt executor's fixed authority ceiling on a particular runtime. A candidate
+claiming v2 seals one exact strict profile; the Solver Refuses before spending Board or inference
+capacity if that profile fails its startup preflight. A separately sealed broker-only partial is explicitly non-v2
+([ADR-0041](docs/adr/0041-one-container-separates-control-from-hostile-execution.md),
+[ADR-0056](docs/adr/0056-a-v2-run-requires-the-strict-hostile-execution-profile.md)).
 _Avoid_: sandbox mode, runtime flags, best effort
 
 ### Secrets and tooling

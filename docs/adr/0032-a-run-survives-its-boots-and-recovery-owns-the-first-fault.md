@@ -1,5 +1,11 @@
 # A Run survives its Boots, and Recovery owns the first fault
 
+> **The non-fatal ordinary Observation-write policy is amended by
+> [ADR-0054](0054-authority-remains-writable-when-storage-is-exhausted.md).** Every writer and
+> external effect reserves its complete storage path before admission; bounded Incident evidence
+> and non-borrowable Control reserves preserve honest containment or terminality when storage is
+> exhausted. The Run never continues by treating a missing authority record as permission.
+
 > **The pre-close 300-second tail is replaced by
 > [ADR-0053](0053-one-order-spends-every-scoreable-second-without-slicing-attempts.md).** Final
 > submissions receive a measured sealed reserve; a healthy Run reclaims Instances, flushes evidence

@@ -1,5 +1,11 @@
 # One container separates control from hostile execution
 
+> **Isolation-profile admission and failure are sharpened by
+> [ADR-0056](0056-a-v2-run-requires-the-strict-hostile-execution-profile.md).** One exact strict
+> profile is sealed for a candidate claiming v2; failure to initialise it or pass its allow/deny
+> preflight is a Refusal. A separately selected broker-only partial is explicitly non-v2, never an
+> automatic fallback or isolation proof.
+
 [The Worker, control, and credential trust
 boundary](https://github.com/jerome-queck/incypher-ctf/issues/190) decides how v2 can execute a
 hostile solving model and hostile Challenge content without handing either the authority that runs
@@ -119,7 +125,8 @@ escape by creating a new session.
 In-image Recovery receives bounded, read-only incident evidence and requests fixed probes or
 remedies. Any command it needs runs in a separate confined diagnostic executor under a typed
 profile; the Recovery model never acquires filesystem-search, secret or control-state authority.
-Ticket 191 chooses fingerprints, remedies, timing and probation within this ceiling.
+[ADR-0046](0046-recovery-contains-the-smallest-safe-scope-and-changes-before-retrying.md) fixes
+fingerprints, remedies, timing and probation within this ceiling.
 
 Practice adds a host Recovery Controller outside the Solver. A repair model may inspect labelled,
 digested, quarantined Challenge-derived evidence and propose a patch in a disposable checkout, but
@@ -145,8 +152,9 @@ inconclusive evidence causes Refusal or Gate failure, never a reduced denominato
 
 The post-map specification must encode the principal/capability matrix, storage visibility,
 network routes, process adoption, credential custody, profile negotiation and failure semantics.
-Tickets 175, 185, 187, 188, 189, 191 and 198 may narrow retention, CPA proof, Agent routing,
-concurrency, Lease, Recovery and Observer behaviour; none may widen this authority ceiling.
+ADR-0045, ADR-0039/0040, ADR-0042, ADR-0043, ADR-0044, ADR-0046 and ADR-0050 respectively narrow
+retention, CPA proof, Agent routing, concurrency, Lease, Recovery and Observer behaviour; none
+widens this authority ceiling.
 
 This decision makes ADR-0034's practice boundary enforceable, supplies ADR-0032's Supervisor and
 Recovery ceiling, and concretises ADR-0040's capability-not-credential rule. It does not claim that

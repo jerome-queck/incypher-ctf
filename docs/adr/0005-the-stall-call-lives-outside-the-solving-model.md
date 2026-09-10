@@ -1,5 +1,11 @@
 # The stall call lives outside the solving model
 
+> **The model-self-verdict and approach-label clauses are amended by
+> [ADR-0031](0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md).**
+> The existing self-reported-impossible marker may still end the current Attempt as an Observation,
+> but it creates no standing rank penalty or Challenge verdict. The bounded label is written before
+> work to name the approach; the external stall decision and verified-Checkpoint extensions stand.
+
 > **Extended by [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md).**
 > *Time is bought by state transitions* now reaches **across** Attempts as well as within one: a
 > Challenge's Tier rises by the Checkpoints it has earned, capped at the same small K, so the

@@ -1,5 +1,11 @@
 # Store what was observed, derive every judgement
 
+> **The approach-label tense and impossible-verdict consequence are amended by
+> [ADR-0031](0031-the-label-is-declared-before-the-work-and-nothing-is-called-impossible.md).**
+> The model declares its bounded approach before work. Its existing impossible marker may still end
+> the current Attempt as an Observation, but creates no standing rank penalty or Challenge verdict.
+> The Observation/Claim split and derived-judgement rule stand.
+
 > **Board-score, Challenge-value and Order-value language is clarified by
 > [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** A current Challenge
 > value may inform scheduling, while the official closing Board score remains the objective and the
