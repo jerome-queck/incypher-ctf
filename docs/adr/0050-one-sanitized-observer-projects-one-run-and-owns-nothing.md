@@ -1,5 +1,10 @@
 # One sanitized Observer projects one Run and owns nothing
 
+> **The full Observer is classified as a Capability Pack by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Its interface,
+> authority, redaction and evidence contract stand when admitted; canonical records and minimal
+> sanitized diagnostic receipts remain Core without it.
+
 [What the Observer CLI reveals, and when it may
 control](https://github.com/jerome-queck/incypher-ctf/issues/198) fixes the host-side operational
 view promised by ADR-0033. One **Observer CLI** projects one explicitly selected Run from existing

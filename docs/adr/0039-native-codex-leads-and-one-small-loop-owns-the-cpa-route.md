@@ -1,5 +1,10 @@
 # Native Codex leads, and one small loop owns the CPA route
 
+> **The fixed native-primary selection is superseded by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Native and CPA are
+> both Core and a sealed release-candidate qualification selects either as primary. The minimal
+> Solver-owned CPA Harness, shared-capacity boundary and rejected alternative Harnesses stand.
+
 [Which secondary harness survives a Solver-shaped
 trial?](https://github.com/jerome-queck/incypher-ctf/issues/184) compared native Codex, Oh My Pi
 (OMP), OpenCode and a minimal Solver-owned Responses loop under the same shell task and deterministic

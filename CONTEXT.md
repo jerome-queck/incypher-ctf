@@ -560,10 +560,12 @@ probationary Boot is safe or the Run can no longer continue safely. Recovery can
 declared long-running work; it does not infer a hang merely from age. It never waits for blind
 restarts to run out, repeats an unchanged Solver-owned failure, deletes evidence or relaxes Board,
 identity, submission or Lease safeguards to make progress look possible.
-During an unattended Run, Recovery's model autonomously chooses the next diagnostic, wait, retry,
-isolation, redirection or candidate repair when deterministic handling cannot orient a novel
-failure. It may interpret preserved evidence and propose code, but never authors the Run's history
-or bypasses the deterministic guards that authorise an irreversible effect.
+Core Recovery deterministically detects, contains and records the fault, applies only fixed typed
+Remedies, restarts safely and preserves a no-inference posture. When the model-assisted novel
+Recovery **Capability Pack** is admitted, a fresh bounded model Engagement may choose the next
+diagnostic, wait, retry, isolation, redirection or candidate repair where deterministic handling
+cannot orient the Incident. It may interpret preserved evidence and propose code, but never authors
+the Run's history or bypasses the deterministic guards that authorise an irreversible effect.
 _Avoid_: retry, restart, crash loop, repair. A replacement Boot is one action Recovery may permit;
 a Repair Agent is one possible mechanism whose scored-Run authority is separately decided.
 
@@ -637,7 +639,11 @@ _Avoid_: judge, Observer, control plane
 The private sibling product which supplies the local Board, real isolated Targets, dynamic
 scenarios, qualifying corpus, fault injection and hidden Evaluator used for v2 evidence. It
 reproduces pinned confirmed semantics, not unpublished official infrastructure, human strategy or
-production load ([ADR-0048](docs/adr/0048-one-hidden-competition-rig-produces-every-local-gate-receipt.md)).
+production load. It is wholly external evidence infrastructure: the Solver contains no rig code,
+has no runtime dependency on it or the actual IN-CYPHER backend implementation and sees only
+ordinary Board, Target and inference surfaces
+([ADR-0048](docs/adr/0048-one-hidden-competition-rig-produces-every-local-gate-receipt.md),
+[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
 _Avoid_: mock Board, test server, official replica, benchmark
 
 **Scenario manifest**:
@@ -747,17 +753,20 @@ _Avoid_: manual step, human-in-the-loop, babysitting. A **supervisor** restartin
 is not intervention either — nobody is present for it, which is the point of building one.
 
 **Inference route**:
-One tested path by which Codex works an Attempt: native Codex first, or a private single-owner CPA
-path after it proves the same tool, deadline, record and safety contract. The two routes are not two
+One tested path by which Codex works an Attempt: native Codex or a private single-owner CPA path,
+each after it proves the same Tool, deadline, record and safety contract. The two routes are not two
 credentials or two pools of capacity: both spend the same personal subscription and reach the same
 backend. A route changes only on a classified route-specific failure. Shared quota exhaustion causes
 a declared wait or a separately pre-authorised saved reset; it never causes proxy rotation around a
 limit. Claude, local models and metered API inference are outside the set
 ([ADR-0032](docs/adr/0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md)).
-Native Codex is primary; the CPA route uses a separate Solver-owned Harness so a Codex CLI or
-tool-loop failure does not take both routes down. Model, effort and Agent role remain measured
-routing decisions; "Codex-only" does not mean one model, one Lane or one tool loop
-([ADR-0039](docs/adr/0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md)).
+Both routes are **v2 Core**. One sealed release-candidate qualification selects which is primary from
+hardware, compatibility, policy and matched evidence; CPA is not inherently fallback. CPA uses a
+separate Solver-owned Harness so a Codex CLI or tool-loop failure does not take both routes down.
+Model, effort and Agent role remain measured routing decisions; "Codex-only" does not mean one
+model, one Lane or one tool loop
+([ADR-0039](docs/adr/0039-native-codex-leads-and-one-small-loop-owns-the-cpa-route.md),
+[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
 _Avoid_: credential chain, provider list, fallback key. Not **Adapter** either: an Adapter implements
 the route's seam, while the route is the end-to-end way an Attempt gets worked.
 
@@ -805,16 +814,43 @@ run, so it sits behind the same adapter seam a Board does, and a Solver that can
 has bet the competition on an unseen release (ADR-0006).
 _Avoid_: SDK, framework
 
-Three terms are about how this repository is governed rather than about the domain:
+Six terms are about how this repository is governed rather than about the domain:
+
+**v2 Core**:
+The finite mandatory capability set which makes the pre-final Solver safe and fieldable. Every
+exact release candidate that claims a v2 pass implements and proves Core support, although its
+sealed profile may disable measured capacity such as a second Lane or Specialists. A missing Core
+row keeps v2 incomplete; neither a date nor fielding a partial release candidate creates a pass
+([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
+_Avoid_: minimum viable product, baseline, must-have list, enabled profile
+
+**Capability Pack**:
+One predeclared coherent optional bundle which supplies no Core safety invariant and can be disabled
+independently. A Pack joins an exact Candidate only after its own proof; otherwise it stays disabled
+or omitted with its source issue and reason. A Pack is not a Version and omission never silently
+makes it v3
+([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
+_Avoid_: stretch goal, plugin, feature flag, later Version
+
+**Release-candidate manifest**:
+The sealed declaration for one exact image and configuration which classifies every planned
+capability as Core or Pack and records its implementation, proof, evidence, enablement or omission,
+source issue and reason. It also fixes the selected primary Inference route, Lane/Specialist
+topology, model, effort and Tool policy. The manifest reports a Candidate; it cannot waive a Core
+obligation, describe a Flag Candidate or manufacture evidence
+([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
+_Avoid_: Candidate manifest, roadmap, feature list, Gate report, image manifest
 
 **Version**:
 A capability set and the **Gate** that closes it — never a date. A date and a venue are *bindings*
 to a version, re-bound whenever the world moves, and re-binding one is not a change to the roadmap
 (ADR-0006's thesis, restated by
 [ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md),
-which carries the live table). A version number written before this record resolves through its
-mapping, because earlier ADRs deliberately remain records of their own moment. v2 is the complete
-pre-final Solver; v3 is only the evidence-backed official competition delta and freeze.
+which carries the live table, as amended by
+[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)). A version
+number written before this record resolves through that mapping, because earlier ADRs deliberately
+remain records of their own moment. v2 is the finite Core plus admitted Capability Packs; v3 is
+only the evidence-backed official competition delta and freeze. Their work may overlap.
 _Avoid_: milestone, release, phase, sprint. Not **tag** either: `v1` is a git tag *because* the
 version closed, and the tag is the receipt rather than the thing.
 
@@ -824,8 +860,9 @@ feature, and it reaches one of three verdicts: **pass**; **fail**, which leaves 
 records what remains; or **Pending**, for a clause no binding of that Version could produce
 evidence for
 ([ADR-0026](docs/adr/0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)).
-**A Gate does not block the calendar**, but the calendar does not make a failed Version complete or
-move known work forward. The final Gate is also a real go/no-go (ADR-0033).
+**A Gate does not block the calendar or another Version's useful work**, but the calendar does not
+make a failed Version complete, relabel a missing Core row or manufacture proof. The final Gate is
+also a real go/no-go (ADR-0033, ADR-0051).
 _Avoid_: milestone, review, sign-off. Emphatically not **Checkpoint**, which is a Run-level record
 this glossary already defines — a Gate is a verdict on a Run, a Checkpoint is a thing inside one.
 
@@ -837,8 +874,10 @@ _Avoid_: mode, CLI mode, environment, Board profile
 **Observer CLI**:
 The host-side, always-sanitized view of one explicitly selected Run, derived from canonical Solver
 facts with Evaluator-attested practice evidence kept separate. It owns neither state nor control
-authority, and its Run authority profile bounds every request
-([ADR-0050](docs/adr/0050-one-sanitized-observer-projects-one-run-and-owns-nothing.md)).
+authority, and its Run authority profile bounds every request. The full CLI is a Capability Pack;
+Core retains canonical records and minimal sanitized diagnostic receipts without it
+([ADR-0050](docs/adr/0050-one-sanitized-observer-projects-one-run-and-owns-nothing.md),
+[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
 _Avoid_: dashboard, control plane, human interface, Recovery Agent
 
 **Seed**:

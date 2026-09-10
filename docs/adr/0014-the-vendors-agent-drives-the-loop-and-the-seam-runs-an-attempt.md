@@ -1,5 +1,10 @@
 # The vendor's agent drives the loop, and the seam runs an Attempt
 
+> **The native-primary clauses are superseded by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Native and CPA are
+> both Core; a sealed release-candidate qualification selects the primary route. The distinct
+> Harnesses, shared-capacity boundary and Attempt/Step/deadline contract stand.
+
 > **The rejection of `codex exec resume` is superseded by
 > [ADR-0042](0042-one-controller-owns-four-agent-roles-and-every-engagement.md).** A Solve Lead keeps
 > one persistent thread across the Turns of its Attempt. A classified native-Harness failure may

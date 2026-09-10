@@ -1,5 +1,10 @@
 # One passing full-window Run closes v2 after controlled proofs
 
+> **The Gate scope is amended by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Core rows remain
+> mandatory; a Capability Pack contributes rows only when the exact Release-candidate manifest admits it.
+> Optional external training, population and repair machinery cannot fail v2 merely by omission.
+
 [What evidence makes v2 ready to
 freeze](https://github.com/jerome-queck/incypher-ctf/issues/196) fixes the evidence contract left
 open by ADR-0033 and ADR-0048. **v2 passes only after exhaustive deterministic and accelerated

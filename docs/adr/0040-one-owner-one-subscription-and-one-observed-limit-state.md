@@ -1,5 +1,10 @@
 # One owner, one subscription, and one observed limit state
 
+> **The native-first route selection is superseded by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Release-candidate
+> qualification may select native or CPA as primary. One owner, separate credentials and Harnesses,
+> shared quota, classified route-local switching and Quota wait stand.
+
 [The OpenAI-only inference and credential
 posture](https://github.com/jerome-queck/incypher-ctf/issues/159) closes the Solver's inference set
 to two routes over Jerome's one personal ChatGPT subscription: pinned native `codex exec --json`

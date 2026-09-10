@@ -1,5 +1,10 @@
 # Recovery contains the smallest safe scope and changes before retrying
 
+> **Capability admission is amended by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** Deterministic
+> detection, containment, fixed remedies, restart and safe no-inference operation remain Core;
+> model-assisted novel Recovery and external practice candidate-image repair are Capability Packs.
+
 [The Recovery Agent: early diagnosis, forced repair, and safe
 authority](https://github.com/jerome-queck/incypher-ctf/issues/191) operationalises
 [ADR-0032](0032-a-run-survives-its-boots-and-recovery-owns-the-first-fault.md). Recovery is an

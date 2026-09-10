@@ -1,5 +1,12 @@
 # One hidden competition rig produces every local Gate receipt
 
+> **Candidate scope is amended by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** The rig remains
+> wholly external evidence infrastructure with zero Solver or official-backend-implementation
+> dependency. Synthetic populations,
+> automatic datasets/fitting/promotion and elaborate repair orchestration are optional supporting
+> work, not Solver Core; external candidate-image repair is a Capability Pack.
+
 [The local board: what it replicates, and what it must not](https://github.com/jerome-queck/incypher-ctf/issues/158)
 turns the local Board promised by
 [ADR-0033](0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md)

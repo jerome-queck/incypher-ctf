@@ -1,5 +1,10 @@
 # v2 is the complete pre-final Solver, and v3 is only the official delta
 
+> **The unlimited v2 scope and sequential-calendar clauses are superseded by
+> [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** v2 now has a finite
+> mandatory Core and three proof-earned Capability Packs. v3 may progress beside late v2 work;
+> coordination targets do not block useful work before the 22 September competition.
+
 > **Supersedes [ADR-0030](0030-the-roadmap-is-four-versions-and-the-practice-board-is-one-we-build.md).**
 > ADR-0030's practice-board decision and historical mapping stand. Its forward split between v3
 > integration and v4 freeze does not: both now belong to v3.

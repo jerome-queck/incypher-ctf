@@ -168,13 +168,18 @@ v1 has landed against [spec #63](https://github.com/jerome-queck/incypher-ctf/is
 integration** is the one part still gated on an outside release — ADR-0008 expects it behind
 `Target` rather than `Board`, and names the kit's arrival as the date that expectation gets tested.
 
-**The roadmap is ADR-0033; ADR-0006 and ADR-0030 are historical.** Two versions remain — v2, the
-complete pre-final Solver, and v3, only the evidence-backed official competition delta and freeze.
-Anything specifiable and testable before the official release belongs to v2; missed work is never
-renamed v3. Version numbers in older ADRs resolve through ADR-0033's mapping because those records
-are deliberately not rewritten. Two standing consequences for a session working here. **The
-practice board is one we build**, not an event — the live calendar was measured and only three of
-its 42 events run CTFd, so no version gates on somebody else's competition and an external board
-can never fail a gate. And **a status code is not a platform fingerprint**: nine hosts answered
-HTTP 200 on `/api/v1/challenges` *and* on the chall-manager `mana` endpoint with a single-page-app
-catch-all, so content-type and the body compared against the landing page are the test.
+**The roadmap is ADR-0033 as amended by ADR-0051; ADR-0006 and ADR-0030 are historical.** Two
+versions remain: v2 is a finite mandatory fieldable Core plus exactly three proof-earned Capability
+Packs; v3 is only the evidence-backed official competition delta and freeze. Generic work remains
+v2 even when late, but v3 may progress beside it after official evidence arrives. Coordination
+targets never block useful work; the hard deadline is a fieldable candidate before competition
+starts on 22 September morning. Both native and CPA routes, two-Lane/Specialist support,
+model-assisted Triage/routing and the fieldable Tool surface are Core. Model-assisted novel
+Recovery, the full Observer and external practice candidate-image repair are Packs. Version numbers
+in older ADRs resolve through ADR-0033's mapping and ADR-0051's scope amendment. Two standing
+consequences follow. **The practice board is one we build, wholly outside the Solver**, not an
+event or runtime dependency; the Solver also never depends on the actual IN-CYPHER backend
+implementation, only its Board/Target contracts. An external board can never fail a gate. And **a
+status code is not a platform fingerprint**: nine hosts answered HTTP 200 on
+`/api/v1/challenges` *and* on the chall-manager `mana` endpoint with a single-page-app catch-all, so
+content-type and the body compared against the landing page are the test.
