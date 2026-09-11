@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import Any
 
 from solver.event_store import GenerationAuthority, InvalidEventError
@@ -168,17 +169,29 @@ def project_lead(events: list[Any], run_id: str, engagement_id: str | None = Non
 
 def _verify_authority(events: list[Any], selected: list[Any]) -> None:
     by_sequence = {event.sequence: event for event in events}
+    references = Counter(
+        event.payload["authority_sequence"] for event in events if event.event_type == LEAD_ENGAGEMENT_RECORDED
+    )
     consumed = set()
     for event in selected:
         authority_sequence = event.payload["authority_sequence"]
         authority = by_sequence.get(authority_sequence)
-        if authority_sequence in consumed or authority is None or authority.sequence + 1 != event.sequence:
+        if (
+            authority_sequence in consumed
+            or references[authority_sequence] != 1
+            or authority is None
+            or authority.sequence >= event.sequence
+        ):
             raise InvalidEventError("Lead fact has no exact generation authority", sequence=event.sequence)
+        binding = event.payload["binding"]
         if not (
             authority.event_type == "work-generation.recorded"
             and authority.payload["record"] == "authority"
             and authority.payload["authority"] == GenerationAuthority.AUTHORITY.value
-            and authority.payload["generation_id"] == event.payload["binding"]["generation_id"]
+            and authority.payload["event_id"] == event.payload["authority_event_id"]
+            and authority.payload["generation_id"] == binding["generation_id"]
+            and authority.payload["work_id"] == binding["work_id"]
+            and authority.payload["attempt_id"] == binding["attempt_id"]
         ):
             raise InvalidEventError("Lead fact authority binding disagrees", sequence=event.sequence)
         consumed.add(authority_sequence)

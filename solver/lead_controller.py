@@ -20,6 +20,7 @@ from solver.lead_codec import (
     valid_proposal,
 )
 from solver.lead_contracts import (
+    CONTROLLER_OWNER,
     MAX_APPROACH_BYTES,
     LeadBinding,
     LeadClassification,
@@ -61,9 +62,15 @@ class LeadController:
         self._timestamp = timestamp
         self._model = model
         self._fence = fence or GenerationFence(state, run_id, redactor, timestamp)
+        if self._fence.run_id != run_id:
+            raise ValueError("Lead controller and generation fence name different Runs")
 
     def handle(self, request: LeadRequest) -> LeadOutcome:
         self._validate_request(request)
+        binding_rejection = self._binding_rejection(request.binding)
+        if binding_rejection is not None:
+            classification, detail = binding_rejection
+            return LeadOutcome(classification, self._empty_state(request.binding), detail=detail)
         fingerprint = request_digest(request)
         events = self.store.events()
         engagement = lead_events(events, request.engagement_id)
@@ -130,11 +137,12 @@ class LeadController:
             )
         admission = self._append_fenced(
             request,
-            lambda authority_sequence: LeadEngagementRecorded(
+            lambda grant: LeadEngagementRecorded(
                 event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:admitted",
                 record=LeadRecord.ADMITTED,
                 binding=request.binding,
-                authority_sequence=authority_sequence,
+                authority_event_id=grant.event_id,
+                authority_sequence=grant.sequence,
                 turn_index=request.turn_index,
                 classification=LeadClassification.ACCEPTED,
                 request_digest=fingerprint,
@@ -183,11 +191,12 @@ class LeadController:
         assert measure is not None
         committed = self._append_fenced(
             request,
-            lambda authority_sequence: LeadEngagementRecorded(
+            lambda grant: LeadEngagementRecorded(
                 event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:result",
                 record=LeadRecord.TURN,
                 binding=request.binding,
-                authority_sequence=authority_sequence,
+                authority_event_id=grant.event_id,
+                authority_sequence=grant.sequence,
                 turn_index=request.turn_index,
                 classification=LeadClassification.ACCEPTED,
                 request_digest=fingerprint,
@@ -232,11 +241,12 @@ class LeadController:
         )
         committed = self._append_fenced(
             request,
-            lambda authority_sequence: LeadEngagementRecorded(
+            lambda grant: LeadEngagementRecorded(
                 event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:result",
                 record=LeadRecord.TURN,
                 binding=request.binding,
-                authority_sequence=authority_sequence,
+                authority_event_id=grant.event_id,
+                authority_sequence=grant.sequence,
                 turn_index=request.turn_index,
                 classification=classification,
                 request_digest=fingerprint,
@@ -272,11 +282,12 @@ class LeadController:
         try:
             committed = self._append_fenced(
                 request,
-                lambda authority_sequence: LeadEngagementRecorded(
+                lambda grant: LeadEngagementRecorded(
                     event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:quarantine-{fingerprint[:12]}",
                     record=LeadRecord.QUARANTINED,
                     binding=request.binding,
-                    authority_sequence=authority_sequence,
+                    authority_event_id=grant.event_id,
+                    authority_sequence=grant.sequence,
                     turn_index=request.turn_index,
                     classification=classification,
                     request_digest=fingerprint,
@@ -295,9 +306,8 @@ class LeadController:
         return LeadOutcome(classification if committed else LeadClassification.LATE, state, detail=detail)
 
     def _append_fenced(self, request, event_factory, body: bytes, evidence_digest: str) -> bool:
-        def commit():
-            authority_sequence = self.store.events()[-1].sequence
-            return self.store.append(event_factory(authority_sequence), body=body)
+        def commit(grant):
+            return self.store.append(event_factory(grant), body=body)
 
         try:
             decision, _ = self._fence.authorize_and_commit(
@@ -324,6 +334,21 @@ class LeadController:
 
     def _empty_state(self, binding: LeadBinding) -> LeadState:
         return LeadState(self.run_id, binding, 0, None, "", "", "", ())
+
+    def _binding_rejection(self, binding: LeadBinding) -> tuple[LeadClassification, str] | None:
+        if binding.run_id != self.run_id:
+            return LeadClassification.CONFLICT, "binding Run disagrees with controller"
+        if binding.owner_id != CONTROLLER_OWNER:
+            return LeadClassification.CONFLICT, "binding owner disagrees with controller"
+        generation = next(
+            (state for state in self._fence.projection().generations if state.generation_id == binding.generation_id),
+            None,
+        )
+        if generation is None:
+            return LeadClassification.LATE, "binding generation is unknown"
+        if generation.attempt_id != binding.attempt_id or generation.work_id != binding.work_id:
+            return LeadClassification.CONFLICT, "binding ownership disagrees with generation"
+        return None
 
     @staticmethod
     def _decode_recorded_proposal(event):

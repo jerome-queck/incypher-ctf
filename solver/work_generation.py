@@ -12,6 +12,7 @@ from typing import Any, TypeVar
 
 from solver.event_store import (
     WORK_GENERATION_RECORDED,
+    CommittedEvent,
     EventStore,
     GenerationAuthority,
     GenerationClassification,
@@ -84,6 +85,18 @@ class GenerationProjection:
 class AuthorityDecision:
     accepted: bool
     classification: GenerationClassification
+
+
+@dataclass(frozen=True)
+class AuthorityGrant:
+    """Exact durable authority fact reserved for one caller callback."""
+
+    event_id: str
+    sequence: int
+    generation_id: str
+    work_id: str
+    attempt_id: str
+    authority: GenerationAuthority
 
 
 def _illegal(message: str, sequence: int | None = None) -> IllegalGenerationTransition:
@@ -283,20 +296,21 @@ class GenerationFence:
         evidence: bytes = b"",
     ) -> AuthorityDecision:
         with self._authority_lock:
-            return self._authorize(generation_id, authority, evidence)
+            decision, _ = self._authorize(generation_id, authority, evidence)
+            return decision
 
     def _authorize(
         self,
         generation_id: str,
         authority: GenerationAuthority,
         evidence: bytes = b"",
-    ) -> AuthorityDecision:
+    ) -> tuple[AuthorityDecision, AuthorityGrant | None]:
         projection = self.projection()
         state = _state_for(projection, generation_id)
         authority = GenerationAuthority(authority)
         if state.active:
             event_id = self._next_authority_event_id(generation_id)
-            self._append(
+            committed = self._append(
                 WorkGenerationRecorded(
                     event_id=event_id,
                     generation_id=generation_id,
@@ -309,7 +323,17 @@ class GenerationFence:
                 ),
                 b"",
             )
-            return AuthorityDecision(True, GenerationClassification.CURRENT)
+            return (
+                AuthorityDecision(True, GenerationClassification.CURRENT),
+                AuthorityGrant(
+                    event_id=event_id,
+                    sequence=committed.sequence,
+                    generation_id=state.generation_id,
+                    work_id=state.work_id,
+                    attempt_id=state.attempt_id,
+                    authority=authority,
+                ),
+            )
         classification = (
             GenerationClassification.SUPERSEDED
             if state.disposition == GenerationDisposition.SUPERSEDE
@@ -329,20 +353,20 @@ class GenerationFence:
             ),
             evidence,
         )
-        return AuthorityDecision(False, classification)
+        return AuthorityDecision(False, classification), None
 
     def authorize_and_commit(
         self,
         generation_id: str,
         authority: GenerationAuthority,
-        commit: Callable[[], _T],
+        commit: Callable[[AuthorityGrant], _T],
         evidence: bytes = b"",
     ) -> tuple[AuthorityDecision, _T | None]:
         """Keep one admitted write atomic with respect to generation closing."""
 
         with self._authority_lock:
-            decision = self._authorize(generation_id, authority, evidence)
-            return decision, commit() if decision.accepted else None
+            decision, grant = self._authorize(generation_id, authority, evidence)
+            return decision, commit(grant) if grant is not None else None
 
     def reconcile_restart(self) -> tuple[str, ...]:
         active = tuple(state.generation_id for state in self.projection().generations if state.active)
@@ -360,9 +384,10 @@ class GenerationFence:
         projection = _project_events(events, self.run_id)
         return build_receipt(self.store, events, projection)
 
-    def _append(self, event: WorkGenerationRecorded, body: bytes) -> None:
-        self.store.append(event, body=body)
+    def _append(self, event: WorkGenerationRecorded, body: bytes) -> CommittedEvent:
+        committed = self.store.append(event, body=body)
         self.write_receipt()
+        return committed
 
     def _next_late_event_id(self, generation_id: str) -> str:
         events = self.store.events()
@@ -396,6 +421,7 @@ def _state_for(projection: GenerationProjection, generation_id: str) -> Generati
 
 __all__ = [
     "AuthorityDecision",
+    "AuthorityGrant",
     "GenerationConflict",
     "GenerationAuthority",
     "GenerationClassification",

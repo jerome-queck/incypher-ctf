@@ -14,6 +14,7 @@ MAX_APPROACH_BYTES = 200
 MAX_TURN_BYTES = 16 * 1024
 MAX_RESUME_DELTA_BYTES = 8 * 1024
 ROLE = "solve-lead"
+CONTROLLER_OWNER = "run-controller"
 
 
 class LeadRecord(str, enum.Enum):
@@ -253,6 +254,7 @@ class LeadEngagementRecorded:
     event_id: str
     record: LeadRecord
     binding: LeadBinding
+    authority_event_id: str
     authority_sequence: int
     turn_index: int
     classification: LeadClassification
@@ -292,6 +294,7 @@ class LeadEngagementRecorded:
             "event_id": self.event_id,
             "record": self.record.value,
             "binding": self.binding.document(),
+            "authority_event_id": self.authority_event_id,
             "authority_sequence": self.authority_sequence,
             "turn_index": self.turn_index,
             "classification": self.classification.value,
@@ -320,6 +323,7 @@ class LeadEngagementRecorded:
         strings = (
             "event_id",
             "record",
+            "authority_event_id",
             "classification",
             "request_digest",
             "transition_digest",
@@ -361,7 +365,12 @@ class LeadEngagementRecorded:
             raise InvalidEventError("Lead record is unsupported", sequence=sequence)
         if payload["classification"] not in {item.value for item in LeadClassification}:
             raise InvalidEventError("Lead classification is unsupported", sequence=sequence)
-        if not payload["event_id"] or payload["turn_index"] < 1 or payload["authority_sequence"] < 1:
+        if (
+            not payload["event_id"]
+            or not payload["authority_event_id"]
+            or payload["turn_index"] < 1
+            or payload["authority_sequence"] < 1
+        ):
             raise InvalidEventError("Lead identity is incomplete", sequence=sequence)
         if any(payload[field] < 0 for field in integers[2:]):
             raise InvalidEventError("Lead payload contains an invalid count", sequence=sequence)
@@ -448,6 +457,7 @@ def validate_binding(binding: LeadBinding, sequence: int = 0) -> None:
 __all__ = [
     "BoardProposal",
     "CandidateProposal",
+    "CONTROLLER_OWNER",
     "LeadBinding",
     "LeadClassification",
     "LeadEngagementRecorded",

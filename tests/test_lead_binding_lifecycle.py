@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from solver.event_store import EventStore, GenerationDisposition, InvalidEventError
+from solver.event_store import EventStore, GenerationAuthority, GenerationDisposition, InvalidEventError
 from solver.lead_contracts import (
     LeadBinding,
     LeadClassification,
@@ -231,3 +231,65 @@ def test_projection_refuses_binding_drift_even_with_a_valid_chain(tmp_path):
 
     with pytest.raises(InvalidEventError, match="binding drifted"):
         project_lead(events, "run-1", "engagement-1")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("run_id", "wrong-run"),
+        ("attempt_id", "wrong-attempt"),
+        ("work_id", "wrong-work"),
+        ("owner_id", "wrong-owner"),
+    ],
+)
+def test_forged_authoritative_binding_is_rejected_before_any_lead_write_or_inference(
+    tmp_path, monkeypatch, field, value
+):
+    controller, model, bound = make_controller(tmp_path, measured("must not run", ToolProposal("strings")))
+    receipt_calls = 0
+
+    def receipt_must_not_run(*_args):
+        nonlocal receipt_calls
+        receipt_calls += 1
+        raise AssertionError("invalid binding reached receipt writing")
+
+    monkeypatch.setattr("solver.lead_receipt.write_receipt", receipt_must_not_run)
+
+    outcome = controller.handle(LeadRequest(replace(bound, **{field: value}), 1, LeadInitialContext("observed")))
+
+    assert outcome.classification is LeadClassification.CONFLICT
+    assert model.calls == 0
+    assert receipt_calls == 0
+    events = EventStore(tmp_path, run_id="run-1").events()
+    assert len(events) == 1
+    assert not [event for event in events if event.event_type == "lead-engagement.recorded"]
+
+
+def test_lead_fact_keeps_its_exact_authority_when_an_unrelated_fence_interleaves(tmp_path, monkeypatch):
+    controller, _model, bound = make_controller(tmp_path, measured("inspect", ToolProposal("strings")))
+    unrelated = GenerationFence(tmp_path, "run-1", Redactor({}), clock)
+    original = controller._fence.authorize_and_commit
+
+    def interleave(generation_id, authority, commit, evidence=b""):
+        def after_exact_grant(grant):
+            unrelated.authorize(generation_id, GenerationAuthority.AUTHORITY)
+            return commit(grant)
+
+        return original(generation_id, authority, after_exact_grant, evidence)
+
+    monkeypatch.setattr(controller._fence, "authorize_and_commit", interleave)
+
+    outcome = controller.handle(LeadRequest(bound, 1, LeadInitialContext("observed")))
+
+    assert outcome.classification is LeadClassification.ACCEPTED
+    events = EventStore(tmp_path, run_id="run-1").events()
+    lead = [event for event in events if event.event_type == "lead-engagement.recorded"]
+    for fact in lead:
+        exact = next(event for event in events if event.sequence == fact.payload["authority_sequence"])
+        between = next(event for event in events if event.sequence == exact.sequence + 1)
+        assert exact.payload["event_id"] == fact.payload["authority_event_id"]
+        assert exact.payload["authority"] == GenerationAuthority.AUTHORITY.value
+        assert between.payload["authority"] == GenerationAuthority.AUTHORITY.value
+        assert between.payload["event_id"] != fact.payload["authority_event_id"]
+        assert fact.sequence == between.sequence + 1
+    assert project_lead(events, "run-1", "engagement-1") == outcome.state
