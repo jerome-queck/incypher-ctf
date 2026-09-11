@@ -160,7 +160,14 @@ def test_the_field_set_of_every_record_is_pinned(recorder):
             "cache_write",
             "usage_known",
         },
-        "attempt-close": {"attempt_id", "cause", "approach_label", "solves_at_close", "extensions_granted", "flag"},
+        "attempt-close": {
+            "attempt_id",
+            "cause",
+            "approach_label",
+            "solves_at_close",
+            "extensions_granted",
+            "flag",
+        },
         "run-close": {"cause", "write_failures"},
     }
 

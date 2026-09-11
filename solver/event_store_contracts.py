@@ -14,6 +14,7 @@ SEALED_DIRECTORY = "sealed/sha256"
 RECEIPT_FILENAME = "canonical-event-store.receipt.json"
 OBSERVATION_RECORDED = "observation.recorded"
 LIFECYCLE_RECORDED = "lifecycle.recorded"
+WORK_GENERATION_RECORDED = "work-generation.recorded"
 RECEIPT_TYPE = "canonical-event-store"
 
 EMPTY_BLOB_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -39,6 +40,33 @@ class TerminalDisposition(str, enum.Enum):
 class ForwardedSignal(str, enum.Enum):
     TERM = "SIGTERM"
     INT = "SIGINT"
+
+
+class GenerationDisposition(str, enum.Enum):
+    COMPLETE = "complete"
+    INTERRUPT = "interrupt"
+    SUPERSEDE = "supersede"
+    ABANDON = "abandon"
+
+
+class GenerationAuthority(str, enum.Enum):
+    CARRY = "carry"
+    CANDIDATE = "candidate"
+    TOOL = "tool"
+    AUTHORITY = "authority"
+
+
+class GenerationRecord(str, enum.Enum):
+    ACQUIRE = "acquire"
+    CLOSE = "close"
+    AUTHORITY = "authority"
+    LATE_EVENT = "late-event"
+
+
+class GenerationClassification(str, enum.Enum):
+    CURRENT = "current-generation"
+    CLOSED = "closed-generation"
+    SUPERSEDED = "superseded-generation"
 
 
 class ServiceName(str, enum.Enum):
@@ -424,13 +452,130 @@ class LifecycleRecorded:
             raise InvalidEventError("Lifecycle non-reap record carries a child count", sequence=sequence)
 
 
-CanonicalEvent = ObservationRecorded | LifecycleRecorded
+@dataclass(frozen=True)
+class WorkGenerationRecorded:
+    """One identity-bound Work-generation transition or rejected late event."""
+
+    event_id: str
+    generation_id: str
+    work_id: str
+    attempt_id: str
+    record: GenerationRecord
+    disposition: GenerationDisposition | None = None
+    authority: GenerationAuthority | None = None
+    classification: GenerationClassification | None = None
+    ts: str = ""
+
+    @property
+    def event_type(self) -> str:
+        return WORK_GENERATION_RECORDED
+
+    @property
+    def identity(self) -> str:
+        return self.event_id
+
+    @classmethod
+    def identity_from_payload(cls, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("event_id", ""))
+
+    def payload(self, *, blob_digest: str, blob_bytes: int) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "generation_id": self.generation_id,
+            "work_id": self.work_id,
+            "attempt_id": self.attempt_id,
+            "record": self.record.value,
+            "disposition": self.disposition.value if self.disposition is not None else "",
+            "authority": self.authority.value if self.authority is not None else "",
+            "classification": self.classification.value if self.classification is not None else "",
+            "ts": self.ts,
+            "blob_digest": blob_digest,
+            "blob_bytes": blob_bytes,
+        }
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any], *, sequence: int) -> None:
+        fields = {
+            "event_id": str,
+            "generation_id": str,
+            "work_id": str,
+            "attempt_id": str,
+            "record": str,
+            "disposition": str,
+            "authority": str,
+            "classification": str,
+            "ts": str,
+            "blob_digest": str,
+            "blob_bytes": int,
+        }
+        missing = [field for field in fields if field not in payload]
+        if missing:
+            raise InvalidEventError(
+                f"Work-generation payload is missing required fields: {', '.join(missing)}",
+                sequence=sequence,
+            )
+        for field, expected in fields.items():
+            value = payload[field]
+            if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
+                raise InvalidEventError(
+                    f"Work-generation payload field {field!r} has the wrong type",
+                    sequence=sequence,
+                )
+        if not all(payload[field] for field in ("event_id", "generation_id", "work_id", "attempt_id")):
+            raise InvalidEventError("Work-generation identity is incomplete", sequence=sequence)
+        if payload["record"] not in {item.value for item in GenerationRecord}:
+            raise InvalidEventError("Work-generation record is unsupported", sequence=sequence)
+        if payload["blob_bytes"] < 0:
+            raise InvalidEventError("Work-generation body size is negative", sequence=sequence)
+        digest = payload["blob_digest"]
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise InvalidEventError("Work-generation blob digest is not lowercase SHA-256", sequence=sequence)
+        record = payload["record"]
+        if record == GenerationRecord.ACQUIRE.value:
+            if any(payload[field] for field in ("disposition", "authority", "classification")):
+                raise InvalidEventError("Work-generation acquisition carries closing data", sequence=sequence)
+            cls._require_empty_body(payload, sequence)
+        elif record == GenerationRecord.CLOSE.value:
+            if payload["disposition"] not in {item.value for item in GenerationDisposition}:
+                raise InvalidEventError("Work-generation close disposition is unsupported", sequence=sequence)
+            if payload["authority"] or payload["classification"]:
+                raise InvalidEventError("Work-generation close carries late-event data", sequence=sequence)
+            cls._require_empty_body(payload, sequence)
+        elif record == GenerationRecord.AUTHORITY.value:
+            if payload["disposition"]:
+                raise InvalidEventError(
+                    "Work-generation authority reservation carries a disposition", sequence=sequence
+                )
+            if payload["authority"] not in {item.value for item in GenerationAuthority}:
+                raise InvalidEventError("Work-generation authority kind is unsupported", sequence=sequence)
+            if payload["classification"] != GenerationClassification.CURRENT.value:
+                raise InvalidEventError("Work-generation authority reservation is not current", sequence=sequence)
+            cls._require_empty_body(payload, sequence)
+        else:
+            if payload["disposition"]:
+                raise InvalidEventError("Work-generation late event carries a close disposition", sequence=sequence)
+            if payload["authority"] not in {item.value for item in GenerationAuthority}:
+                raise InvalidEventError("Work-generation authority kind is unsupported", sequence=sequence)
+            if payload["classification"] not in {
+                GenerationClassification.CLOSED.value,
+                GenerationClassification.SUPERSEDED.value,
+            }:
+                raise InvalidEventError("Work-generation late-event classification is unsupported", sequence=sequence)
+
+    @staticmethod
+    def _require_empty_body(payload: Mapping[str, Any], sequence: int) -> None:
+        if payload["blob_bytes"] != 0 or payload["blob_digest"] != EMPTY_BLOB_DIGEST:
+            raise InvalidEventError("Work-generation transition cannot carry a sealed body", sequence=sequence)
+
+
+CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorded
 
 
 def event_contract(event_type: str):
     contracts = {
         OBSERVATION_RECORDED: ObservationRecorded,
         LIFECYCLE_RECORDED: LifecycleRecorded,
+        WORK_GENERATION_RECORDED: WorkGenerationRecorded,
     }
     return contracts.get(event_type)
 

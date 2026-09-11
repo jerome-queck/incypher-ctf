@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -26,12 +27,22 @@ from solver.replay_receipt import (
     receipt_location,
     validate_receipt,
 )
+from solver.work_generation import GenerationFence
 
 
 def verify_and_materialize_run_state(state: Path, run_id: str, redactor: Redactor | None = None) -> ReplayVerification:
     """Verify canonical state, then write only its deterministic derived artifacts."""
 
     store, events, projection = _verified_replay(state, run_id, redactor)
+    fence = GenerationFence(
+        state,
+        run_id,
+        redactor or Redactor({}),
+        timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+    )
+    if fence.reconcile_restart():
+        store, events, projection = _verified_replay(state, run_id, redactor)
+    fence.write_receipt()
     projection_path = store.canonical_dir / PROJECTIONS_DIRECTORY / PROJECTION_FILENAME
     if projection_path.exists():
         existing = _read_bytes(projection_path, "v1 projection")
@@ -83,6 +94,12 @@ def _verified_replay(
 ) -> tuple[EventStore, list[CommittedEvent], VersionedProjection]:
     store = EventStore(Path(state), run_id=run_id, redactor=redactor)
     events = store.events()
+    GenerationFence(
+        state,
+        run_id,
+        redactor or Redactor({}),
+        timestamp=lambda: "",
+    ).projection()
     projection = project(events, run_id)
     verify_legacy_view(store, events)
     return store, events, projection
