@@ -6,6 +6,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from scripts.verify_rig_seed import _verify_receipt
+
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = ROOT / "docs/evidence/rig-seed/lock.json"
@@ -121,3 +125,13 @@ def test_correctly_signed_receipt_with_oracle_content_is_rejected():
 
         assert result.returncode != 0
         assert "schema or fields" in result.stderr
+
+
+def test_promoted_validator_rejects_float_timeout_equal_to_integer():
+    lock = json.loads(LOCK.read_text())
+    proof = lock["proofs"][0]
+    receipt = json.loads((LOCK.parent / proof["receipt"]).read_text())
+    receipt["candidate_profile"]["timeout_seconds"] = 20.0
+
+    with pytest.raises(ValueError, match="terminal policy"):
+        _verify_receipt(receipt, proof["expected"], lock)

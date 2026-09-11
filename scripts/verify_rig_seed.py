@@ -134,7 +134,11 @@ def _verify_receipt(
         raise ValueError("receipt candidate profile duration is invalid")
     if profile["state_storage"] != "isolated_tmpfs":
         raise ValueError("receipt candidate profile bounds are invalid")
-    if profile["timeout_seconds"] != 20 or profile["terminal_mode"] != "exit_on_terminal":
+    if (
+        type(profile["timeout_seconds"]) is not int
+        or profile["timeout_seconds"] != 20
+        or profile["terminal_mode"] != "exit_on_terminal"
+    ):
         raise ValueError("receipt candidate terminal policy is invalid")
     if str(uuid.UUID(profile["run_id"])) != profile["run_id"]:
         raise ValueError("receipt candidate profile run ID is invalid")
