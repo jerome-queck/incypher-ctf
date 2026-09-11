@@ -340,7 +340,7 @@ class AttemptExecutor:
             {"envelope_id": envelope_id, "outcome": observation.outcome.value}
         )
 
-        def commit_result() -> None:
+        def commit_result(_grant) -> None:
             self._append(
                 EnvelopeRecord.RESULT,
                 event_id=f"{envelope_id}:result",
