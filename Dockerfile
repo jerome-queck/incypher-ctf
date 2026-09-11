@@ -303,6 +303,19 @@ assert requests.Request('GET', 'http://probe/x', params={'f': 'flag{probe}'}).pr
 # credentials arrive by `--env-file` at run time (`docs/credentials.md`), which is what lets the
 # image be handed over without handing over the team key.
 WORKDIR /opt/solver
+# Locked v2 package fragments are installed before any generated rootfs or receipt enters the
+# image, so an unavailable exact version fails the build without publishing assembled Tool bytes.
+COPY tool-supply/generated/apt-packages.txt /tmp/tool-supply-apt-packages.txt
+RUN set -eu; \
+    if [ -s /tmp/tool-supply-apt-packages.txt ]; then \
+      apt-get update; \
+      xargs apt-get install --yes --no-install-recommends -o Acquire::Retries=5 \
+        < /tmp/tool-supply-apt-packages.txt; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    rm /tmp/tool-supply-apt-packages.txt
+COPY tool-supply/generated/rootfs/ /
+COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json /opt/solver/tool-supply/
 COPY solver/ solver/
 COPY docs/competitions/*.board.json boards/
 

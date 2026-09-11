@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "profile_id": "resident-fixture",
+  "components": [
+    {
+      "component_id": "fixture.identity",
+      "version": "1.0.0",
+      "license_expression": "MIT",
+      "license_classification": "free-redistributable",
+      "platforms": [
+        "amd64",
+        "arm64"
+      ],
+      "packages": [],
+      "files": [
+        {
+          "source": "fixtures/resident-fixture/identity.txt",
+          "destination": "/opt/solver/tool-supply/identity.txt",
+          "sha256": "b687f188329f78bf0347339c661112c65a2540ed682b322e26f7f36c3c69e15d",
+          "mode": "0644"
+        }
+      ]
+    }
+  ]
+}
