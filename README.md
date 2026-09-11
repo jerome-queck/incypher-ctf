@@ -63,7 +63,7 @@ the shortest path to running something.
 | --- | --- | --- |
 | bring the container runtime up | `python3 scripts/runtime.py start` | [`AGENTS.md`](AGENTS.md) |
 | build the image | `docker build -t solver .` | [`Dockerfile`](Dockerfile) |
-| run the Solver at a Board | `docker run --rm --env-file .env -v "$PWD/state:/state" solver` | [`AGENTS.md`](AGENTS.md) |
+| run the Solver at a Board | `docker run --restart unless-stopped --env-file .env -v "$PWD/state:/state" solver` | [`AGENTS.md`](AGENTS.md) |
 | point it at a Board | `bash scripts/setup-board.sh` | [`docs/credentials.md`](docs/credentials.md) |
 | see which credentials this machine holds | `python3 scripts/credentials_held.py` | [`docs/credentials.md`](docs/credentials.md) |
 

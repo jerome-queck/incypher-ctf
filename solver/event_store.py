@@ -1,4 +1,4 @@
-"""The narrow public facade for canonical Observation storage."""
+"""The narrow public facade for canonical Run events and their sealed bodies."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Callable
 
 from solver.event_store_contracts import (
     CANONICAL_SCHEMA_VERSION,
+    CanonicalEvent,
     EVENTS_DIRECTORY,
     EVENTS_FILENAME,
     OBSERVATION_RECORDED,
@@ -24,6 +25,8 @@ from solver.event_store_contracts import (
     EventDigestMismatchError,
     InvalidEventError,
     InvalidReceiptError,
+    LIFECYCLE_RECORDED,
+    LifecycleRecorded,
     MissingBlobError,
     ObservationRecorded,
     PreviousDigestMismatchError,
@@ -77,12 +80,12 @@ class EventStore:
     def sealed_dir(self) -> Path:
         return self._core.sealed_dir
 
-    def append(self, event: ObservationRecorded, *, body: bytes) -> CommittedEvent:
+    def append(self, event: CanonicalEvent, *, body: bytes) -> CommittedEvent:
         return self._core.append(event, body=body)
 
     def reserve(
         self,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         *,
         blob_digest: str,
         blob_bytes: int,
@@ -92,7 +95,7 @@ class EventStore:
     def commit(
         self,
         reservation: EventReservation,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         *,
         body: bytes,
     ) -> CommittedEvent:
@@ -144,6 +147,8 @@ __all__ = [
     "EVENTS_FILENAME",
     "InvalidEventError",
     "InvalidReceiptError",
+    "LIFECYCLE_RECORDED",
+    "LifecycleRecorded",
     "MissingBlobError",
     "OBSERVATION_RECORDED",
     "ObservationRecorded",

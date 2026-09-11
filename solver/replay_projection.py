@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from solver.event_store import CommittedEvent, EventStore, ProjectionMismatchError, projection_fields
+from solver.event_store import (
+    LIFECYCLE_RECORDED,
+    CommittedEvent,
+    EventStore,
+    ProjectionMismatchError,
+    projection_fields,
+)
 from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.replay_contracts import PROJECTION_SCHEMA_VERSION, PROJECTION_VERSION, VersionedProjection, freeze, thaw
 
@@ -61,6 +67,7 @@ def project(events: list[CommittedEvent], run_id: str) -> VersionedProjection:
             }
         )
         for event in events
+        if event.event_type != LIFECYCLE_RECORDED
     )
     serialized = b"".join(canonical_bytes(thaw(row)) + b"\n" for row in rows)
     return VersionedProjection(
@@ -79,6 +86,8 @@ def verify_legacy_view(store: EventStore, events: list[CommittedEvent]) -> None:
     indexed = LegacyRows.read(stream_path)
     used: set[int] = set()
     for event in events:
+        if event.event_type == LIFECYCLE_RECORDED:
+            continue
         candidates = _candidates(indexed, event)
         if not candidates:
             continue

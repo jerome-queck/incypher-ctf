@@ -20,7 +20,8 @@ paths wait for nobody — and the conventions it is built under.
 ## Getting it running
 
 *(The commands an agent could not have guessed. To run the Solver: `docker build -t solver .`
-then `docker run --rm --env-file .env -v "$PWD/state:/state" solver` — it refuses loudly.)*
+then `docker run --restart unless-stopped --env-file .env -v "$PWD/state:/state" solver` — it
+refuses loudly.)*
 
 **`ruff` and `pytest` are not installed here.** `pyproject.toml` carries their settings and
 declares no dependency at all, so the tree reads as though they are. Build them a throwaway

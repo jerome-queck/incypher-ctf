@@ -1,8 +1,8 @@
-"""PID 1 — the composition root, the boot refusals, and the exit code a Run ends on.
+"""The Run-controller Boot, its refusals, and the exit code the Supervisor reads.
 
-`python3 -m solver` is the image's entry point and there is no supervisor in front of it (ADR-0008):
-v2 wraps this, and anything between the process and the container at v1 makes a clean exit
-indistinguishable from a restart loop, which is the one behaviour v1's gate is trying to observe.
+`python3 -m solver` remains the v1 execution path behind v2's PID-1 Supervisor. The child keeps the
+existing Board and Attempt composition while the Supervisor owns Boot identity, signals and process
+lifecycle.
 
 Everything below the loop is handed its collaborators, so this is the only file that reads the
 environment, opens files, or decides what talks to what. It is also the only place a `Refusal`

@@ -11,9 +11,9 @@ from typing import Any, Callable, Mapping
 
 from solver.event_store_contracts import (
     CANONICAL_SCHEMA_VERSION,
+    CanonicalEvent,
     EVENTS_DIRECTORY,
     EVENTS_FILENAME,
-    OBSERVATION_RECORDED,
     RESERVATIONS_FILENAME,
     SEALED_DIRECTORY,
     BlobDigestMismatchError,
@@ -24,12 +24,12 @@ from solver.event_store_contracts import (
     EventDigestMismatchError,
     InvalidEventError,
     MissingBlobError,
-    ObservationRecorded,
     PreviousDigestMismatchError,
     SequenceGapError,
     TornAppendError,
     UnknownSchemaError,
     ReservationStatus,
+    event_contract,
 )
 from solver.event_store_storage import append_durable, atomic_write, canonical_bytes, digest_bytes
 from solver.redaction import Redactor
@@ -75,7 +75,7 @@ class EventStoreCore:
         self.sealed_dir.mkdir(parents=True, exist_ok=True)
         self.lock_path.touch(exist_ok=True, mode=0o600)
 
-    def append(self, event: ObservationRecorded, *, body: bytes) -> CommittedEvent:
+    def append(self, event: CanonicalEvent, *, body: bytes) -> CommittedEvent:
         body_bytes = self._redactor.redact(body)
         payload = _redact(
             event.payload(blob_digest=digest_bytes(body_bytes), blob_bytes=len(body_bytes)),
@@ -94,7 +94,7 @@ class EventStoreCore:
 
     def reserve(
         self,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         *,
         blob_digest: str,
         blob_bytes: int,
@@ -118,7 +118,7 @@ class EventStoreCore:
     def commit(
         self,
         reservation: EventReservation,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         *,
         body: bytes,
     ) -> CommittedEvent:
@@ -155,7 +155,7 @@ class EventStoreCore:
     def _commit_locked(
         self,
         reservation: EventReservation,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         payload: Mapping[str, Any],
         body: bytes,
         existing: list[CommittedEvent],
@@ -208,10 +208,14 @@ class EventStoreCore:
 
     def _reserve_locked(
         self,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         payload: Mapping[str, Any],
         existing: list[CommittedEvent],
     ) -> EventReservation:
+        contract = event_contract(event.event_type)
+        if contract is None:
+            raise InvalidEventError(f"unsupported event type {event.event_type!r}")
+        contract.validate_payload(payload, sequence=len(existing) + 1)
         reservations = self._read_reservations()
         highest = max(
             [item.sequence for item in existing] + [item.sequence for item in reservations],
@@ -233,7 +237,7 @@ class EventStoreCore:
 
     def _find_reservation_for_payload(
         self,
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         payload: Mapping[str, Any],
     ) -> EventReservation | None:
         candidate: EventReservation | None = None
@@ -364,14 +368,15 @@ class EventStoreCore:
     def _find_identity(
         self,
         existing: list[CommittedEvent],
-        event: ObservationRecorded,
+        event: CanonicalEvent,
         payload: Mapping[str, Any],
     ) -> CommittedEvent | None:
         for prior in existing:
-            identity = (str(prior.payload.get("attempt_id", "")), int(prior.payload.get("step_index", -1)))
+            contract = event_contract(prior.event_type)
+            identity = contract.identity_from_payload(prior.payload) if contract is not None else None
             if prior.event_type != event.event_type or identity != event.identity:
                 continue
-            if event.event_id is None:
+            if getattr(event, "event_id", None) is None:
                 if dict(prior.payload) == dict(payload):
                     return prior
                 continue
@@ -380,7 +385,7 @@ class EventStoreCore:
             if prior.blob_digest == payload.get("blob_digest"):
                 return prior
             raise DuplicateSequenceError(
-                f"Observation identity {event.identity!r} was already committed with different content",
+                f"Canonical identity {event.identity!r} was already committed with different content",
                 sequence=prior.sequence,
             )
         return None
@@ -452,9 +457,10 @@ class EventStoreCore:
                 raise InvalidEventError("canonical envelope is missing typed fields", sequence=sequence)
             if run_id != self.run_id:
                 raise InvalidEventError("canonical envelope belongs to another Run", sequence=sequence)
-            if event_type != OBSERVATION_RECORDED:
+            contract = event_contract(event_type)
+            if contract is None:
                 raise InvalidEventError(f"unsupported event type {event_type!r}", sequence=sequence)
-            ObservationRecorded.validate_payload(payload, sequence=sequence)
+            contract.validate_payload(payload, sequence=sequence)
             blob_digest = payload.get("blob_digest")
             blob_bytes = payload.get("blob_bytes")
             if not isinstance(blob_digest, str) or not isinstance(blob_bytes, int):

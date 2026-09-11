@@ -13,7 +13,82 @@ RESERVATIONS_FILENAME = "reservations.jsonl"
 SEALED_DIRECTORY = "sealed/sha256"
 RECEIPT_FILENAME = "canonical-event-store.receipt.json"
 OBSERVATION_RECORDED = "observation.recorded"
+LIFECYCLE_RECORDED = "lifecycle.recorded"
 RECEIPT_TYPE = "canonical-event-store"
+
+EMPTY_BLOB_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+class LifecycleRecord(str, enum.Enum):
+    RUN_OPEN = "run-open"
+    SERVICE_STARTED = "service-started"
+    BOOT_OPEN = "boot-open"
+    SIGNAL_FORWARDED = "signal-forwarded"
+    CHILD_REAPED = "child-reaped"
+    BOOT_CLOSE = "boot-close"
+    RUN_CLOSE = "run-close"
+
+
+class TerminalDisposition(str, enum.Enum):
+    NORMAL = "normal"
+    REFUSED = "refused"
+    INTERRUPTED = "interrupted"
+    CRASHED = "crashed"
+
+
+class ForwardedSignal(str, enum.Enum):
+    TERM = "SIGTERM"
+    INT = "SIGINT"
+
+
+class ServiceName(str, enum.Enum):
+    VERIFIED_REPLAY = "verified-replay"
+    STORAGE_ADMISSION = "storage-admission"
+    RUN_CONTROLLER = "run-controller"
+
+
+@dataclass(frozen=True)
+class RunOpened:
+    pass
+
+
+@dataclass(frozen=True)
+class ServiceStarted:
+    boot_id: str
+    service: ServiceName
+
+
+@dataclass(frozen=True)
+class BootOpened:
+    boot_id: str
+
+
+@dataclass(frozen=True)
+class SignalForwarded:
+    boot_id: str
+    signal: ForwardedSignal
+
+
+@dataclass(frozen=True)
+class ChildReaped:
+    boot_id: str
+    reaped_children: int
+
+
+@dataclass(frozen=True)
+class BootClosed:
+    boot_id: str
+    disposition: TerminalDisposition
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class RunClosed:
+    disposition: TerminalDisposition
+    detail: str = ""
+
+
+LifecycleFact = RunOpened | ServiceStarted | BootOpened | SignalForwarded | ChildReaped | BootClosed | RunClosed
 
 
 class DamageKind(str, enum.Enum):
@@ -133,6 +208,10 @@ class ObservationRecorded:
     def identity(self) -> tuple[str, int]:
         return self.attempt_id, self.step_index
 
+    @classmethod
+    def identity_from_payload(cls, payload: Mapping[str, Any]) -> tuple[str, int]:
+        return str(payload.get("attempt_id", "")), int(payload.get("step_index", -1))
+
     def payload(self, *, blob_digest: str, blob_bytes: int) -> dict[str, Any]:
         return {
             "attempt_id": self.attempt_id,
@@ -218,6 +297,141 @@ class ObservationRecorded:
             )
         ):
             raise InvalidEventError("Observation payload contains a negative count", sequence=sequence)
+
+
+@dataclass(frozen=True)
+class LifecycleRecorded:
+    """One durable Supervisor lifecycle fact in the canonical Run chain."""
+
+    event_id: str
+    fact: LifecycleFact
+    ts: str = ""
+
+    @property
+    def event_type(self) -> str:
+        return LIFECYCLE_RECORDED
+
+    @property
+    def identity(self) -> str:
+        return self.event_id
+
+    @classmethod
+    def identity_from_payload(cls, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("event_id", ""))
+
+    def payload(self, *, blob_digest: str, blob_bytes: int) -> dict[str, Any]:
+        payload = {
+            "event_id": self.event_id,
+            "record": "",
+            "boot_id": "",
+            "service": "",
+            "disposition": "",
+            "signal": "",
+            "reaped_children": 0,
+            "detail": "",
+            "ts": self.ts,
+            "blob_digest": blob_digest,
+            "blob_bytes": blob_bytes,
+        }
+        fact = self.fact
+        if isinstance(fact, RunOpened):
+            payload["record"] = LifecycleRecord.RUN_OPEN.value
+        elif isinstance(fact, ServiceStarted):
+            payload.update(
+                record=LifecycleRecord.SERVICE_STARTED.value, boot_id=fact.boot_id, service=fact.service.value
+            )
+        elif isinstance(fact, BootOpened):
+            payload.update(record=LifecycleRecord.BOOT_OPEN.value, boot_id=fact.boot_id)
+        elif isinstance(fact, SignalForwarded):
+            payload.update(
+                record=LifecycleRecord.SIGNAL_FORWARDED.value, boot_id=fact.boot_id, signal=fact.signal.value
+            )
+        elif isinstance(fact, ChildReaped):
+            payload.update(
+                record=LifecycleRecord.CHILD_REAPED.value,
+                boot_id=fact.boot_id,
+                reaped_children=fact.reaped_children,
+            )
+        elif isinstance(fact, BootClosed):
+            payload.update(
+                record=LifecycleRecord.BOOT_CLOSE.value,
+                boot_id=fact.boot_id,
+                disposition=fact.disposition.value,
+                detail=fact.detail,
+            )
+        elif isinstance(fact, RunClosed):
+            payload.update(
+                record=LifecycleRecord.RUN_CLOSE.value,
+                disposition=fact.disposition.value,
+                detail=fact.detail,
+            )
+        return payload
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any], *, sequence: int) -> None:
+        fields = {
+            "event_id": str,
+            "record": str,
+            "boot_id": str,
+            "service": str,
+            "disposition": str,
+            "signal": str,
+            "reaped_children": int,
+            "detail": str,
+            "ts": str,
+            "blob_digest": str,
+            "blob_bytes": int,
+        }
+        missing = [field for field in fields if field not in payload]
+        if missing:
+            raise InvalidEventError(
+                f"Lifecycle payload is missing required fields: {', '.join(missing)}",
+                sequence=sequence,
+            )
+        for field, expected in fields.items():
+            value = payload[field]
+            if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
+                raise InvalidEventError(f"Lifecycle payload field {field!r} has the wrong type", sequence=sequence)
+        if not payload["event_id"] or payload["record"] not in {item.value for item in LifecycleRecord}:
+            raise InvalidEventError("Lifecycle identity or record is unsupported", sequence=sequence)
+        if payload["reaped_children"] < 0 or payload["blob_bytes"] < 0:
+            raise InvalidEventError("Lifecycle payload contains a negative count", sequence=sequence)
+        digest = payload["blob_digest"]
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise InvalidEventError("Lifecycle blob digest is not lowercase SHA-256", sequence=sequence)
+        if payload["blob_bytes"] != 0 or digest != EMPTY_BLOB_DIGEST:
+            raise InvalidEventError("Lifecycle events cannot carry a sealed body", sequence=sequence)
+        record = payload["record"]
+        if record in {"boot-close", "run-close"}:
+            if payload["disposition"] not in {item.value for item in TerminalDisposition}:
+                raise InvalidEventError("Lifecycle terminal disposition is unsupported", sequence=sequence)
+        elif payload["disposition"]:
+            raise InvalidEventError("Lifecycle nonterminal record carries a disposition", sequence=sequence)
+        if record in {"service-started", "boot-open", "signal-forwarded", "child-reaped", "boot-close"}:
+            if not payload["boot_id"]:
+                raise InvalidEventError("Lifecycle Boot record has no Boot identity", sequence=sequence)
+        elif payload["boot_id"]:
+            raise InvalidEventError("Lifecycle Run record carries a Boot identity", sequence=sequence)
+        if (record == "service-started") != bool(payload["service"]):
+            raise InvalidEventError("Lifecycle service identity disagrees with its record", sequence=sequence)
+        if record == "signal-forwarded":
+            if payload["signal"] not in {item.value for item in ForwardedSignal}:
+                raise InvalidEventError("Lifecycle forwarded signal is unsupported", sequence=sequence)
+        elif payload["signal"]:
+            raise InvalidEventError("Lifecycle nonsignal record carries a signal", sequence=sequence)
+        if record != "child-reaped" and payload["reaped_children"]:
+            raise InvalidEventError("Lifecycle non-reap record carries a child count", sequence=sequence)
+
+
+CanonicalEvent = ObservationRecorded | LifecycleRecorded
+
+
+def event_contract(event_type: str):
+    contracts = {
+        OBSERVATION_RECORDED: ObservationRecorded,
+        LIFECYCLE_RECORDED: LifecycleRecorded,
+    }
+    return contracts.get(event_type)
 
 
 @dataclass(frozen=True)

@@ -162,7 +162,7 @@ def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None
             f"{MARK} unset: {', '.join(missing)}. A Run cannot be pointed at a Board without both a "
             f"URL and a token, and an unauthenticated read would be a Run that cannot submit"
         )
-    run_id, run_seconds = _run_id(environ), _run_seconds(environ)
+    run_id, run_seconds = run_identity(environ), _run_seconds(environ)
     chain = _chain(environ.get(CODEX_MODEL, "").strip() or DEFAULT_MODEL, homes or _homes(environ))
     return Setup(
         url=environ[CTFD_URL].strip().rstrip("/"),
@@ -191,7 +191,7 @@ def _holding(environ: Mapping[str, str], name: str) -> str:
     return SET if environ[name].strip() else EMPTY
 
 
-def _run_id(environ: Mapping[str, str]) -> str:
+def run_identity(environ: Mapping[str, str]) -> str:
     """The Run's identity, from something that survives a boot — never minted here.
 
     `schedule.Window` stamps its absolute deadline under `state/runs/<run_id>` and consults the

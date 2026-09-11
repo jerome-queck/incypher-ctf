@@ -18,6 +18,7 @@ from typing import NamedTuple
 import pytest
 from solver import __main__ as entry
 from solver import codex
+from solver import supervisor as supervisor_entry
 from solver.__main__ import BROKEN, CLEAN, REFUSED, main
 from solver.board import Board
 from solver.codex import Child
@@ -213,12 +214,12 @@ def test_controlled_replay_proof_matches_the_current_entry_point(capsys, monkeyp
         "unknown-schema",
     )
     constructed = []
-    monkeypatch.setattr(entry, "Board", lambda *args: constructed.append(args))
+    monkeypatch.setattr(supervisor_entry, "launch_boot", lambda *args: constructed.append(args))
     results = {}
     for classification in classifications:
         state = tmp_path / classification
         damaged_canonical_state(state, classification)
-        code = main(env(), run_state=state, boards=boards)
+        code = supervisor_entry.main(env(), state=state, stay_quiescent=False)
         refusal = capsys.readouterr().err
         observed = refusal.rsplit("— ", 1)[-1].strip()
         assert refusal == f"[boot] canonical state verification refused this Run — {classification}\n"
@@ -234,7 +235,7 @@ def test_controlled_replay_proof_matches_the_current_entry_point(capsys, monkeyp
         "subject_digest": subject_digest(),
         "corruption_fixture_results": results,
         "pre_authority_refusal": {
-            "entry_point": "solver.__main__.main",
+            "entry_point": "solver.supervisor.main",
             "refusal_exit_code": REFUSED,
             "external_clients_constructed": len(constructed),
         },
