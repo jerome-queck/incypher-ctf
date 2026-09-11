@@ -7,6 +7,27 @@
       "version": "1.0.0",
       "license_expression": "MIT",
       "license_classification": "free-redistributable",
+      "source": {
+        "uri": "repo:tool-supply/fixtures/resident-fixture/tool.py",
+        "file": "fixtures/resident-fixture/tool.py"
+      },
+      "license": {
+        "authority": "repository-notice",
+        "file": "fixtures/resident-fixture/LICENSE.txt"
+      },
+      "entrypoint": "/usr/local/bin/incypher-fixture-tool",
+      "version_argv": [
+        "--version"
+      ],
+      "fixture": {
+        "fixture_id": "fixture.identity.transform-v1",
+        "argv": [
+          "/opt/solver/tool-supply/fixture-input.txt"
+        ],
+        "input_file": "fixtures/resident-fixture/input.txt",
+        "expected_stdout_sha256": "2067e3727fec495781f370c84a7d82111db1cc77c3b52ccfdcb4d2d71d02e650",
+        "timeout_seconds": 5
+      },
       "platforms": [
         "amd64",
         "arm64"
@@ -18,6 +39,24 @@
           "destination": "/opt/solver/tool-supply/identity.txt",
           "sha256": "b687f188329f78bf0347339c661112c65a2540ed682b322e26f7f36c3c69e15d",
           "mode": "0644"
+        },
+        {
+          "source": "fixtures/resident-fixture/tool.py",
+          "destination": "/usr/local/bin/incypher-fixture-tool",
+          "sha256": "25a5402ecb519028e94fdc17ccd43aa9308a31a400a24fae51ccf62e659615e0",
+          "mode": "0755"
+        },
+        {
+          "source": "fixtures/resident-fixture/input.txt",
+          "destination": "/opt/solver/tool-supply/fixture-input.txt",
+          "sha256": "87de0dca21b2429312a4b9a9150097c67d3eb2dc2167e862e1055a531b52d248",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/resident-fixture/LICENSE.txt",
+          "destination": "/opt/solver/tool-supply/LICENSE.fixture.identity",
+          "sha256": "58755b8e71337177b1dfe00e0fe5d502ca8263743613816f6645c23767a6584e",
+          "mode": "0444"
         }
       ]
     }
