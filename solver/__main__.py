@@ -20,12 +20,14 @@ import os
 import signal
 import sys
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
 from solver import boot, profile
 from solver.board import Board
 from solver.boot import Refusal
+from solver.capability_service import CapabilityService
 from solver.codex import Invocation, asking
 from solver.event_store import EventStoreDamage
 from solver.flag import Flags, Pace
@@ -99,6 +101,28 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
         raise Refusal(f"{boot.MARK} canonical state verification refused this Run — {damage.classification}") from None
     except (OSError, ValueError) as unusable:
         raise Refusal(f"{boot.MARK} {run_state} is not usable as this Run's state — {unusable}") from None
+    capability_service = nullcontext()
+    if boot_id := environ.get("SUPERVISOR_BOOT_ID", ""):
+        capability_service = CapabilityService(
+            state=run_state,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            redactor=Redactor.for_declared_secrets(environ),
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+    with capability_service:
+        return _run_admitted(environ, run_state=run_state, held=held, rules=rules)
+
+
+def _run_admitted(
+    environ: Mapping[str, str],
+    *,
+    run_state: Path,
+    held: boot.Setup,
+    rules: profile.Rules,
+) -> Ending:
+    """Keep capability IPC live beside every admitted v1 Board and inference call."""
+
     board = Board(held.url, held.token)
     # The same Board addressed by nobody. Whether an unauthenticated read is answered is a profile
     # field, and asking it needs a second address rather than a flag — the token is applied by the

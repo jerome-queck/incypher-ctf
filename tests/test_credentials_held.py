@@ -1,7 +1,7 @@
-"""What we hold, answered by a command rather than by knowing where to look.
+"""What the one active `.env` holds, answered without exposing values.
 
 [#59](https://github.com/jerome-queck/incypher-ctf/issues/59) left an acceptance criterion unticked
-on the belief that no IN-CYPHER account existed. One did — `.env.incypher` was populated the whole
+on the belief that no IN-CYPHER account existed. One did — a legacy `.env.incypher` was populated the whole
 time. The repository could not have said so: `.env.*` is gitignored, correctly, so the *state* can
 never be tracked. What it lacked was anything that would *report* it, which is what turned silence
 into a wrong answer.
@@ -90,13 +90,24 @@ def test_rendering_prints_no_value(tmp_path, capsys):
 
 
 def test_an_empty_value_makes_the_command_fail(tmp_path):
-    """Absent is ordinary — an overlay carries only its own board's values. Empty is a defect, and
+    """Absent is ordinary for optional active-board values. Empty is a defect, and
     a pre-flight check that reported it without failing would be read as a pass."""
     env_file(tmp_path, ".env", f"{SECRET}=filled\n")
     assert credentials_held.report(tmp_path) == 0
 
     env_file(tmp_path, ".env", f"{SECRET}=\n")
     assert credentials_held.report(tmp_path) == 1
+
+
+def test_a_legacy_overlay_is_reported_as_ambiguous_authority(tmp_path, capsys):
+    env_file(tmp_path, ".env", f"{SECRET}=active\n")
+    env_file(tmp_path, ".env.incypher", f"{SECRET}=legacy-secret\n")
+
+    assert credentials_held.report(tmp_path) == 1
+    printed = capsys.readouterr().out
+    assert "ambiguous authority" in printed
+    assert ".env.incypher" in printed
+    assert "legacy-secret" not in printed
 
 
 def test_absent_names_are_reported_rather_than_omitted(tmp_path, capsys):
@@ -119,9 +130,7 @@ def test_a_clone_holding_nothing_is_not_a_failure(tmp_path):
 
 
 def test_an_exported_assignment_is_a_holding(tmp_path):
-    """The bug that justified one shared parser: `docs/credentials.md` sources overlays with
-    `. ./.env.incypher`, where `export` is idiomatic, and the earlier reader called the secret
-    absent while its value sat in the file."""
+    """A hand-written `.env` may use shell-style export; it still holds the named secret."""
     holdings = credentials_held.read_holdings(env_file(tmp_path, ".env", "export TEAM_KEY=zzz\n"))
 
     assert holdings["TEAM_KEY"] is credentials_held.SET

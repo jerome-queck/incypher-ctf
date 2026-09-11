@@ -9,11 +9,13 @@ import signal
 import subprocess
 import sys
 import threading
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from solver import boot
 from solver.boot import Refusal
+from solver.credentials import SECRETS
 from solver.event_store import EventStore, EventStoreDamage
 from solver.event_store_contracts import (
     BootClosed,
@@ -31,6 +33,7 @@ from solver.redaction import Redactor
 from solver.replay import verify_and_materialize_run_state
 from solver.supervisor_process import ProcessOutcome, ProcessOwner, SpawnedBoot
 from solver.supervisor_services import ServiceName, SupervisorServices
+from solver.supervisor_custody import SupervisorCustody
 from solver.supervisor_lifecycle import LifecycleWriter
 
 NORMAL = "normal"
@@ -144,7 +147,15 @@ class Supervisor:
             )
         self._lifecycle.append(f"{boot_id}:open", BootOpened(boot_id))
         self._boot_id = boot_id
-        outcome = self._owner.run(boot_id, started=self._record_controller_started)
+        custody = self._services.bootstrap_custody(boot_id)
+        self._lifecycle.append(
+            f"{boot_id}:service:{ServiceName.CREDENTIAL_CUSTODY.value}",
+            ServiceStarted(boot_id=boot_id, service=ServiceName.CREDENTIAL_CUSTODY),
+        )
+        try:
+            outcome = self._owner.run(boot_id, started=self._record_controller_started)
+        finally:
+            custody.close()
         disposition = self._disposition(outcome)
         self._lifecycle.append(
             f"{boot_id}:reaped",
@@ -235,12 +246,16 @@ def preflight_isolation(environ, state: Path, run_id: str) -> Path:
     return write_isolation_receipt(state, run_id, strict_preflight(environ))
 
 
-def launch_boot(_boot_id: str, environ) -> SpawnedBoot:
+def launch_boot(boot_id: str, environ) -> SpawnedBoot:
+    controller_environment = dict(environ)
+    controller_environment["SUPERVISOR_BOOT_ID"] = boot_id
     process = subprocess.Popen(
         [sys.executable, "-m", "solver"],
-        env=dict(environ),
+        env=controller_environment,
         start_new_session=True,
     )
+    for name in SECRETS:
+        environ.pop(name, None)
     return SpawnedBoot(process)
 
 
@@ -280,6 +295,20 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
     try:
         run_id = boot.run_identity(environ)
         redactor = Redactor.for_declared_secrets(environ)
+        if not isinstance(environ, MutableMapping):
+            raise Refusal(f"{boot.MARK} Supervisor bootstrap environment is not mutable")
+        controller_environment = dict(environ)
+
+        def timestamp() -> str:
+            return dt.datetime.now(dt.timezone.utc).isoformat()
+
+        custody = SupervisorCustody(
+            state=state,
+            run_id=run_id,
+            environment=environ,
+            redactor=redactor,
+            timestamp=timestamp,
+        )
         supervisor = Supervisor(
             state=state,
             run_id=run_id,
@@ -288,7 +317,8 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
                 verify_replay=lambda: verify_state(state, run_id, redactor),
                 admit_storage=lambda: admit_storage(state, run_id),
                 preflight_isolation=lambda: preflight_isolation(environ, state, run_id),
-                launch_controller=lambda boot_id: launch_boot(boot_id, environ),
+                bootstrap_custody=custody.open,
+                launch_controller=lambda boot_id: launch_boot(boot_id, controller_environment),
                 reap_children=reap_children,
             ),
             stay_quiescent=stay_quiescent,

@@ -58,7 +58,7 @@ def test_an_empty_value_is_not_an_unset_one(name, homes):
 
 
 def test_absence_is_the_control_and_costs_nothing(homes):
-    """The metered credential lives only in the scored Board's overlay, so a practice Run does not
+    """The metered credential lives only in the scored Board's active `.env`, so a practice Run does not
     hold it at all — and structurally cannot spend money. Its absence must therefore be ordinary."""
     read = setup(env(), homes=homes)
 
@@ -68,7 +68,7 @@ def test_absence_is_the_control_and_costs_nothing(homes):
 
 def test_a_metered_rung_nobody_named_is_no_rung_at_all(tmp_path):
     """*Absence is the control*, as a mechanism rather than a habit. The metered `CODEX_HOME` is
-    named by a variable that belongs in the scored Board's overlay, so a practice Run pointed at
+    named by a variable that belongs only in the scored Board's active `.env`, so a practice Run pointed at
     another Board cannot reach for metered billing however the disk is arranged — the login can be
     sitting right there and it is still not in the chain."""
     subscription, metered = tmp_path / "codex", tmp_path / "metered"

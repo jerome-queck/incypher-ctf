@@ -12,8 +12,8 @@ out too late:
 
 - **[`docs/credentials.md`](docs/credentials.md) — read it before you point anything at a board.**
   Two of the secrets there behave unlike any credential you have handled: the **team key** cannot
-  be rotated, and the IN-CYPHER overlay carries a **live metered key** that spends real money. The
-  section below on committing a credential explains what each means when it goes wrong.
+  be rotated, and the active IN-CYPHER `.env` carries a **live metered key** that spends real
+  money. The section below on committing a credential explains what each means when it goes wrong.
 - **The [Matt Pocock skills](.claude/skills/) are installed on clone** — `/triage`, `/implement`,
   `/code-review`, `/grill-with-docs` and the rest, for Claude Code and for Codex. They are how work
   is done here rather than an optional extra: start with `/ask-matt` if you are unsure which fits.
@@ -158,8 +158,8 @@ nothing, so make sure it does.
 control — and the organisers publish no working channel to ask
 ([#36](https://github.com/jerome-queck/incypher-ctf/issues/36)). There is nothing to revoke, so a
 leak is simply not recoverable, which makes it the one secret here to handle as if the scan did
-not exist. It lives in the `.env.incypher` overlay rather than `.env` for exactly that reason: a
-run pointed at a practice board never holds it.
+not exist. It lives only in the active IN-CYPHER `.env`; a practice board's `.env` omits it, so
+that Run never holds it.
 
-The **metered LLM key** in that same overlay fails the other way — rotation works fine, and the
+The **metered LLM key** in that same scored `.env` fails the other way — rotation works fine, and the
 spend between leak and revocation is ours. Revoke first, count the cost after.

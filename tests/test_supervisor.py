@@ -47,11 +47,17 @@ class ExitedBoot:
         return False
 
 
+class EmptyCustody:
+    def close(self) -> None:
+        pass
+
+
 def services(*, verify=lambda: None, admit=lambda: None, isolate=lambda: None, launch, reap=lambda: 0):
     return SupervisorServices(
         verify_replay=verify,
         admit_storage=admit,
         preflight_isolation=isolate,
+        bootstrap_custody=lambda _boot_id: EmptyCustody(),
         launch_controller=launch,
         reap_children=reap,
     )
@@ -103,6 +109,7 @@ def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp
         "service-started",
         "boot-open",
         "service-started",
+        "service-started",
         "child-reaped",
         "boot-close",
         "run-close",
@@ -111,6 +118,7 @@ def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp
         "verified-replay",
         "storage-admission",
         "strict-isolation",
+        "credential-custody",
         "run-controller",
     ]
     assert lifecycle[-3]["reaped_children"] == 3
@@ -124,6 +132,7 @@ def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp
         "verified-replay",
         "storage-admission",
         "strict-isolation",
+        "credential-custody",
         "run-controller",
     ]
     assert receipt["terminal_disposition"] == NORMAL
@@ -375,6 +384,15 @@ def test_a_signal_latched_during_launch_is_recorded_and_forwarded(tmp_path):
 
 def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tmp_path, monkeypatch, capsys):
     trace = []
+
+    class FakeCustody:
+        def __init__(self, **_options) -> None:
+            pass
+
+        def open(self, boot_id: str) -> EmptyCustody:
+            trace.append(f"credential-custody:{boot_id}")
+            return EmptyCustody()
+
     monkeypatch.setattr(
         supervisor_module,
         "verify_and_materialize_run_state",
@@ -396,11 +414,18 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
         lambda boot_id, _environ: trace.append(f"run-controller:{boot_id}") or ExitedBoot(0),
     )
     monkeypatch.setattr(supervisor_module, "reap_children", lambda: 0)
+    monkeypatch.setattr(supervisor_module, "SupervisorCustody", FakeCustody)
 
     exit_code = supervisor_module.main({"RUN_ID": "run-main"}, state=tmp_path, stay_quiescent=False)
 
     assert exit_code == 0
-    assert trace == ["verified-replay", "storage-admission", "strict-isolation", "run-controller:boot-000001"]
+    assert trace == [
+        "verified-replay",
+        "storage-admission",
+        "strict-isolation",
+        "credential-custody:boot-000001",
+        "run-controller:boot-000001",
+    ]
     assert "normal: Run run-main, Boot boot-000001" in capsys.readouterr().out
 
 

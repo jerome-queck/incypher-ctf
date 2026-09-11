@@ -6,7 +6,7 @@ is a repository file, and no container ever sees one.
 
 [ADR-0010](../docs/adr/0010-the-subscription-is-the-credential-and-nothing-waits-for-a-human.md)'s
 requirement is only as strong as its phrase is unambiguous, and the template alone answers it three
-ways: `^[A-Z_]+=` finds four names, counting the commented-out overlay-only keys finds six, and
+ways: `^[A-Z_]+=` finds live names, counting optional commented-out keys finds more, and
 neither count is right, because `CTFD_URL` is a variable and not a secret. The two keys the obvious
 parser drops are the two that spend money. So what a declaration *is* is decided once, here
 ([#61](https://github.com/jerome-queck/incypher-ctf/issues/61)).

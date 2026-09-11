@@ -1,6 +1,7 @@
 """Say which credentials this machine holds, without ever showing one.
 
-`.env` and every overlay are gitignored, correctly — the values must never be tracked. The cost is
+`.env` is gitignored, correctly — the values must never be tracked. Legacy overlays are reported
+as ambiguous authority that must be migrated, never composed with the active file. The cost is
 that the repository cannot answer *"do we have an account on that board?"*, and
 [#59](https://github.com/jerome-queck/incypher-ctf/issues/59) is what that costs: a session read the
 repository, found nothing saying an IN-CYPHER account existed, and concluded there was none. There
@@ -44,7 +45,7 @@ TEMPLATE_NAME = ".env.example"
 
 
 def env_files(directory: Path) -> list[Path]:
-    """Every env file in the directory, the default board first and the overlays after it."""
+    """The active env file followed by legacy files that must be diagnosed and removed."""
     default = directory / ".env"
     overlays = sorted(path for path in directory.glob(".env.*") if path.name != TEMPLATE_NAME)
     return ([default] if default.exists() else []) + overlays
@@ -84,7 +85,7 @@ def render(path: Path, holdings: dict[str, Holding]) -> list[str]:
 
 
 def report(directory: Path) -> int:
-    """Print the holdings per file. Non-zero when any value is empty rather than merely absent."""
+    """Print holdings; fail on an empty value or any legacy environment authority."""
     files = env_files(directory)
     if not files:
         # Not a failure. A fresh clone holds nothing, which is the correct answer to the question
@@ -94,16 +95,18 @@ def report(directory: Path) -> int:
         return 0
 
     empties = 0
+    legacy = [path.name for path in files if path.name != ".env"]
     for path in files:
         holdings = read_holdings(path)
         empties += sum(holding is Holding.EMPTY for holding in holdings.values())
         print("\n" + "\n".join(render(path, holdings)))
 
-    print(
-        f"\n{len(files)} env file(s). Absent is ordinary — an overlay carries only its own board's values."
-        + (f"\n{empties} empty value(s): delete the line rather than blanking it." if empties else "")
-    )
-    return 1 if empties else 0
+    print(f"\n{len(files)} env file(s). Absent is ordinary for optional active-board values.")
+    if legacy:
+        print(f"ambiguous authority: migrate and remove {', '.join(legacy)}")
+    if empties:
+        print(f"{empties} empty value(s): delete the line rather than blanking it.")
+    return 1 if empties or legacy else 0
 
 
 if __name__ == "__main__":

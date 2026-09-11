@@ -13,11 +13,81 @@ board and no network, which is what makes it worth a seam of its own
 ([#22](https://github.com/jerome-queck/incypher-ctf/issues/22)).
 """
 
+import hashlib
+import os
 import re
+import tempfile
+from pathlib import Path
 
-# `export` is a shell keyword rather than part of the name — `docs/credentials.md` sources overlays
-# with `. ./.env.incypher`, so it is idiomatic in exactly the files this reads.
+from solver.env_cutover import EnvCutoverResult, completed_cutover
+
+# `export` is a shell keyword rather than part of the name. Accept it when reading a hand-written
+# `.env`, even though Docker's env-file syntax does not require it.
 _ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+
+_TEMPLATE_NAME = ".env.example"
+
+
+class AmbiguousEnvironmentAuthority(ValueError):
+    """Raised when a legacy environment overlay still claims authority."""
+
+
+def assert_unambiguous(path: Path) -> None:
+    """Reject legacy env overlays that would make the active file's authority unclear."""
+
+    if path.name != ".env":
+        raise AmbiguousEnvironmentAuthority("the sanctioned environment authority must be named .env")
+    legacy = sorted(
+        candidate.name
+        for candidate in path.parent.glob(".env.*")
+        if candidate.name != _TEMPLATE_NAME and candidate.is_file()
+    )
+    if legacy:
+        raise AmbiguousEnvironmentAuthority(f"legacy environment authority: {', '.join(legacy)}")
+
+
+def _fsync_parent(directory: Path) -> None:
+    """Flush the directory entry when the operating system supports directory fsync."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        directory_fd = os.open(directory, flags)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+    finally:
+        os.close(directory_fd)
+
+
+def atomic_replace(path: Path, text: str) -> EnvCutoverResult:
+    """Replace an active env file atomically, refusing legacy overlays first."""
+
+    assert_unambiguous(path)
+
+    descriptor, temporary = tempfile.mkstemp(prefix=".setup-env-replace-", dir=path.parent)
+    replaced = False
+    try:
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            descriptor = -1
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        replaced = True
+        _fsync_parent(path.parent)
+        return completed_cutover(path, hashlib.sha256(text.encode("utf-8")).hexdigest())
+    finally:
+        if not replaced:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+        if descriptor != -1:
+            os.close(descriptor)
 
 
 def _unquote(value: str) -> str:

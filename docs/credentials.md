@@ -10,9 +10,11 @@ never leaves your machine.
 bash scripts/setup-board.sh
 ```
 
-It opens each page, tells you exactly what to click, takes the values with hidden input, writes
-`.env`, and finishes by running the probe against the board. Re-running it is safe — pressing
-Enter at any prompt keeps the value already saved.
+It opens each page, tells you exactly what to click, takes the values with hidden input, stages the
+complete result, atomically replaces `.env`, and finishes by running the probe against the board.
+Re-running it is safe — pressing Enter at any prompt keeps the value already saved. A legacy
+`.env.<event>` file makes setup refuse before the first prompt: merge the intended values into
+`.env`, remove every legacy overlay, then rerun setup.
 
 By hand instead: `cp .env.example .env`, then fill it in with an editor. Never `echo` a real
 token into a shell — it lands in your history.
@@ -67,17 +69,17 @@ are easy to get wrong:
   comes out of the run's headroom, and the day-1 rehearsal spends from the run's allowance rather
   than from nothing. Keep the primary account quiet before the run.
 
-**The metered key lives in the scored board's overlay, never in `.env`.** The chain is automatic, so
-a practice run left going overnight would switch to paid the moment the subscription capped and
-spend real money unwatched. Putting the key in the overlay means a Brunner run *structurally cannot*
-— the credential is not in its environment at all. Same mechanism as `TEAM_KEY`, same reason.
+**The metered key lives only in the scored board's active `.env`.** The chain is automatic, so a
+practice run left going overnight would switch to paid the moment the subscription capped and
+spend real money unwatched. A practice `.env` omits the key entirely, so that Run structurally
+cannot spend it. Switching boards means one atomic `.env` replacement, never composing files.
 
 That is also why the scored key carries a **budget alert and not an enforcing spend limit**: a
 console limit that blocks requests is the same unwatched hard stop we are designing around. Practice
 keys are the opposite — cap those hard, because a stop there costs a rerun and nothing else.
 
 **A lent credential is rotated by its owner.** A teammate's subscription token is their personal
-credential: it rides in the event overlay like everything else, and if a run misbehaves the rotation
+credential: it rides in the active `.env` like everything else, and if a run misbehaves the rotation
 is their call, on request, not ours to do for them.
 
 **Codex authenticates by file, not by environment — so it is the one credential that does not
@@ -189,35 +191,28 @@ lengthen one, which is what makes a half-hour practice Run possible without any 
 to buy a Run past the event it is playing. `CODEX_MODEL` is the model every rung of the chain runs
 at, config rather than a constant because which model a subscription serves is account state.
 
-## One board at a time, and the overlay for the others
+## One board, one environment authority
 
-`.env` holds exactly one board, because `CTFD_URL` is the guard described above and a file that
-held two would need something else to choose between them. A second board gets an **overlay file**
-named for it — `.env.incypher`, `.env.<event>` — carrying only that board's values:
+`.env` holds exactly one board and every credential sanctioned for that board. There is no merge
+order and no overlay: `.env.incypher`, `.env.<event>`, and any other `.env.*` file except the
+tracked `.env.example` are legacy ambiguous authority. Setup refuses while one exists.
 
-```
-.env             CTFD_URL, CTFD_API_TOKEN  → the default board   + the subscription credential
-.env.incypher    CTFD_URL, CTFD_API_TOKEN, TEAM_KEY, <metered key> → IN-CYPHER
-```
+To switch boards, run `bash scripts/setup-board.sh`. It edits a private same-directory staging file,
+flushes it, and replaces `.env` atomically only after the wizard succeeds. A failed or interrupted
+setup leaves the previous `.env` authoritative. To perform the one-time migration from an overlay,
+manually combine the intended board values into `.env`, delete the legacy file, and rerun setup.
 
-Source it in a subshell, so the default board is never silently switched:
-
-```bash
-( set -a; . ./.env.incypher; set +a; python3 scripts/ctfd_probe.py --no-attempt )
-```
-
-**That table is the naming convention, not an inventory.** Which overlays exist on a given machine,
-and which of their values are filled, is state — it changes, it is gitignored by design, and a
-tracked copy would go stale the first time someone minted a token. Ask the machine instead:
+The values are state — gitignored and necessarily absent from the repository. Ask the machine what
+the active `.env` holds instead:
 
 ```bash
 python3 scripts/credentials_held.py
 ```
 
-It prints **set / empty / absent** for every declared name in `.env` and each overlay, and **never
-prints a value**. Absent is ordinary: an overlay carries only its own board's values. **Empty is a
-defect and exits non-zero** — the trap named above, where the variable occupies its slot and
-authenticates with nothing.
+It prints **set / empty / absent** for every declared name and **never prints a value**. Absent is
+ordinary for a credential the active board does not require. **Empty is a defect and exits
+non-zero** — the variable occupies its slot and authenticates with nothing. During migration it
+also exposes a legacy filename as configuration to remove, never as a second authority to compose.
 
 This exists because its absence cost a wrong answer. Resolving
 [#59](https://github.com/jerome-queck/incypher-ctf/issues/59), a session read this repository, found
@@ -227,13 +222,8 @@ question in one line. The repository was not wrong to be silent; it had no way t
 **Silence about a secret is not evidence there is no secret**, and one command is cheaper than
 remembering that.
 
-This works because the loader is `os.environ.setdefault` — **the environment wins and `.env` only
-fills the gaps** — so the overlay's two values shadow `.env`'s while everything it does not mention
-still comes from `.env`. `.gitignore` already covers the pattern: `.env.*` is ignored, with
-`.env.example` the single exception.
-
-**`TEAM_KEY` belongs in the overlay, not in `.env`.** It is specific to the IN-CYPHER platform and
-a practice board has no equivalent, so its *absence* on a run pointed elsewhere is the point: a
+**`TEAM_KEY` belongs only in an IN-CYPHER `.env`.** It is specific to the IN-CYPHER platform and a
+practice board has no equivalent, so its *absence* from that board's active `.env` is the point: a
 container working a Brunner challenge never holds an IN-CYPHER credential it has no use for, and
 cannot leak one if a challenge gets code execution inside it. That is the same rule
 [`ctfd_probe.py`](../scripts/ctfd_probe.py) already applies one level down, withholding the CTFd
@@ -241,7 +231,7 @@ token when a challenge file redirects to object storage that never asked for it.
 here than there, because the team key is the one secret in the table that cannot be rotated.
 
 **The metered key belongs there for a different reason, and it is worth keeping the two apart.** The
-team key is in the overlay because a Brunner run has no *use* for it. The metered key is there
+team key is in the scored `.env` because a Brunner run has no *use* for it. The metered key is there
 because a Brunner run would *use* it — the chain is automatic, so an overnight practice run would
 switch to paid the moment the subscription capped. Absence is the control in both cases; what it is
 protecting against is a leak in one and a bill in the other.
@@ -271,13 +261,12 @@ than by the environment. Getting only the first leaves no subscription login, an
 5.5 hours on the metered key. If injection itself is refused, **we do not compete rather than bake
 a key into a layer** (ADR-0010).
 
-**The environment stops at the orchestrator.** The Solver runs challenge-supplied code — archives,
-binaries, whatever a pwn challenge hands it — as root, in this same container. So the orchestrator
-reads every credential once at boot and spawns each Step with an explicit **allowlist** environment
-(`PATH`, `HOME`, `TERM`, `LANG`), never an inherited one. Nothing that executes a challenge's code
-can read a secret out of its own environment, and the team key in particular is passed as an
-argument inside the `Target` seam rather than exported at all — it is the one value here we could
-never replace.
+**Bootstrap custody stops at owner-specific brokers.** The v2 seam transfers Board, Codex and CPA
+material once into separate broker processes, clears its mutable source buffers and temporary
+files, and gives hostile execution only scoped opaque handles. Every handle request re-derives the
+kernel peer identity and checks the canonical Work generation. A Step still receives only the
+explicit `PATH`, `HOME`, `TERM`, and `LANG` allowlist. The seam exists beside v1 calls; each domain
+ticket migrates its own operation semantics rather than teaching the custody layer those semantics.
 
 **Two more places the values exist, and this is now measured rather than expected.**
 `docker run --env-file` resolves the file at `run` and keeps the values in the container's config.

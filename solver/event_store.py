@@ -28,6 +28,9 @@ from solver.event_store_contracts import (
     LIFECYCLE_RECORDED,
     LifecycleRecorded,
     WORK_GENERATION_RECORDED,
+    CAPABILITY_CUSTODY_RECORDED,
+    CapabilityCustodyRecorded,
+    CapabilityRecord,
     GenerationAuthority,
     GenerationClassification,
     GenerationDisposition,
@@ -140,7 +143,10 @@ class EventStore:
 
 __all__ = [
     "BlobDigestMismatchError",
+    "CAPABILITY_CUSTODY_RECORDED",
     "CANONICAL_SCHEMA_VERSION",
+    "CapabilityCustodyRecorded",
+    "CapabilityRecord",
     "CommittedEvent",
     "DamageKind",
     "DuplicateSequenceError",
