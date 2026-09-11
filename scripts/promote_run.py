@@ -124,12 +124,10 @@ class Judgement:
 
 
 def held(directory: Path) -> list[tuple[str, str]]:
-    """Every declared secret value this machine holds, from `.env` and from every overlay.
+    """Every declared secret value on disk, including legacy files awaiting removal.
 
-    The overlays matter as much as `.env` and are the easy thing to forget: the team key lives in
-    `.env.<event>` rather than in `.env` precisely so a Run pointed elsewhere never holds it
-    (`docs/credentials.md`), so a scan that read only `.env` would be blind to the one credential
-    that cannot be rotated.
+    A legacy `.env.<event>` is refused as authority, but until it is removed its secret bytes still
+    matter to a leak scan. Reading it here is defensive coverage, not configuration composition.
 
     A **list of pairs and not a mapping**, because one name legitimately holds different values in
     different files — a `CTFD_API_TOKEN` per Board is the standing case — and a mapping keeps only

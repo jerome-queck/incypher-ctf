@@ -33,9 +33,9 @@ AUTH = "auth.json"
 # The chain, in ADR-0010's order — subscription first, metered last — as directories rather than
 # keys, because the CLI authenticates by file (ADR-0011): a rung *is* a `CODEX_HOME` that has been
 # logged in. The metered one is named by a **variable** and the subscription by a constant, and that
-# asymmetry is the control: `CODEX_HOME_METERED` belongs in the scored Board's overlay beside the
-# metered API keys, so a practice Run pointed at another Board cannot reach for metered billing at
-# all — no flag to set and no mode to remember (ADR-0010, `docs/credentials.md`).
+# asymmetry is the control: `CODEX_HOME_METERED` belongs only in the scored Board's active `.env`
+# beside the metered API keys. A practice `.env` omits it, so that Run cannot reach for metered
+# billing at all — no flag to set and no mode to remember (ADR-0040, `docs/credentials.md`).
 SUBSCRIPTION = "codex-subscription"
 METERED = "codex-metered"
 

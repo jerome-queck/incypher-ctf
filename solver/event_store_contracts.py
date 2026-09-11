@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from solver.capability_event_contracts import CapabilityFact
 
 CANONICAL_SCHEMA_VERSION = 1
 EVENTS_DIRECTORY = "canonical"
@@ -15,6 +18,7 @@ RECEIPT_FILENAME = "canonical-event-store.receipt.json"
 OBSERVATION_RECORDED = "observation.recorded"
 LIFECYCLE_RECORDED = "lifecycle.recorded"
 WORK_GENERATION_RECORDED = "work-generation.recorded"
+CAPABILITY_CUSTODY_RECORDED = "capability-custody.recorded"
 RECEIPT_TYPE = "canonical-event-store"
 
 EMPTY_BLOB_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -69,10 +73,22 @@ class GenerationClassification(str, enum.Enum):
     SUPERSEDED = "superseded-generation"
 
 
+class CapabilityRecord(str, enum.Enum):
+    ENV_CUTOVER = "env-cutover"
+    TRANSFER_ACCEPTED = "transfer-accepted"
+    SOURCE_CLEARED = "source-cleared"
+    PROBE_RECORDED = "probe-recorded"
+    ISSUED = "issued"
+    AUTHORIZED = "authorized"
+    DENIED = "denied"
+    REVOKED = "revoked"
+
+
 class ServiceName(str, enum.Enum):
     VERIFIED_REPLAY = "verified-replay"
     STORAGE_ADMISSION = "storage-admission"
     STRICT_ISOLATION = "strict-isolation"
+    CREDENTIAL_CUSTODY = "credential-custody"
     RUN_CONTROLLER = "run-controller"
 
 
@@ -568,7 +584,133 @@ class WorkGenerationRecorded:
             raise InvalidEventError("Work-generation transition cannot carry a sealed body", sequence=sequence)
 
 
-CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorded
+@dataclass(frozen=True)
+class CapabilityCustodyRecorded:
+    """Envelope for one record-specific sanitized capability fact."""
+
+    event_id: str
+    fact: CapabilityFact
+    ts: str = ""
+
+    @property
+    def event_type(self) -> str:
+        return CAPABILITY_CUSTODY_RECORDED
+
+    @property
+    def identity(self) -> str:
+        return self.event_id
+
+    @classmethod
+    def identity_from_payload(cls, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("event_id", ""))
+
+    def payload(self, *, blob_digest: str, blob_bytes: int) -> dict[str, Any]:
+        payload = {
+            "event_id": self.event_id,
+            "record": self.fact.record.value,
+            "handle_digest": "",
+            "run_id": "",
+            "boot_id": "",
+            "generation_id": "",
+            "lane_id": "",
+            "attempt_id": "",
+            "step_id": "",
+            "scope": "",
+            "broker": "",
+            "secret_names": [],
+            "probe_kind": "",
+            "probe_result": "",
+            "evidence_digest": "",
+            "peer_uid": -1,
+            "peer_identity_digest": "",
+            "decision": "",
+            "reason": "",
+            "ts": self.ts,
+            "blob_digest": blob_digest,
+            "blob_bytes": blob_bytes,
+        }
+        payload.update(self.fact.fields())
+        payload["secret_names"] = list(payload["secret_names"])
+        return payload
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any], *, sequence: int) -> None:
+        strings = (
+            "event_id",
+            "record",
+            "handle_digest",
+            "run_id",
+            "boot_id",
+            "generation_id",
+            "lane_id",
+            "attempt_id",
+            "step_id",
+            "scope",
+            "broker",
+            "probe_kind",
+            "probe_result",
+            "evidence_digest",
+            "peer_identity_digest",
+            "decision",
+            "reason",
+            "ts",
+            "blob_digest",
+        )
+        missing = [field for field in (*strings, "secret_names", "peer_uid", "blob_bytes") if field not in payload]
+        if missing:
+            raise InvalidEventError(
+                f"Capability-custody payload is missing required fields: {', '.join(missing)}",
+                sequence=sequence,
+            )
+        if any(not isinstance(payload[field], str) for field in strings):
+            raise InvalidEventError("Capability-custody payload has a non-string field", sequence=sequence)
+        if not isinstance(payload["secret_names"], list) or any(
+            not isinstance(name, str) or not name for name in payload["secret_names"]
+        ):
+            raise InvalidEventError("Capability-custody secret names are invalid", sequence=sequence)
+        for field in ("peer_uid", "blob_bytes"):
+            if not isinstance(payload[field], int) or isinstance(payload[field], bool):
+                raise InvalidEventError(
+                    f"Capability-custody payload field {field!r} is not an integer", sequence=sequence
+                )
+        if not payload["event_id"] or payload["record"] not in {item.value for item in CapabilityRecord}:
+            raise InvalidEventError("Capability-custody identity or record is unsupported", sequence=sequence)
+        for field in ("blob_digest",):
+            digest = payload[field]
+            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                raise InvalidEventError(f"Capability-custody {field} is not lowercase SHA-256", sequence=sequence)
+        if payload["blob_bytes"] != 0 or payload["blob_digest"] != EMPTY_BLOB_DIGEST:
+            raise InvalidEventError("Capability-custody events cannot carry a sealed body", sequence=sequence)
+        record = payload["record"]
+        handle_records = {
+            CapabilityRecord.ISSUED.value,
+            CapabilityRecord.AUTHORIZED.value,
+            CapabilityRecord.DENIED.value,
+            CapabilityRecord.REVOKED.value,
+        }
+        if record in handle_records and payload["handle_digest"]:
+            digest = payload["handle_digest"]
+            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                raise InvalidEventError("Capability handle digest is not lowercase SHA-256", sequence=sequence)
+        elif payload["handle_digest"]:
+            raise InvalidEventError("Capability non-handle record carries a handle digest", sequence=sequence)
+        if record in {
+            CapabilityRecord.ENV_CUTOVER.value,
+            CapabilityRecord.TRANSFER_ACCEPTED.value,
+            CapabilityRecord.SOURCE_CLEARED.value,
+            CapabilityRecord.PROBE_RECORDED.value,
+        }:
+            digest = payload["evidence_digest"]
+            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                raise InvalidEventError("Capability evidence digest is not lowercase SHA-256", sequence=sequence)
+        elif payload["evidence_digest"]:
+            raise InvalidEventError("Capability handle record carries an evidence digest", sequence=sequence)
+        from solver.capability_event_contracts import validate_capability_fact
+
+        validate_capability_fact(payload, sequence=sequence)
+
+
+CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorded | CapabilityCustodyRecorded
 
 
 def event_contract(event_type: str):
@@ -576,6 +718,7 @@ def event_contract(event_type: str):
         OBSERVATION_RECORDED: ObservationRecorded,
         LIFECYCLE_RECORDED: LifecycleRecorded,
         WORK_GENERATION_RECORDED: WorkGenerationRecorded,
+        CAPABILITY_CUSTODY_RECORDED: CapabilityCustodyRecorded,
     }
     return contracts.get(event_type)
 

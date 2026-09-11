@@ -19,8 +19,7 @@ def test_a_plain_assignment():
 
 @pytest.mark.parametrize("line", ["export TEAM_KEY=zzz", "  export   TEAM_KEY=zzz", "export TEAM_KEY = zzz"])
 def test_export_is_a_shell_prefix_and_not_part_of_the_name(line: str):
-    """`docs/credentials.md` sources overlays with `. ./.env.incypher`, where `export` is idiomatic —
-    so this is the shape a real file is most likely to take, not an exotic one."""
+    """A hand-written `.env` may use shell-style export without changing the variable name."""
     assert env_file.assignments(line) == {"TEAM_KEY": "zzz"}
 
 

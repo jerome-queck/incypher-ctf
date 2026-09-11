@@ -16,6 +16,7 @@ class SupervisorServices:
     verify_replay: Callable[[], object]
     admit_storage: Callable[[], None]
     preflight_isolation: Callable[[], object]
+    bootstrap_custody: Callable[[str], object]
     launch_controller: Callable[[str], BootProcess]
     reap_children: Callable[[], int]
 

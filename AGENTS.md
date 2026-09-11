@@ -60,10 +60,10 @@ verdict by clock. It cost turning FileVault off; ADR-0013 records what that expo
 - Domain glossary is `CONTEXT.md`; decisions are ADRs in `docs/adr/` (`docs/agents/domain.md`).
 - Keep secrets out of the repo. **Never commit a token.** The conformance check scans every pull
   request for one and fires *after* the push, so a caught credential is burned: rotate it first,
-  then clean up. The **team key** and the **LLM API keys** belong in an untracked env file, `.env`
-  for the board in play and a `.env.<event>` overlay for any other. The full response, and the one
-  secret that **cannot be rotated** (the team key: the Board displays that value rather than
-  minting it), are in `CONTRIBUTING.md` and `docs/credentials.md`.
+  then clean up. The **team key** and the **LLM API keys** belong only in the one untracked `.env`
+  for the board in play; legacy `.env.<event>` overlays are refused as ambiguous authority. The
+  full response, and the one secret that **cannot be rotated** (the team key: the Board displays
+  that value rather than minting it), are in `CONTRIBUTING.md` and `docs/credentials.md`.
 
 ## Code standards
 

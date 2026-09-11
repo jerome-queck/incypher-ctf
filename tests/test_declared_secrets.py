@@ -3,7 +3,7 @@
 [ADR-0010](../docs/adr/0010-the-subscription-is-the-credential-and-nothing-waits-for-a-human.md)
 makes the redactor's coverage a failing check rather than a leaked run — but only as strongly as
 the phrase *"every secret variable in `.env.example`"* is unambiguous, and it is not. Grepping
-`^[A-Z_]+=` finds four names; counting the commented-out overlay-only keys finds six; and neither
+`^[A-Z_]+=` finds live names; counting optional commented-out keys finds more; and neither
 is the answer, because `CTFD_URL` is a variable and not a secret. These tests bind the template to
 the one list that settles it.
 """
@@ -33,7 +33,7 @@ def test_a_name_is_never_both_a_secret_and_not_one():
 
 
 @pytest.mark.parametrize("name", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
-def test_the_commented_out_overlay_keys_are_found(name: str):
+def test_the_commented_out_optional_keys_are_found(name: str):
     """The whole bug. Both are commented out in the template because an empty value is not an unset
     one, and the obvious parser therefore misses exactly the two keys that cost money."""
     assert name in declared_secrets.template_declarations(TEMPLATE)
