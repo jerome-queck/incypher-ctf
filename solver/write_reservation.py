@@ -119,6 +119,11 @@ class WriteAuthority:
         *,
         pool: Pool = Pool.SHARED,
         retention: RetentionPolicy = RetentionPolicy.RELEASE,
+        floor: Capacity | None = None,
+        refusal_pool: Pool | None = None,
+        capture_headroom: bool = False,
+        retry_aborted: bool = False,
+        retry_released: bool = False,
     ) -> WriteReservation:
         pool = Pool(pool)
         retention = RetentionPolicy(retention)
@@ -128,22 +133,29 @@ class WriteAuthority:
         with self._storage.locked():
             if current := self._current_locked(key):
                 self._assert_same_effect(current, identity.fingerprint)
-                if current.state not in {ReservationState.ABORTED, ReservationState.REFUSED} and (
-                    current.retention is not retention
-                ):
-                    raise ReservationConflict("idempotency key changed its reserved-record policy")
-                return current
+                retryable = (retry_aborted and current.state is ReservationState.ABORTED) or (
+                    retry_released and current.state is ReservationState.RELEASED
+                )
+                if not retryable:
+                    if current.state not in {ReservationState.ABORTED, ReservationState.REFUSED} and (
+                        current.retention is not retention
+                    ):
+                        raise ReservationConflict("idempotency key changed its reserved-record policy")
+                    return current
+            headroom = self._storage.headroom_locked()
+            remaining = headroom[pool.value]
             slots = self._storage.available_object_slots_locked(pool, need.objects)
-            extent = self.extent_path(pool)
             if (
-                extent.stat().st_size < need.bytes
+                not remaining.fits(need)
                 or len(slots) < need.objects
-                or self._storage.available_operations_locked(pool) < need.operations
+                or (floor is not None and not (remaining - need).fits(floor))
             ):
-                self._record_refusal_locked(key, identity, need, pool)
+                self._record_refusal_locked(key, identity, need, pool, headroom, refusal_pool, capture_headroom)
                 raise ReservationUnavailable(
                     "whole effect path does not fit reserved bytes, objects, and durability operations"
                 )
+            grant_headroom = dict(headroom)
+            grant_headroom[pool.value] = remaining - need
             reservation = WriteReservation(
                 key=key,
                 identity=self._sanitized_identity(identity),
@@ -154,7 +166,8 @@ class WriteAuthority:
                 object_slots=slots,
                 boot_id=self._boot_id,
                 retention=retention,
-                grant_remaining_bytes=extent.stat().st_size - need.bytes,
+                grant_remaining_bytes=grant_headroom[pool.value].bytes,
+                grant_headroom=grant_headroom if capture_headroom else None,
             )
             self._storage.append_locked(reservation)
             try:
@@ -184,6 +197,23 @@ class WriteAuthority:
     def abort(self, reservation: WriteReservation, reason: str) -> WriteReservation:
         return self._finish(reservation, ReservationState.ABORTED, {"reason": reason})
 
+    def release_retained(self, reservation: WriteReservation, reason: str) -> WriteReservation:
+        with self._storage.locked():
+            current = self._require_current_locked(reservation)
+            if current.state is ReservationState.RELEASED:
+                return current
+            if not current.retention.retains_object or current.state not in FINAL_STATES:
+                raise ReservationConflict("only a crash-durable retained grant can be released")
+            released = current.transitioned(
+                ReservationState.RELEASED,
+                {"reason": _bounded_text(reason, self._redactor)},
+                retention=RetentionPolicy.RELEASE,
+            )
+            self._storage.append_locked(released)
+            if self._storage.release_object_slots_locked(released):
+                self._storage.replenish_extent_locked(released.pool, released.need.bytes)
+            return released
+
     def record_terminal(
         self,
         key: str,
@@ -202,6 +232,10 @@ class WriteAuthority:
     def current(self, key: str) -> WriteReservation | None:
         with self._storage.locked():
             return self._current_locked(key)
+
+    def reservations(self) -> tuple[WriteReservation, ...]:
+        with self._storage.locked():
+            return tuple(self._storage.latest_locked().values())
 
     def trace(self, key: str) -> list[dict[str, Any]]:
         with self._storage.locked():
@@ -287,8 +321,12 @@ class WriteAuthority:
         identity: EffectIdentity,
         need: Capacity,
         pool: Pool,
+        headroom: Mapping[str, Capacity],
+        refusal_pool: Pool | None,
+        capture_headroom: bool,
     ) -> None:
-        if self._storage.available_operations_locked(pool) < 1:
+        ledger_pool = pool if refusal_pool is None else Pool(refusal_pool)
+        if self._storage.available_operations_locked(ledger_pool) < 1:
             return
         self._storage.append_locked(
             WriteReservation(
@@ -300,7 +338,10 @@ class WriteAuthority:
                 state=ReservationState.REFUSED,
                 observation={"reason": "capacity-exhausted"},
                 boot_id=self._boot_id,
-            )
+                grant_remaining_bytes=headroom[pool.value].bytes,
+                grant_headroom=headroom if capture_headroom else None,
+            ),
+            ledger_pool=ledger_pool,
         )
 
     def _current_locked(self, key: str) -> WriteReservation | None:

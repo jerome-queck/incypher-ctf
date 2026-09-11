@@ -101,8 +101,8 @@ class AuthorityStorage:
                 trace=trace,
             )
 
-    def append_locked(self, reservation: WriteReservation) -> None:
-        ledger = self._ledger_path(reservation.pool)
+    def append_locked(self, reservation: WriteReservation, *, ledger_pool: Pool | None = None) -> None:
+        ledger = self._ledger_path(reservation.pool if ledger_pool is None else Pool(ledger_pool))
         slot = self._first_empty_record(ledger)
         if slot is None:
             raise ReservationUnavailable(f"{reservation.pool.value} durability-operation reserve is exhausted")
@@ -121,6 +121,8 @@ class AuthorityStorage:
             "retention": reservation.retention.value,
             "grant_remaining_bytes": reservation.grant_remaining_bytes,
         }
+        if reservation.grant_headroom:
+            row["grant_headroom"] = {name: capacity.as_dict() for name, capacity in reservation.grant_headroom.items()}
         encoded = canonical_bytes(row) + b"\n"
         if len(encoded) > LEDGER_RECORD_BYTES:
             raise ReservationUnavailable("authority record exceeds its preallocated durable slot")
@@ -169,8 +171,40 @@ class AuthorityStorage:
                 boot_id=str(row["boot_id"]),
                 retention=RetentionPolicy(row.get("retention", RetentionPolicy.RELEASE.value)),
                 grant_remaining_bytes=int(row.get("grant_remaining_bytes", 0)),
+                grant_headroom={name: Capacity(**capacity) for name, capacity in row.get("grant_headroom", {}).items()},
             )
         return latest
+
+    def available_capacity_locked(self, pool: Pool) -> Capacity:
+        pool = Pool(pool)
+        profile = getattr(self.profile, pool.value)
+        latest = self.latest_locked()
+        traces = self.rows_locked()
+        held = [
+            reservation
+            for reservation in latest.values()
+            if reservation.pool is pool
+            and (
+                reservation.state in {ReservationState.RESERVED, ReservationState.STARTED}
+                or reservation.retention.retains_object
+            )
+        ]
+        future_operations = 0
+        for reservation in held:
+            trace_length = sum(row["key"] == reservation.key for row in traces)
+            future_operations += max(reservation.need.operations - trace_length, 0)
+        detailed = {}
+        for name in ("create", "append", "rename", "unlink", "durability"):
+            detailed[name] = getattr(profile, name) - sum(getattr(reservation.need, name) for reservation in held)
+        return Capacity(
+            bytes=self.extent_path(pool).stat().st_size,
+            objects=len(self.available_object_slots_locked(pool, profile.objects)),
+            operations=max(self.available_operations_locked(pool) - future_operations, 0),
+            **detailed,
+        )
+
+    def headroom_locked(self) -> dict[str, Capacity]:
+        return {pool.value: self.available_capacity_locked(pool) for pool in Pool}
 
     def available_operations_locked(self, pool: Pool) -> int:
         raw = self._ledger_path(pool).read_bytes()

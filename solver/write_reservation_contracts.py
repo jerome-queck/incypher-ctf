@@ -23,13 +23,42 @@ class Capacity:
     bytes: int
     objects: int
     operations: int
+    create: int = 0
+    append: int = 0
+    rename: int = 0
+    unlink: int = 0
+    durability: int = 0
 
     def __post_init__(self) -> None:
-        if min(self.bytes, self.objects, self.operations) < 0:
+        if min(self._values().values()) < 0:
             raise ValueError("reservation capacity cannot be negative")
 
     def as_dict(self) -> dict[str, int]:
-        return {"bytes": self.bytes, "objects": self.objects, "operations": self.operations}
+        values = self._values()
+        if not any(values[name] for name in ("create", "append", "rename", "unlink", "durability")):
+            return {name: values[name] for name in ("bytes", "objects", "operations")}
+        return values
+
+    def _values(self) -> dict[str, int]:
+        return {
+            "bytes": self.bytes,
+            "objects": self.objects,
+            "operations": self.operations,
+            "create": self.create,
+            "append": self.append,
+            "rename": self.rename,
+            "unlink": self.unlink,
+            "durability": self.durability,
+        }
+
+    def fits(self, need: Capacity) -> bool:
+        return all(self._values()[name] >= value for name, value in need._values().items())
+
+    def __sub__(self, other: Capacity) -> Capacity:
+        return Capacity(**{name: value - other._values()[name] for name, value in self._values().items()})
+
+    def __add__(self, other: Capacity) -> Capacity:
+        return Capacity(**{name: value + other._values()[name] for name, value in self._values().items()})
 
 
 @dataclass(frozen=True)
@@ -37,12 +66,14 @@ class WriteProfile:
     ordinary: Capacity
     shared: Capacity
     terminal: Capacity
+    recovery: Capacity = Capacity(0, 0, 0)
 
     def as_dict(self) -> dict[str, dict[str, int]]:
         return {
             "ordinary": self.ordinary.as_dict(),
             "shared": self.shared.as_dict(),
             "terminal": self.terminal.as_dict(),
+            "recovery": self.recovery.as_dict(),
         }
 
 
@@ -68,6 +99,7 @@ class Pool(str, Enum):
     ORDINARY = "ordinary"
     SHARED = "shared"
     TERMINAL = "terminal"
+    RECOVERY = "recovery"
 
 
 class ReservationState(str, Enum):
@@ -78,6 +110,7 @@ class ReservationState(str, Enum):
     POSSIBLY_SENT = "possibly-sent"
     REFUSED = "refused"
     TERMINAL = "terminal"
+    RELEASED = "released"
 
 
 class RetentionPolicy(str, Enum):
@@ -101,6 +134,7 @@ FINAL_STATES = frozenset(
         ReservationState.POSSIBLY_SENT,
         ReservationState.REFUSED,
         ReservationState.TERMINAL,
+        ReservationState.RELEASED,
     }
 )
 
@@ -118,6 +152,7 @@ class WriteReservation:
     boot_id: str = ""
     retention: RetentionPolicy = RetentionPolicy.RELEASE
     grant_remaining_bytes: int = 0
+    grant_headroom: Mapping[str, Capacity] | None = None
 
     def transitioned(
         self,
@@ -159,7 +194,8 @@ def digest(value: Mapping[str, Any]) -> str:
 
 
 def profile_from(row: Mapping[str, Any]) -> WriteProfile:
-    return WriteProfile(*(Capacity(**row[name]) for name in ("ordinary", "shared", "terminal")))
+    zero = Capacity(0, 0, 0).as_dict()
+    return WriteProfile(*(Capacity(**row.get(name, zero)) for name in ("ordinary", "shared", "terminal", "recovery")))
 
 
 DEFAULT_WRITE_PROFILE = WriteProfile(

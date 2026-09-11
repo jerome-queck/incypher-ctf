@@ -138,6 +138,9 @@ class EventStoreCore:
     def events(self) -> list[CommittedEvent]:
         return self._read_verified()
 
+    def reservations(self) -> list[EventReservation]:
+        return self._read_reservations()
+
     def blob(self, digest: str) -> bytes:
         path = self.sealed_dir / digest
         try:
@@ -382,7 +385,10 @@ class EventStoreCore:
                 continue
             if prior.payload.get("event_id") != event.event_id:
                 continue
-            if prior.blob_digest == payload.get("blob_digest"):
+            exact_payload_required = getattr(contract, "exact_payload_identity", False)
+            if prior.blob_digest == payload.get("blob_digest") and (
+                not exact_payload_required or dict(prior.payload) == dict(payload)
+            ):
                 return prior
             raise DuplicateSequenceError(
                 f"Canonical identity {event.identity!r} was already committed with different content",
@@ -465,13 +471,6 @@ class EventStoreCore:
             blob_bytes = payload.get("blob_bytes")
             if not isinstance(blob_digest, str) or not isinstance(blob_bytes, int):
                 raise InvalidEventError("canonical payload has no blob identity", sequence=sequence)
-            try:
-                body = self.blob(blob_digest)
-            except EventStoreDamage as error:
-                error.sequence = sequence
-                raise
-            if len(body) != blob_bytes:
-                raise BlobDigestMismatchError("sealed blob length differs from payload", sequence=sequence)
             events.append(
                 CommittedEvent(
                     sequence=sequence,
@@ -482,9 +481,53 @@ class EventStoreCore:
                     envelope=envelope,
                     blob_digest=blob_digest,
                     blob_bytes=blob_bytes,
-                    body=body,
+                    body=b"",
                 )
             )
             expected_sequence += 1
             previous_digest = event_digest
-        return events
+        return self._attach_verified_bodies(events)
+
+    def _attach_verified_bodies(self, events: list[CommittedEvent]) -> list[CommittedEvent]:
+        released = self._released_event_sequences(events)
+        verified = []
+        for event in events:
+            try:
+                body = self.blob(event.blob_digest)
+            except MissingBlobError as error:
+                if event.sequence not in released:
+                    error.sequence = event.sequence
+                    raise
+                body = b""
+            if body and len(body) != event.blob_bytes:
+                raise BlobDigestMismatchError("sealed blob length differs from payload", sequence=event.sequence)
+            if not body and event.blob_bytes and event.sequence not in released:
+                raise BlobDigestMismatchError("sealed blob length differs from payload", sequence=event.sequence)
+            verified.append(replace(event, body=body))
+        return verified
+
+    @staticmethod
+    def _released_event_sequences(events: list[CommittedEvent]) -> set[int]:
+        by_sequence = {event.sequence: event for event in events}
+        released = set()
+        for event in events:
+            if event.event_type != "storage-governor.recorded" or event.payload.get("record") != "retirement-tombstone":
+                continue
+            digest = event.payload["target_digest"]
+            length = event.payload["target_length"]
+            path = event.payload["path"]
+            if path != f"sealed/sha256/{digest}":
+                raise InvalidEventError("retirement tombstone path does not match its digest", sequence=event.sequence)
+            for sequence in event.payload["event_sequences"]:
+                target = by_sequence.get(sequence)
+                if (
+                    target is None
+                    or sequence >= event.sequence
+                    or target.blob_digest != digest
+                    or target.blob_bytes != length
+                ):
+                    raise InvalidEventError(
+                        "retirement tombstone releases a different canonical reference", sequence=event.sequence
+                    )
+                released.add(sequence)
+        return released
