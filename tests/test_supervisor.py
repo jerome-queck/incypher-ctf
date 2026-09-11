@@ -406,12 +406,12 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
     monkeypatch.setattr(
         supervisor_module,
         "preflight_isolation",
-        lambda *_args: trace.append("strict-isolation"),
+        lambda *_args, **_kwargs: trace.append("strict-isolation"),
     )
     monkeypatch.setattr(
         supervisor_module,
         "launch_boot",
-        lambda boot_id, _environ: trace.append(f"run-controller:{boot_id}") or ExitedBoot(0),
+        lambda boot_id, _environ, _pool: trace.append(f"run-controller:{boot_id}") or ExitedBoot(0),
     )
     monkeypatch.setattr(supervisor_module, "reap_children", lambda: 0)
     monkeypatch.setattr(supervisor_module, "SupervisorCustody", FakeCustody)

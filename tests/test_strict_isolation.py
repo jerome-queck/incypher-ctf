@@ -79,9 +79,10 @@ def test_every_boundary_passes_before_outer_namespace_capabilities_are_dropped()
         {"INCYPHER_STRICT_IMAGE": "sha256:" + "a" * 64},
         run_probe=probe,
         drop_outer_capabilities=drop,
+        prepare_attempt_runtime=lambda: trace.append("attempt-pool"),
     )
 
-    assert trace == ["probe", "drop"]
+    assert trace == ["probe", "attempt-pool", "drop"]
     assert receipt.profile_id == STRICT_PROFILE_ID
     assert receipt.image_id == "sha256:" + "a" * 64
     assert dict(receipt.runtime_pin) == STRICT_RUNTIME_PIN

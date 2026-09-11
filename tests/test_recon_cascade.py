@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from solver import shell as shell_module
+from solver.attempt_executor import AttemptResult, ResourceOutcome
 from solver.recon import BRANCHES, DISPATCH, OD, PICTURES, STRINGS, Limits, recon
 from solver.record import SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.redaction import Redactor
@@ -42,6 +43,33 @@ def scout(recorder, description="", artefacts=(), *, wrappers=(BRUNNER,), limits
         attempt_id="attempt-1",
         limits=limits or Limits(),
     )
+
+
+class ExecutorResult:
+    def __init__(self, result):
+        self._result = result
+
+    def result(self):
+        return self._result
+
+
+class MimeExecutor:
+    def __init__(self):
+        self.requests = []
+
+    def start(self, request):
+        self.requests.append(request)
+        return ExecutorResult(
+            AttemptResult(
+                envelope_id="envelope-1",
+                generation_id=request.generation_id,
+                outcome=ResourceOutcome.EXITED,
+                exit_code=0,
+                output=b"image/png\n",
+                observed={},
+                cleanup_complete=True,
+            )
+        )
 
 
 def commands(result, subject=None) -> list[str]:
@@ -75,6 +103,30 @@ def test_the_mime_type_decides_the_branch_and_the_extension_never_does(tmp_path,
 
     assert output_for(result, "file").strip() == "image/png"
     assert "exiftool" in tools(result, subject="notes.txt")
+
+
+def test_mime_dispatch_is_the_one_legacy_shell_step_routed_through_the_attempt_executor(tmp_path, recorder):
+    artefact = tmp_path / "notes.txt"
+    artefact.write_bytes(PNG)
+    executor = MimeExecutor()
+
+    result = recon(
+        "",
+        [artefact],
+        flag_wrappers=(BRUNNER,),
+        recorder=recorder,
+        attempt_id="attempt-1",
+        generation_id="generation-000001",
+        executor=executor,
+    )
+
+    assert output_for(result, "file").strip() == "image/png"
+    assert len(executor.requests) == 1
+    dispatched = executor.requests[0]
+    assert dispatched.generation_id == "generation-000001"
+    assert dispatched.attempt_id == "attempt-1"
+    assert dispatched.argv == (*DISPATCH, "notes.txt")
+    assert dispatched.workspace == tmp_path
 
 
 def test_a_type_the_cascade_has_never_met_still_gets_the_whole_floor(tmp_path, recorder):

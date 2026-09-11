@@ -63,6 +63,9 @@ RUN apt-get update \
       ruby \
       scalpel \
       sleuthkit \
+      # The fixed Attempt worker traces network syscalls so a denied connection is a typed,
+      # controller-observed Resource outcome rather than a hostile process's self-report.
+      strace \
       unzip \
       wget \
       xxd \

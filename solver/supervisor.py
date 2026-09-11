@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from solver import boot
+from solver.attempt_executor_pool import (
+    POOL_ENV,
+    AttemptPool,
+    close_attempt_pool,
+    prepare_attempt_pool,
+)
 from solver.boot import Refusal
 from solver.credentials import SECRETS
 from solver.event_store import EventStore, EventStoreDamage
@@ -240,19 +246,27 @@ def verify_state(state: Path, run_id: str, redactor: Redactor) -> None:
         raise Refusal(f"{boot.MARK} canonical state verification refused this Run — {damage.classification}") from None
 
 
-def preflight_isolation(environ, state: Path, run_id: str) -> Path:
+def preflight_isolation(environ, state: Path, run_id: str, *, prepare_attempt_runtime=None) -> Path:
     """Admit the exact strict profile before the effect-capable controller opens."""
 
-    return write_isolation_receipt(state, run_id, strict_preflight(environ))
+    return write_isolation_receipt(
+        state,
+        run_id,
+        strict_preflight(environ, prepare_attempt_runtime=prepare_attempt_runtime),
+    )
 
 
-def launch_boot(boot_id: str, environ) -> SpawnedBoot:
+def launch_boot(boot_id: str, environ, attempt_pool: AttemptPool | None = None) -> SpawnedBoot:
     controller_environment = dict(environ)
     controller_environment["SUPERVISOR_BOOT_ID"] = boot_id
+    pass_fds: tuple[int, ...] = ()
+    if attempt_pool is not None:
+        controller_environment[POOL_ENV], pass_fds = attempt_pool.controller_environment()
     process = subprocess.Popen(
         [sys.executable, "-m", "solver"],
         env=controller_environment,
         start_new_session=True,
+        pass_fds=pass_fds,
     )
     for name in SECRETS:
         environ.pop(name, None)
@@ -292,6 +306,7 @@ def quiesce_refusal() -> None:
 def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> int:
     """Run PID 1 and report its terminal classification."""
 
+    attempt_pool: AttemptPool | None = None
     try:
         run_id = boot.run_identity(environ)
         redactor = Redactor.for_declared_secrets(environ)
@@ -309,6 +324,11 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
             redactor=redactor,
             timestamp=timestamp,
         )
+
+        def prepare_pool() -> None:
+            nonlocal attempt_pool
+            attempt_pool = prepare_attempt_pool()
+
         supervisor = Supervisor(
             state=state,
             run_id=run_id,
@@ -316,9 +336,14 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
             services=SupervisorServices(
                 verify_replay=lambda: verify_state(state, run_id, redactor),
                 admit_storage=lambda: admit_storage(state, run_id),
-                preflight_isolation=lambda: preflight_isolation(environ, state, run_id),
+                preflight_isolation=lambda: preflight_isolation(
+                    environ,
+                    state,
+                    run_id,
+                    prepare_attempt_runtime=prepare_pool,
+                ),
                 bootstrap_custody=custody.open,
-                launch_controller=lambda boot_id: launch_boot(boot_id, controller_environment),
+                launch_controller=lambda boot_id: launch_boot(boot_id, controller_environment, attempt_pool),
                 reap_children=reap_children,
             ),
             stay_quiescent=stay_quiescent,
@@ -336,6 +361,8 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
         if stay_quiescent:
             quiesce_refusal()
         return REFUSED_EXIT
+    finally:
+        close_attempt_pool(attempt_pool)
     print(f"{result.disposition}: Run {result.run_id}, Boot {result.boot_id}", flush=True)
     return {
         NORMAL: CLEAN_EXIT,

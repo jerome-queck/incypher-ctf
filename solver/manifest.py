@@ -96,6 +96,41 @@ def generate_manifest(
     return cast(ReleaseCandidateManifestDraft, manifest)
 
 
+def attach_requirement_receipt(
+    manifest: Mapping[str, object],
+    row_id: str,
+    receipt: ManifestReceipt,
+) -> ReleaseCandidateManifestDraft:
+    """Return a new draft whose named implemented row links one verified receipt."""
+
+    current = parse_manifest(manifest)
+    requirements = _copy_json(current["requirements"])
+    receipts = _copy_json(current["receipts"])
+    rows = [row for row in requirements if row["row_id"] == row_id]
+    if len(rows) != 1:
+        _fail(f"manifest has no unique requirement row {row_id!r}")
+    row = rows[0]
+    previous_ref = row["receipt_ref"]
+    if row["status"] in {"planned", "missing"}:
+        row["status"] = "implemented"
+    row["receipt_ref"] = receipt["ref"]
+    row["reason"] = ""
+    receipts = [item for item in receipts if item["ref"] != receipt["ref"]]
+    receipts.append(_copy_json(receipt))
+    referenced = {item["receipt_ref"] for item in requirements if item["receipt_ref"] is not None}
+    if previous_ref not in referenced:
+        receipts = [item for item in receipts if item["ref"] != previous_ref]
+    receipts.sort(key=lambda item: item["ref"])
+    if previous_ref == MANIFEST_SCHEMA_RECEIPT_REF and row_id != MANIFEST_SCHEMA_ROW_ID:
+        _fail("only the manifest-schema row may replace the schema receipt")
+    return generate_manifest(
+        image_digest=current["candidate"]["image_digest"],
+        release_candidate_profile=current["selected_profile"],
+        requirements=requirements,
+        receipts=receipts,
+    )
+
+
 def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
     """Encode a JSON manifest with one deterministic representation."""
 
@@ -138,6 +173,7 @@ __all__ = [
     "ReleaseCandidateProfile",
     "RequirementRow",
     "SCHEMA_VERSION",
+    "attach_requirement_receipt",
     "canonical_manifest_bytes",
     "generate_manifest",
     "manifest_digest",

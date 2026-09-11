@@ -112,6 +112,7 @@ def strict_preflight(
     *,
     run_probe: Callable[[], ProbeResult] | None = None,
     drop_outer_capabilities: Callable[[], None] | None = None,
+    prepare_attempt_runtime: Callable[[], object] | None = None,
 ) -> IsolationReceipt:
     """Prove the fixed boundary, remove setup authority, then admit the exact image."""
 
@@ -141,6 +142,8 @@ def strict_preflight(
         )
     if result.owned_residue:
         raise IsolationRefusal(IsolationReason.RESIDUE, f"owned residue remains: {', '.join(result.owned_residue)}")
+    if prepare_attempt_runtime is not None:
+        prepare_attempt_runtime()
     drop_outer_capabilities()
     return IsolationReceipt(
         profile_id=STRICT_PROFILE_ID,

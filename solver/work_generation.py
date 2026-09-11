@@ -6,8 +6,9 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 
 from solver.event_store import (
     WORK_GENERATION_RECORDED,
@@ -25,6 +26,7 @@ from solver.redaction import Redactor
 
 PROJECTION_SCHEMA_VERSION = 1
 _GENERATION_ID = re.compile(r"^generation-(\d+)$")
+_T = TypeVar("_T")
 
 
 class GenerationConflict(InvalidEventError):
@@ -217,6 +219,7 @@ class GenerationFence:
         self.store = EventStore(state, run_id=run_id, redactor=redactor)
         self.run_id = run_id
         self._timestamp = timestamp
+        self._authority_lock = RLock()
 
     def acquire(self, work_id: str, attempt_id: str) -> GenerationIdentity:
         if not work_id or not attempt_id:
@@ -249,6 +252,10 @@ class GenerationFence:
         return self.acquire(work_id, attempt_id)
 
     def close(self, generation_id: str, disposition: GenerationDisposition) -> None:
+        with self._authority_lock:
+            self._close(generation_id, disposition)
+
+    def _close(self, generation_id: str, disposition: GenerationDisposition) -> None:
         disposition = GenerationDisposition(disposition)
         projection = self.projection()
         state = _state_for(projection, generation_id)
@@ -270,6 +277,15 @@ class GenerationFence:
         )
 
     def authorize(
+        self,
+        generation_id: str,
+        authority: GenerationAuthority,
+        evidence: bytes = b"",
+    ) -> AuthorityDecision:
+        with self._authority_lock:
+            return self._authorize(generation_id, authority, evidence)
+
+    def _authorize(
         self,
         generation_id: str,
         authority: GenerationAuthority,
@@ -314,6 +330,19 @@ class GenerationFence:
             evidence,
         )
         return AuthorityDecision(False, classification)
+
+    def authorize_and_commit(
+        self,
+        generation_id: str,
+        authority: GenerationAuthority,
+        commit: Callable[[], _T],
+        evidence: bytes = b"",
+    ) -> tuple[AuthorityDecision, _T | None]:
+        """Keep one admitted write atomic with respect to generation closing."""
+
+        with self._authority_lock:
+            decision = self._authorize(generation_id, authority, evidence)
+            return decision, commit() if decision.accepted else None
 
     def reconcile_restart(self) -> tuple[str, ...]:
         active = tuple(state.generation_id for state in self.projection().generations if state.active)

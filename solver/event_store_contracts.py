@@ -19,6 +19,7 @@ OBSERVATION_RECORDED = "observation.recorded"
 LIFECYCLE_RECORDED = "lifecycle.recorded"
 WORK_GENERATION_RECORDED = "work-generation.recorded"
 CAPABILITY_CUSTODY_RECORDED = "capability-custody.recorded"
+ATTEMPT_ENVELOPE_RECORDED = "attempt-envelope.recorded"
 RECEIPT_TYPE = "canonical-event-store"
 
 EMPTY_BLOB_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -714,11 +715,14 @@ CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorde
 
 
 def event_contract(event_type: str):
+    from solver.attempt_executor_contracts import AttemptEnvelopeRecorded
+
     contracts = {
         OBSERVATION_RECORDED: ObservationRecorded,
         LIFECYCLE_RECORDED: LifecycleRecorded,
         WORK_GENERATION_RECORDED: WorkGenerationRecorded,
         CAPABILITY_CUSTODY_RECORDED: CapabilityCustodyRecorded,
+        ATTEMPT_ENVELOPE_RECORDED: AttemptEnvelopeRecorded,
     }
     return contracts.get(event_type)
 

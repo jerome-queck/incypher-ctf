@@ -29,7 +29,11 @@ STRICT_PROBE_COMMAND = (
     "--mount-proc",
     "/usr/bin/python3",
     "-I",
-    "/opt/solver/solver/isolation_worker.py",
+    "-c",
+    (
+        "import runpy,sys;sys.path.insert(0,'/opt/solver');"
+        "runpy.run_module('solver.isolation_worker',run_name='__main__')"
+    ),
 )
 
 CAP_NET_ADMIN = 12

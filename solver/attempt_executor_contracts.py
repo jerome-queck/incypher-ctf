@@ -1,0 +1,252 @@
+"""Stable types and canonical facts for one Attempt Resource envelope."""
+
+from __future__ import annotations
+
+import enum
+import re
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED, EMPTY_BLOB_DIGEST, InvalidEventError
+
+
+class NetworkPolicy(str, enum.Enum):
+    DENY = "deny"
+
+
+class ResourceOutcome(str, enum.Enum):
+    EXITED = "exited"
+    CPU = "cpu-limit"
+    MEMORY = "memory-limit"
+    PIDS = "pid-limit"
+    FILESYSTEM = "filesystem-limit"
+    NETWORK = "network-limit"
+    DEADLINE = "wall-clock-limit"
+    CANCELLED = "cancelled"
+    LAUNCH_FAILED = "launch-failed"
+    RECONCILED = "reconciled-after-crash"
+
+
+class EnvelopeRecord(str, enum.Enum):
+    OWNER_OPENED = "owner-opened"
+    RESERVED = "reserved"
+    LAUNCHED = "launched"
+    RESULT = "result"
+    DISCARDED = "discarded"
+
+
+@dataclass(frozen=True)
+class EnvelopeSpec:
+    cpu_seconds: float
+    cpu_quota_us: int
+    memory_bytes: int
+    pids: int
+    filesystem_bytes: int
+    network: NetworkPolicy
+    wall_seconds: float
+    cleanup_seconds: float
+
+    def __post_init__(self) -> None:
+        numbers = (
+            self.cpu_seconds,
+            self.cpu_quota_us,
+            self.memory_bytes,
+            self.pids,
+            self.filesystem_bytes,
+            self.wall_seconds,
+            self.cleanup_seconds,
+        )
+        if any(isinstance(value, bool) or value <= 0 for value in numbers):
+            raise ValueError("every Resource-envelope limit must be positive")
+        if self.cpu_quota_us > 100_000:
+            raise ValueError("CPU quota cannot exceed one full core per 100ms period")
+
+    def document(self) -> dict[str, object]:
+        document = asdict(self)
+        document["network"] = self.network.value
+        return document
+
+
+@dataclass(frozen=True)
+class RuntimeBinding:
+    image_id: str
+    image_manifest_digest: str
+    image_config_digest: str
+    platform: str
+
+    def __post_init__(self) -> None:
+        digest = re.compile(r"(?:sha256:)?[0-9a-f]{64}\Z")
+        if not all(
+            digest.fullmatch(value) for value in (self.image_id, self.image_manifest_digest, self.image_config_digest)
+        ):
+            raise ValueError("Attempt runtime requires immutable image, manifest and config digests")
+        if self.platform not in {"linux/arm64", "linux/amd64"}:
+            raise ValueError("Attempt runtime platform is unsupported")
+
+
+@dataclass(frozen=True)
+class RuntimeReservation:
+    cgroup_path: str
+    executor_uid: int
+
+
+@dataclass(frozen=True)
+class AttemptRequest:
+    generation_id: str
+    attempt_id: str
+    step_id: str
+    argv: tuple[str, ...]
+    workspace: Path
+    envelope: EnvelopeSpec
+
+
+@dataclass(frozen=True)
+class RuntimeObservation:
+    outcome: ResourceOutcome
+    exit_code: int | None
+    output: bytes
+    cgroup_path: str
+    executor_uid: int
+    observed: Mapping[str, int | float | str | bool]
+    cleanup_complete: bool
+
+    @classmethod
+    def exited(cls, *, exit_code: int, output: bytes, cgroup_path: str, executor_uid: int) -> RuntimeObservation:
+        return cls(ResourceOutcome.EXITED, exit_code, output, cgroup_path, executor_uid, {}, True)
+
+
+@dataclass(frozen=True)
+class AttemptResult:
+    envelope_id: str
+    generation_id: str
+    outcome: ResourceOutcome
+    exit_code: int | None
+    output: bytes
+    observed: Mapping[str, int | float | str | bool]
+    cleanup_complete: bool
+
+
+@dataclass(frozen=True)
+class AttemptEnvelopeRecorded:
+    event_id: str
+    record: EnvelopeRecord
+    owner_epoch: str
+    envelope_id: str = ""
+    generation_id: str = ""
+    attempt_id: str = ""
+    step_id: str = ""
+    profile_digest: str = ""
+    binding: RuntimeBinding | None = None
+    cgroup_path: str = ""
+    executor_uid: int = -1
+    outcome: ResourceOutcome | None = None
+    exit_code: int | None = None
+    cleanup_complete: bool = False
+    declared: Mapping[str, object] | None = None
+    observed: Mapping[str, object] | None = None
+    ts: str = ""
+
+    @property
+    def event_type(self) -> str:
+        return ATTEMPT_ENVELOPE_RECORDED
+
+    @property
+    def identity(self) -> str:
+        return self.event_id
+
+    @classmethod
+    def identity_from_payload(cls, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("event_id", ""))
+
+    def payload(self, *, blob_digest: str, blob_bytes: int) -> dict[str, Any]:
+        binding = self.binding
+        return {
+            "event_id": self.event_id,
+            "record": self.record.value,
+            "owner_epoch": self.owner_epoch,
+            "envelope_id": self.envelope_id,
+            "generation_id": self.generation_id,
+            "attempt_id": self.attempt_id,
+            "step_id": self.step_id,
+            "profile_digest": self.profile_digest,
+            "image_id": binding.image_id if binding else "",
+            "image_manifest_digest": binding.image_manifest_digest if binding else "",
+            "image_config_digest": binding.image_config_digest if binding else "",
+            "platform": binding.platform if binding else "",
+            "cgroup_path": self.cgroup_path,
+            "executor_uid": self.executor_uid,
+            "outcome": self.outcome.value if self.outcome else "",
+            "exit_code": self.exit_code,
+            "cleanup_complete": self.cleanup_complete,
+            "declared": dict(self.declared or {}),
+            "observed": dict(self.observed or {}),
+            "ts": self.ts,
+            "blob_digest": blob_digest,
+            "blob_bytes": blob_bytes,
+        }
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any], *, sequence: int) -> None:
+        required = {
+            "event_id": str,
+            "record": str,
+            "owner_epoch": str,
+            "envelope_id": str,
+            "generation_id": str,
+            "attempt_id": str,
+            "step_id": str,
+            "profile_digest": str,
+            "image_id": str,
+            "image_manifest_digest": str,
+            "image_config_digest": str,
+            "platform": str,
+            "cgroup_path": str,
+            "executor_uid": int,
+            "outcome": str,
+            "cleanup_complete": bool,
+            "declared": dict,
+            "observed": dict,
+            "ts": str,
+            "blob_digest": str,
+            "blob_bytes": int,
+        }
+        missing = [name for name in (*required, "exit_code") if name not in payload]
+        if missing:
+            raise InvalidEventError(f"Attempt-envelope payload is missing: {', '.join(missing)}", sequence=sequence)
+        for name, expected in required.items():
+            value = payload[name]
+            if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
+                raise InvalidEventError(f"Attempt-envelope field {name!r} has the wrong type", sequence=sequence)
+        exit_code = payload["exit_code"]
+        if exit_code is not None and (not isinstance(exit_code, int) or isinstance(exit_code, bool)):
+            raise InvalidEventError("Attempt-envelope exit code has the wrong type", sequence=sequence)
+        if payload["record"] not in {record.value for record in EnvelopeRecord}:
+            raise InvalidEventError("Attempt-envelope record is unsupported", sequence=sequence)
+        if not payload["event_id"] or not payload["owner_epoch"]:
+            raise InvalidEventError("Attempt-envelope identity is incomplete", sequence=sequence)
+        if payload["blob_digest"] != EMPTY_BLOB_DIGEST or payload["blob_bytes"] != 0:
+            raise InvalidEventError("Attempt-envelope facts cannot carry a sealed body", sequence=sequence)
+        if payload["record"] != EnvelopeRecord.OWNER_OPENED.value and not all(
+            payload[name] for name in ("envelope_id", "generation_id", "attempt_id", "step_id")
+        ):
+            raise InvalidEventError("Attempt-envelope ownership is incomplete", sequence=sequence)
+        if payload["record"] == EnvelopeRecord.RESULT.value:
+            if payload["outcome"] not in {outcome.value for outcome in ResourceOutcome}:
+                raise InvalidEventError("Attempt-envelope result is untyped", sequence=sequence)
+        elif payload["outcome"]:
+            raise InvalidEventError("Non-result Attempt-envelope fact carries an outcome", sequence=sequence)
+
+
+__all__ = [
+    "AttemptEnvelopeRecorded",
+    "AttemptRequest",
+    "AttemptResult",
+    "EnvelopeRecord",
+    "EnvelopeSpec",
+    "NetworkPolicy",
+    "ResourceOutcome",
+    "RuntimeBinding",
+    "RuntimeObservation",
+    "RuntimeReservation",
+]

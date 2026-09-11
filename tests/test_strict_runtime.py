@@ -8,9 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 import strict_runtime
+from solver.attempt_executor_contracts import RuntimeBinding
 
 
 IMAGE_ID = "sha256:" + "a" * 64
+MANIFEST = IMAGE_ID
+CONFIG = "sha256:" + "c" * 64
+
+
+def image_binding() -> RuntimeBinding:
+    return RuntimeBinding(IMAGE_ID, MANIFEST, CONFIG, "linux/arm64")
 
 
 def test_container_command_has_the_fixed_strict_profile() -> None:
@@ -94,6 +101,27 @@ def test_tool_probe_uses_the_same_strict_profile_and_binds_the_distributable_ima
     ]
 
 
+def test_attempt_resource_probe_mounts_only_its_disposable_state(tmp_path: Path) -> None:
+    command = strict_runtime.attempt_resource_probe_command(
+        image_binding(),
+        tmp_path,
+    )
+
+    assert ["--mount", f"type=bind,source={tmp_path},target=/state"] in [
+        command[index : index + 2] for index in range(len(command) - 1)
+    ]
+    assert ["--env", "INCYPHER_DENY_PROBE_SECRET=qualification-secret"] in [
+        command[index : index + 2] for index in range(len(command) - 1)
+    ]
+    assert command[-5:] == [
+        "--entrypoint",
+        "python3",
+        IMAGE_ID,
+        "-m",
+        "solver.attempt_resource_probe",
+    ]
+
+
 class Runner:
     def __init__(
         self,
@@ -109,8 +137,13 @@ class Runner:
         self.commands.append(command)
         if self.fail_on is not None and tuple(command) == self.fail_on:
             raise RuntimeError("command failed")
+        if command[:3] == ["docker", "buildx", "build"]:
+            metadata = Path(command[command.index("--metadata-file") + 1])
+            metadata.write_text(
+                __import__("json").dumps({"containerimage.digest": MANIFEST, "containerimage.config.digest": CONFIG})
+            )
         if command[:3] == ["docker", "image", "inspect"]:
-            return SimpleNamespace(stdout=self.image_id, returncode=0)
+            return SimpleNamespace(stdout=f"{self.image_id} linux/arm64\n", returncode=0)
         return SimpleNamespace(stdout="", returncode=0)
 
 
@@ -133,8 +166,15 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         == 0
     )
 
-    assert runner.commands[0] == ["docker", "build", "--quiet", "--tag", strict_runtime.IMAGE_TAG, "."]
-    assert runner.commands[1] == ["docker", "image", "inspect", "--format", "{{.Id}}", strict_runtime.IMAGE_TAG]
+    assert runner.commands[0][:3] == ["docker", "buildx", "build"]
+    assert runner.commands[1] == [
+        "docker",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}} {{.Os}}/{{.Architecture}}",
+        strict_runtime.IMAGE_TAG,
+    ]
     assert runner.commands[2] == [
         "docker",
         "run",
@@ -146,7 +186,11 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         IMAGE_ID,
     ]
     assert runner.commands[3] == strict_runtime.container_command(
-        IMAGE_ID, env_file=env_file, state=state, preflight_only=False
+        IMAGE_ID,
+        env_file=env_file,
+        state=state,
+        preflight_only=False,
+        binding=image_binding(),
     )
     assert runner.commands[4] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
     assert all(IMAGE_ID in command for command in (runner.commands[3],))
@@ -160,8 +204,19 @@ def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
 
     assert strict_runtime.main(["preflight"], runner=runner) == 0
     assert runner.commands[3] == strict_runtime.container_command(
-        IMAGE_ID, env_file=None, state=None, preflight_only=True
+        IMAGE_ID,
+        env_file=None,
+        state=None,
+        preflight_only=True,
+        binding=image_binding(),
     )
+
+
+def test_build_accepts_a_config_digest_as_the_local_image_identity() -> None:
+    binding = strict_runtime.build_image(Runner(image_id=CONFIG))
+
+    assert binding == RuntimeBinding(CONFIG, MANIFEST, CONFIG, "linux/arm64")
+    assert binding.image_manifest_digest != binding.image_config_digest
 
 
 def test_a_failed_strict_run_still_removes_only_the_owned_cgroup(
@@ -169,7 +224,15 @@ def test_a_failed_strict_run_still_removes_only_the_owned_cgroup(
 ) -> None:
     cleanup = ("colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE)
     runner = Runner(
-        fail_on=tuple(strict_runtime.container_command(IMAGE_ID, env_file=None, state=None, preflight_only=True))
+        fail_on=tuple(
+            strict_runtime.container_command(
+                IMAGE_ID,
+                env_file=None,
+                state=None,
+                preflight_only=True,
+                binding=image_binding(),
+            )
+        )
     )
     monkeypatch.setattr(strict_runtime.runtime, "verify", lambda: 0)
 
