@@ -1,3 +1,3 @@
 """Reviewed write-reservation proof digest, separated to avoid a digest cycle."""
 
-CONTROLLED_PROOF_DIGEST = "166eeb3246e1f7f0b77bfd3103c75eab194ce2b9816423e7121ea424d23e2706"
+CONTROLLED_PROOF_DIGEST = "187a1725113b70f2a192f41ddcfbad3f199dfeb77a45d12d41faf4d2f6d5d9f8"

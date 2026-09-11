@@ -59,6 +59,9 @@ def test_full_ordinary_area_preserves_physical_authority_and_terminal_capacity(t
     authority.commit(ordinary, {"digest": "sha256:ordinary"})
     assert ordinary_extent.stat().st_size == 0
     assert authority.object_path(ordinary).stat().st_size == ordinary_need.bytes
+    with pytest.raises(ReservationConflict, match="did not retain capacity for a receipt"):
+        authority.write_receipt(ordinary.key)
+    assert authority.object_path(ordinary).read_bytes() == b"x" * ordinary_need.bytes
     with pytest.raises(ReservationUnavailable):
         authority.reserve(
             "ordinary:second",

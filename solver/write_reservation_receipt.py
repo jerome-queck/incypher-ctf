@@ -12,6 +12,7 @@ from solver.write_reservation_contracts import (
     MANIFEST_ROW_ID,
     RECEIPT_TYPE,
     SCHEMA_VERSION,
+    ReservationConflict,
     WriteReservation,
     digest,
     profile_from,
@@ -61,6 +62,8 @@ def write_receipt(authority: WriteAuthority, key: str, destination: Path | None 
     reservation = authority.current(key)
     if reservation is None:
         raise ValueError(f"unknown reservation {key!r}")
+    if not reservation.retention.requires_receipt:
+        raise ReservationConflict("reservation did not retain capacity for a receipt")
     document = receipt_document(authority, reservation)
     document["receipt_digest"] = digest(document)
     reserved_path = authority.object_path(reservation)
