@@ -80,6 +80,20 @@ class ReservationState(str, Enum):
     TERMINAL = "terminal"
 
 
+class RetentionPolicy(str, Enum):
+    RELEASE = "release"
+    RECORD = "retain-record"
+    RECEIPT = "retain-receipt"
+
+    @property
+    def retains_object(self) -> bool:
+        return self is not RetentionPolicy.RELEASE
+
+    @property
+    def requires_receipt(self) -> bool:
+        return self is RetentionPolicy.RECEIPT
+
+
 FINAL_STATES = frozenset(
     {
         ReservationState.COMMITTED,
@@ -102,7 +116,7 @@ class WriteReservation:
     object_slots: tuple[str, ...] = ()
     observation: Mapping[str, Any] | None = None
     boot_id: str = ""
-    retain_objects: bool = False
+    retention: RetentionPolicy = RetentionPolicy.RELEASE
     grant_remaining_bytes: int = 0
 
     def transitioned(
@@ -111,14 +125,14 @@ class WriteReservation:
         observation: Mapping[str, Any] | None = None,
         *,
         boot_id: str | None = None,
-        retain_objects: bool | None = None,
+        retention: RetentionPolicy | None = None,
     ) -> WriteReservation:
         return replace(
             self,
             state=state,
             observation=dict(observation) if observation is not None else None,
             boot_id=boot_id or self.boot_id,
-            retain_objects=self.retain_objects if retain_objects is None else retain_objects,
+            retention=self.retention if retention is None else retention,
         )
 
 

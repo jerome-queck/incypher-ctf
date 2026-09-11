@@ -17,6 +17,7 @@ from solver.write_reservation import (
     ReservationState,
     ReservationUnavailable,
     ReservedEffect,
+    RetentionPolicy,
     WriteAuthority,
     WriteProfile,
     manifest_receipt,
@@ -51,12 +52,13 @@ def test_full_ordinary_area_preserves_physical_authority_and_terminal_capacity(t
         EffectIdentity("body.write", "bulk"),
         ordinary_need,
         pool=Pool.ORDINARY,
+        retention=RetentionPolicy.RECORD,
     )
     authority.object_path(ordinary).write_bytes(b"x" * ordinary_need.bytes)
     authority.start(ordinary)
-    authority.commit(ordinary, {"digest": "sha256:ordinary"}, replenish=False)
+    authority.commit(ordinary, {"digest": "sha256:ordinary"})
     assert ordinary_extent.stat().st_size == 0
-    assert authority.object_path(ordinary).stat().st_size == 0
+    assert authority.object_path(ordinary).stat().st_size == ordinary_need.bytes
     with pytest.raises(ReservationUnavailable):
         authority.reserve(
             "ordinary:second",
@@ -128,7 +130,7 @@ def test_crash_boundaries_never_repeat_an_effect(tmp_path, crash_point):
             lambda: calls.append("wire") or {"outcome": "unread"},
             encode=lambda verdict: verdict,
             decode=lambda verdict: verdict,
-            retain_receipt=True,
+            retention=RetentionPolicy.RECEIPT,
         )
 
     authority.close()
@@ -146,14 +148,14 @@ def test_crash_boundaries_never_repeat_an_effect(tmp_path, crash_point):
             lambda: calls.append("duplicate") or {"outcome": "incorrect"},
             encode=lambda verdict: verdict,
             decode=lambda verdict: verdict,
-            retain_receipt=True,
+            retention=RetentionPolicy.RECEIPT,
         )
     assert calls == ([] if crash_point == "after_reserve" else ["wire"])
     expected = ReservationState.ABORTED if crash_point == "after_reserve" else ReservationState.POSSIBLY_SENT
     assert restarted.current("submit:42:one").state is expected
     if crash_point == "after_effect":
         recovered = restarted.current("submit:42:one")
-        assert recovered.retain_objects is True
+        assert recovered.retention is RetentionPolicy.RECEIPT
         assert json.loads(restarted.object_path(recovered).read_text())["state"] == "possibly-sent"
 
 
@@ -280,12 +282,12 @@ def test_required_receipt_uses_the_effects_precreated_object_and_spent_extent(tm
         lambda: {"outcome": "incorrect"},
         encode=lambda verdict: verdict,
         decode=lambda verdict: verdict,
-        retain_receipt=True,
+        retention=RetentionPolicy.RECEIPT,
     )
 
     committed = authority.current("submit:42:one")
     receipt_path = authority.object_path(committed)
-    assert committed.retain_objects is True
+    assert committed.retention is RetentionPolicy.RECEIPT
     assert json.loads(receipt_path.read_text())["state"] == "committed"
     assert authority.extent_path(Pool.SHARED).stat().st_size == 0
     with pytest.raises(ReservationUnavailable):
@@ -308,7 +310,7 @@ def test_later_retained_grants_do_not_change_an_earlier_receipts_capacity_fact(t
             lambda: {"outcome": "incorrect"},
             encode=lambda verdict: verdict,
             decode=lambda verdict: verdict,
-            retain_receipt=True,
+            retention=RetentionPolicy.RECEIPT,
         )
 
     first = authority.current("submit:42:0")
@@ -336,14 +338,14 @@ def _controlled_proof_observation(root):
                 lambda: calls.append("wire") or {"outcome": "unread"},
                 encode=lambda verdict: verdict,
                 decode=lambda verdict: verdict,
-                retain_receipt=True,
+                retention=RetentionPolicy.RECEIPT,
             )
         authority.close()
         restarted = WriteAuthority(crash_root, PROFILE)
         current = restarted.current("submit:42:one")
         receipt_state = (
             json.loads(restarted.object_path(current).read_text())["state"]
-            if current is not None and current.retain_objects
+            if current is not None and current.retention.requires_receipt
             else "absent"
         )
         restarted.close()
@@ -360,10 +362,11 @@ def _controlled_proof_observation(root):
         EffectIdentity("body.write", "full"),
         Capacity(8_192, 1, 3),
         pool=Pool.ORDINARY,
+        retention=RetentionPolicy.RECORD,
     )
     authority.object_path(ordinary).write_bytes(b"x" * 8_192)
     authority.start(ordinary)
-    authority.commit(ordinary, {"digest": "sha256:ordinary"}, replenish=False)
+    authority.commit(ordinary, {"digest": "sha256:ordinary"})
     ReservedEffect(authority).execute(
         "submit:42:one",
         identity(),
@@ -438,14 +441,14 @@ def test_controlled_proof_matches_independently_executed_boundaries(tmp_path):
 
 def test_receipt_binds_profile_identity_capacity_and_durable_trace(tmp_path):
     authority = WriteAuthority(tmp_path, PROFILE)
-    reservation = authority.reserve("submit:42:one", identity(), NEED, retain_objects=True)
-    authority.start(reservation)
-    authority.commit(
-        reservation,
-        {"outcome": "incorrect"},
-        replenish=False,
-        retain_objects=True,
+    reservation = authority.reserve(
+        "submit:42:one",
+        identity(),
+        NEED,
+        retention=RetentionPolicy.RECEIPT,
     )
+    authority.start(reservation)
+    authority.commit(reservation, {"outcome": "incorrect"})
 
     receipt_path = authority.write_receipt("submit:42:one")
     receipt = json.loads(receipt_path.read_text())

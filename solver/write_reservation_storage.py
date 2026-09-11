@@ -21,6 +21,7 @@ from solver.write_reservation_contracts import (
     ReservationConflict,
     ReservationState,
     ReservationUnavailable,
+    RetentionPolicy,
     WriteProfile,
     WriteReservation,
     profile_from,
@@ -117,7 +118,7 @@ class AuthorityStorage:
             "object_slots": list(reservation.object_slots),
             "observation": dict(reservation.observation) if reservation.observation is not None else None,
             "boot_id": reservation.boot_id,
-            "retain_objects": reservation.retain_objects,
+            "retention": reservation.retention.value,
             "grant_remaining_bytes": reservation.grant_remaining_bytes,
         }
         encoded = canonical_bytes(row) + b"\n"
@@ -166,7 +167,7 @@ class AuthorityStorage:
                 object_slots=tuple(row["object_slots"]),
                 observation=dict(row["observation"]) if row["observation"] is not None else None,
                 boot_id=str(row["boot_id"]),
-                retain_objects=bool(row.get("retain_objects", False)),
+                retention=RetentionPolicy(row.get("retention", RetentionPolicy.RELEASE.value)),
                 grant_remaining_bytes=int(row.get("grant_remaining_bytes", 0)),
             )
         return latest
@@ -186,7 +187,8 @@ class AuthorityStorage:
             for reservation in self.latest_locked().values()
             if reservation.pool is pool
             and (
-                reservation.state in {ReservationState.RESERVED, ReservationState.STARTED} or reservation.retain_objects
+                reservation.state in {ReservationState.RESERVED, ReservationState.STARTED}
+                or reservation.retention.retains_object
             )
             for slot in reservation.object_slots
         }
@@ -206,7 +208,7 @@ class AuthorityStorage:
         return released
 
     def write_object(self, reservation: WriteReservation, body: bytes) -> Path:
-        if not reservation.retain_objects or not reservation.object_slots:
+        if not reservation.retention.retains_object or not reservation.object_slots:
             raise ReservationConflict("reservation retained no object capacity for this record")
         if len(body) > reservation.need.bytes:
             raise ReservationUnavailable("record exceeds its reserved byte capacity")
@@ -216,7 +218,7 @@ class AuthorityStorage:
             if (
                 current is None
                 or current.effect_fingerprint != reservation.effect_fingerprint
-                or not current.retain_objects
+                or not current.retention.retains_object
                 or current.object_slots != reservation.object_slots
             ):
                 raise ReservationConflict("record reservation no longer matches durable authority")

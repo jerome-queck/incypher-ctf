@@ -21,6 +21,7 @@ from solver.write_reservation_contracts import (
     ReservationError,
     ReservationState,
     ReservationUnavailable,
+    RetentionPolicy,
     WriteProfile,
     WriteReservation,
     digest,
@@ -77,7 +78,7 @@ class WriteAuthority:
                 retained = [
                     reservation.key
                     for reservation in self._storage.latest_locked().values()
-                    if reservation.retain_objects and reservation.state in FINAL_STATES
+                    if reservation.retention.requires_receipt and reservation.state in FINAL_STATES
                 ]
             for key in retained:
                 self.write_receipt(key)
@@ -117,17 +118,18 @@ class WriteAuthority:
         need: Capacity,
         *,
         pool: Pool = Pool.SHARED,
-        retain_objects: bool = False,
+        retention: RetentionPolicy = RetentionPolicy.RELEASE,
     ) -> WriteReservation:
         pool = Pool(pool)
+        retention = RetentionPolicy(retention)
         if not key or need.operations < 3:
             raise ValueError("a reservation needs a key and at least three durability operations")
         self._call_hook("before_reserve")
         with self._storage.locked():
             if current := self._current_locked(key):
                 self._assert_same_effect(current, identity.fingerprint)
-                if current.state in {ReservationState.RESERVED, ReservationState.STARTED} and (
-                    current.retain_objects != retain_objects
+                if current.state not in {ReservationState.ABORTED, ReservationState.REFUSED} and (
+                    current.retention is not retention
                 ):
                     raise ReservationConflict("idempotency key changed its reserved-record policy")
                 return current
@@ -151,14 +153,14 @@ class WriteAuthority:
                 state=ReservationState.RESERVED,
                 object_slots=slots,
                 boot_id=self._boot_id,
-                retain_objects=retain_objects,
+                retention=retention,
                 grant_remaining_bytes=extent.stat().st_size - need.bytes,
             )
             self._storage.append_locked(reservation)
             try:
                 self._storage.shrink_extent_locked(pool, need.bytes)
             except BaseException:
-                aborted = reservation.transitioned(ReservationState.ABORTED, retain_objects=False)
+                aborted = reservation.transitioned(ReservationState.ABORTED, retention=RetentionPolicy.RELEASE)
                 self._storage.append_locked(aborted)
                 if self._storage.release_object_slots_locked(aborted):
                     self._storage.replenish_extent_locked(pool, need.bytes)
@@ -173,28 +175,14 @@ class WriteAuthority:
         self,
         reservation: WriteReservation,
         observation: Mapping[str, Any],
-        *,
-        replenish: bool = True,
-        retain_objects: bool | None = None,
     ) -> WriteReservation:
-        return self._finish(
-            reservation,
-            ReservationState.COMMITTED,
-            observation,
-            replenish=replenish,
-            retain_objects=retain_objects,
-        )
+        return self._finish(reservation, ReservationState.COMMITTED, observation)
 
     def possibly_sent(self, reservation: WriteReservation, reason: str) -> WriteReservation:
         return self._finish(reservation, ReservationState.POSSIBLY_SENT, {"reason": reason})
 
     def abort(self, reservation: WriteReservation, reason: str) -> WriteReservation:
-        return self._finish(
-            reservation,
-            ReservationState.ABORTED,
-            {"reason": reason},
-            retain_objects=False,
-        )
+        return self._finish(reservation, ReservationState.ABORTED, {"reason": reason})
 
     def record_terminal(
         self,
@@ -243,9 +231,6 @@ class WriteAuthority:
         reservation: WriteReservation,
         state: ReservationState,
         observation: Mapping[str, Any],
-        *,
-        replenish: bool = True,
-        retain_objects: bool | None = None,
     ) -> WriteReservation:
         with self._storage.locked():
             current = self._require_current_locked(reservation)
@@ -259,16 +244,15 @@ class WriteAuthority:
             }
             if allowed.get(state) is not current.state:
                 raise ReservationConflict(f"{current.state.value} cannot transition to {state.value}")
-            if retain_objects and not current.retain_objects:
-                raise ReservationConflict("object retention was not reserved at admission")
+            retention = RetentionPolicy.RELEASE if state is ReservationState.ABORTED else current.retention
             closed = current.transitioned(
                 state,
                 _bounded(observation, self._redactor),
-                retain_objects=retain_objects,
+                retention=retention,
             )
             self._storage.append_locked(closed)
-            released = not closed.retain_objects and self._storage.release_object_slots_locked(closed)
-            if replenish and released:
+            released = not closed.retention.retains_object and self._storage.release_object_slots_locked(closed)
+            if released:
                 self._storage.replenish_extent_locked(closed.pool, closed.need.bytes)
             return closed
 
@@ -281,7 +265,7 @@ class WriteAuthority:
                     ReservationState.ABORTED,
                     {"reason": "restart-before-effect"},
                     boot_id=self._boot_id,
-                    retain_objects=False,
+                    retention=RetentionPolicy.RELEASE,
                 )
                 self._storage.append_locked(recovered)
                 if self._storage.release_object_slots_locked(recovered):
@@ -293,7 +277,7 @@ class WriteAuthority:
                     boot_id=self._boot_id,
                 )
                 self._storage.append_locked(recovered)
-                if not recovered.retain_objects:
+                if not recovered.retention.retains_object:
                     if self._storage.release_object_slots_locked(recovered):
                         self._storage.replenish_extent_locked(recovered.pool, recovered.need.bytes)
 
@@ -365,21 +349,22 @@ class ReservedEffect:
         encode: Callable[[Result], Mapping[str, Any]],
         decode: Callable[[Mapping[str, Any]], Result],
         observe: Callable[[Result], None] | None = None,
-        retain_receipt: bool = False,
+        retention: RetentionPolicy = RetentionPolicy.RELEASE,
     ) -> Result:
-        reservation = self._authority.reserve(key, identity, need, retain_objects=retain_receipt)
+        retention = RetentionPolicy(retention)
+        reservation = self._authority.reserve(key, identity, need, retention=retention)
         if reservation.state is ReservationState.COMMITTED:
-            if retain_receipt:
+            if reservation.retention.requires_receipt:
                 self._authority.write_receipt(key)
             return decode(reservation.observation or {})
         if reservation.state is ReservationState.STARTED:
             reservation = self._await_terminal(reservation)
             if reservation.state is ReservationState.COMMITTED:
-                if retain_receipt:
+                if reservation.retention.requires_receipt:
                     self._authority.write_receipt(key)
                 return decode(reservation.observation or {})
         if reservation.state is not ReservationState.RESERVED:
-            if retain_receipt and reservation.retain_objects and reservation.state in FINAL_STATES:
+            if reservation.retention.requires_receipt and reservation.state in FINAL_STATES:
                 self._authority.write_receipt(key)
             raise EffectIndeterminate(f"effect {key!r} is {reservation.state.value} and cannot be repeated")
         started, acquired = self._authority._claim_start(reservation)
@@ -391,23 +376,18 @@ class ReservedEffect:
         try:
             result = effect()
             self._authority._call_hook("after_effect")
-            committed = self._authority.commit(
-                started,
-                encode(result),
-                replenish=not retain_receipt,
-                retain_objects=retain_receipt,
-            )
+            committed = self._authority.commit(started, encode(result))
         except BaseException as error:
             current = self._authority.current(key)
             if current is not None and current.state is ReservationState.STARTED:
                 current = self._authority.possibly_sent(started, type(error).__name__)
-                if current.retain_objects:
+                if current.retention.requires_receipt:
                     try:
                         self._authority.write_receipt(key)
                     except (OSError, ReservationError):
                         pass
             raise
-        if retain_receipt:
+        if committed.retention.requires_receipt:
             self._authority.write_receipt(key)
         if observe is not None:
             try:
@@ -440,6 +420,7 @@ __all__ = [
     "ReservationConflict",
     "ReservationState",
     "ReservationUnavailable",
+    "RetentionPolicy",
     "ReservedEffect",
     "WriteAuthority",
     "WriteProfile",

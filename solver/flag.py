@@ -86,7 +86,7 @@ from solver.record import NO_MODEL, SOURCE_SOLVER, Recorder
 from solver.shell import run
 from solver.stall import replayable
 from solver.wrapper import compiled, found_in
-from solver.write_reservation import Capacity, EffectIdentity, ReservedEffect
+from solver.write_reservation import Capacity, EffectIdentity, ReservedEffect, RetentionPolicy
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
 # gives: a reader of a stream can tell what the Solver said from what a tool said, and never takes
@@ -641,7 +641,7 @@ class Flags:
                 http_status=int(answer["http_status"]),
             ),
             observe=observe,
-            retain_receipt=True,
+            retention=RetentionPolicy.RECEIPT,
         )
         shape = submission_shape({"message": verdict.message})
         return Graded(candidate, verdict, shape)
