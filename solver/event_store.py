@@ -113,6 +113,9 @@ class EventStore:
     def events(self) -> list[CommittedEvent]:
         return self._core.events()
 
+    def reservations(self) -> list[EventReservation]:
+        return self._core.reservations()
+
     def blob(self, digest: str) -> bytes:
         return self._core.blob(digest)
 
