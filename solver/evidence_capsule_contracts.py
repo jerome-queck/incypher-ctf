@@ -75,20 +75,22 @@ class ReceiptRegistry:
 @dataclass(frozen=True)
 class ScannerVaultIdentity:
     receipt: str
+    schema_version: int
     version: int
+    attestation_id: str
     completeness_run_id: str
     completeness_chain_head: str
-    source_digest: str
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "receipt": self.receipt,
+            "schema_version": self.schema_version,
             "version": self.version,
+            "attestation_id": self.attestation_id,
             "completeness_through": {
                 "run_id": self.completeness_run_id,
                 "chain_head": self.completeness_chain_head,
             },
-            "source_digest": self.source_digest,
         }
 
 

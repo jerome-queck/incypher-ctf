@@ -122,9 +122,6 @@ class HostSanitizationAuthority:
 def policy_digest(policy: SanitizationPolicy) -> str:
     basis = {
         "version": policy.version,
-        "secrets": sorted(
-            (name, hashlib.sha256(value.encode()).hexdigest()) for name, value in policy.secrets if value.strip()
-        ),
         "forbidden_path_digests": sorted(hashlib.sha256(path.encode()).hexdigest() for path in policy.forbidden_paths),
         "vault": policy.vault.as_dict(),
     }

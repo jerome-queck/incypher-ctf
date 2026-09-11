@@ -105,7 +105,7 @@ class VaultReader:
         return self.body
 
 
-def vault_body(store, *, current=None, historical=(), source=None, version=1):
+def vault_body(store, *, current=None, historical=(), source=None, version=1, attestation_id="a" * 64):
     if source is None:
         try:
             snapshot = store.terminal_snapshot()
@@ -123,6 +123,7 @@ def vault_body(store, *, current=None, historical=(), source=None, version=1):
             "schema_version": 1,
             "kind": VAULT_KIND,
             "version": version,
+            "attestation_id": attestation_id,
             "completeness_through": through,
             "values": values,
         }
@@ -308,11 +309,52 @@ def test_scanner_vault_rechecks_before_rename(tmp_path):
 
     def rotate_vault(phase):
         if phase == "before_rename":
-            reader.body = vault_body(source[0], version=2)
+            reader.body = vault_body(source[0], current=(("TEAM_KEY", "changed-secret"),))
 
     with pytest.raises(CapsuleRefused, match="authority changed"):
         publish(transaction(staged, source=source, scan_authority=trusted, hook=rotate_vault))
     assert not (staged / "runs" / "capsules").exists()
+
+
+def test_scanner_vault_attestation_revision_changes_published_identity(tmp_path):
+    store, _digest = terminal_store(tmp_path)
+    first = scan_authority(
+        tmp_path / "first",
+        store,
+        vault=vault_body(store, attestation_id="a" * 64),
+    )
+    second = scan_authority(
+        tmp_path / "second",
+        store,
+        vault=vault_body(store, attestation_id="b" * 64),
+    )
+    snapshot = store.terminal_snapshot()
+
+    first.bind_source(snapshot.run_id, snapshot.chain_head)
+    second.bind_source(snapshot.run_id, snapshot.chain_head)
+
+    assert first.identity != second.identity
+    assert first.identity["receipt"] != second.identity["receipt"]
+
+
+def test_published_scan_identity_cannot_verify_low_entropy_secret_guesses(tmp_path):
+    secret = "password"
+    source = terminal_store(tmp_path)
+    trusted = scan_authority(
+        tmp_path,
+        source[0],
+        historical=(("CTFD_API_TOKEN", secret),),
+    )
+
+    promoted = publish(transaction(tmp_path, source=source, scan_authority=trusted))
+
+    published = b"".join(path.read_bytes() for path in promoted.path.rglob("*") if path.is_file())
+    guesses = ("password", "hunter2", "letmein")
+    assert b"source_digest" not in published
+    assert b'"secrets"' not in published
+    for guess in guesses:
+        assert guess.encode() not in published
+        assert hashlib.sha256(guess.encode()).hexdigest().encode() not in published
 
 
 def test_directory_durability_precedes_authority_commit_in_full_order(tmp_path, monkeypatch):
@@ -384,12 +426,13 @@ def test_identity_basis_binds_candidate_profile_source_blobs_schema_and_producer
     assert basis["scan_policy"]["vault"] == {
         "receipt": vault_receipt(
             version=1,
+            attestation_id="a" * 64,
             completeness_through={"run_id": "run-proof", "chain_head": basis["source"]["chain_head"]},
-            source_digest=basis["scan_policy"]["vault"]["source_digest"],
         ),
+        "schema_version": 1,
         "version": 1,
+        "attestation_id": "a" * 64,
         "completeness_through": {"run_id": "run-proof", "chain_head": basis["source"]["chain_head"]},
-        "source_digest": basis["scan_policy"]["vault"]["source_digest"],
     }
     assert b"fixture-current" not in b"".join(path.read_bytes() for path in promoted.path.rglob("*") if path.is_file())
     assert {item["digest"] for item in basis["blobs"]} | {

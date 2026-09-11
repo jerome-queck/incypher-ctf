@@ -26,7 +26,7 @@ AREA = Capacity(
 PROFILE = WriteProfile(AREA, AREA, AREA)
 
 
-class FileVaultReader:
+class FixtureScannerVaultReader:
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -70,7 +70,7 @@ def main() -> None:
         scan_authority=HostSanitizationAuthority(
             root / "host-scan-authority",
             host_paths=(root,),
-            vault_reader=FileVaultReader(root / "scanner-vault.json"),
+            vault_reader=FixtureScannerVaultReader(root / "scanner-vault.json"),
         ),
         write_authority=WriteAuthority(root / "authority", PROFILE),
         runs_directory=root / "runs",

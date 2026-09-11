@@ -251,6 +251,7 @@ password is one JSON object:
   "schema_version": 1,
   "kind": "evidence-scanner-vault",
   "version": 1,
+  "attestation_id": "64-cryptographically-random-lowercase-hex-characters",
   "completeness_through": {"run_id": "RUN_ID", "chain_head": "64-lowercase-hex-digest"},
   "values": {
     "ANTHROPIC_API_KEY": {"current": [], "historical": []},
@@ -265,8 +266,11 @@ password is one JSON object:
 
 Every declared name must be present. Lists contain exact values, not hashes: move a rotated or
 deleted value from `current` to `historical`. Multiple simultaneously valid Board tokens may remain
-in `current`. Increment `version` on every vault edit, and bind
-`completeness_through` to the closed Run being promoted. Its chain head is the final
+in `current`. Increment `version` and replace `attestation_id` with a fresh
+`python3 -c 'import secrets; print(secrets.token_hex(32))'` value on every vault edit. The opaque ID
+is safe to publish and prevents the published vault identity from becoming a verifier for guessed
+secret values. Bind `completeness_through` to the closed Run being promoted. Its chain head is the
+final
 `event_digest` in `state/runs/<RUN_ID>/canonical/events.jsonl`.
 
 Retire a historical value only after auditing `state/runs/`: every remaining Run that could predate
@@ -293,7 +297,7 @@ Verify only the non-secret metadata; the password body travels through the pipe 
 
 ```bash
 security find-generic-password -s incypher-ctf.evidence-scanner-vault -a solver -w \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"],d["version"],d["completeness_through"])'
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"],d["version"],d["attestation_id"],d["completeness_through"])'
 ```
 
 ## How they reach the container

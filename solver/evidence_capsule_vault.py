@@ -64,15 +64,15 @@ class ScannerVault:
 def vault_receipt(
     *,
     version: int,
+    attestation_id: str,
     completeness_through: Mapping[str, str],
-    source_digest: str,
 ) -> str:
     basis = {
         "kind": VAULT_KIND,
         "schema_version": VAULT_SCHEMA_VERSION,
         "version": version,
+        "attestation_id": attestation_id,
         "completeness_through": dict(completeness_through),
-        "source_digest": source_digest,
     }
     return f"sha256:{digest_bytes(canonical_bytes(basis))}"
 
@@ -89,7 +89,7 @@ def read_scanner_vault(reader: ScannerVaultReader) -> ScannerVault:
         body = reader.read()
     except CapsuleRefused:
         raise
-    except BaseException:
+    except Exception:
         raise CapsuleRefused("scanner vault reader failed") from None
     if not isinstance(body, bytes) or not body.strip():
         raise CapsuleRefused("scanner vault item is missing or empty")
@@ -98,15 +98,23 @@ def read_scanner_vault(reader: ScannerVaultReader) -> ScannerVault:
         "schema_version",
         "kind",
         "version",
+        "attestation_id",
         "completeness_through",
         "values",
     }
     if set(document) != required or document.get("schema_version") != 1 or document.get("kind") != VAULT_KIND:
         raise CapsuleRefused("scanner vault schema is invalid or incomplete")
     version = document.get("version")
+    attestation_id = document.get("attestation_id")
     through, values = document.get("completeness_through"), document.get("values")
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
         raise CapsuleRefused("scanner vault version is invalid")
+    if (
+        not isinstance(attestation_id, str)
+        or len(attestation_id) != 64
+        or any(character not in "0123456789abcdef" for character in attestation_id)
+    ):
+        raise CapsuleRefused("scanner vault attestation ID is invalid")
     if (
         not isinstance(through, dict)
         or set(through) != {"run_id", "chain_head"}
@@ -137,13 +145,17 @@ def read_scanner_vault(reader: ScannerVaultReader) -> ScannerVault:
         secrets.extend((name, value) for value in combined)
     if not secrets:
         raise CapsuleRefused("scanner vault contains no exact credential values")
-    source_digest = digest_bytes(canonical_bytes(values))
-    receipt = vault_receipt(version=version, completeness_through=through, source_digest=source_digest)
+    receipt = vault_receipt(
+        version=version,
+        attestation_id=attestation_id,
+        completeness_through=through,
+    )
     identity = ScannerVaultIdentity(
         receipt=receipt,
+        schema_version=VAULT_SCHEMA_VERSION,
         version=version,
+        attestation_id=attestation_id,
         completeness_run_id=through["run_id"],
         completeness_chain_head=through["chain_head"],
-        source_digest=source_digest,
     )
     return ScannerVault(identity, tuple(secrets), tuple(current_secrets), digest_bytes(canonical_bytes(document)))
