@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,7 @@ def container_command(
     env_file: Path | None,
     state: Path | None,
     preflight_only: bool,
+    binding: tuple[str, str, str] | None = None,
 ) -> list[str]:
     """Return the one Docker command allowed to start the strict Solver image."""
     command = ["docker", "run"]
@@ -67,6 +70,18 @@ def container_command(
             f"INCYPHER_STRICT_IMAGE={image_id}",
         ]
     )
+    if binding is not None:
+        manifest_digest, config_digest, platform = binding
+        command.extend(
+            [
+                "--env",
+                f"INCYPHER_IMAGE_MANIFEST={manifest_digest}",
+                "--env",
+                f"INCYPHER_IMAGE_CONFIG={config_digest}",
+                "--env",
+                f"INCYPHER_IMAGE_PLATFORM={platform}",
+            ]
+        )
 
     if not preflight_only:
         if env_file is not None:
@@ -104,6 +119,36 @@ def tool_probe_command(
     return command
 
 
+def attempt_resource_probe_command(
+    image_id: str,
+    manifest_digest: str,
+    config_digest: str,
+    platform: str,
+    state: Path,
+) -> list[str]:
+    """Run the semantic Resource fixtures in the same exact strict image."""
+
+    command = container_command(
+        image_id,
+        env_file=None,
+        state=None,
+        preflight_only=True,
+        binding=(manifest_digest, config_digest, platform),
+    )
+    command[-5:] = [
+        "--mount",
+        f"type=bind,source={state},target=/state",
+        "--env",
+        "INCYPHER_DENY_PROBE_SECRET=qualification-secret",
+        "--entrypoint",
+        "python3",
+        image_id,
+        "-m",
+        "solver.attempt_resource_probe",
+    ]
+    return command
+
+
 def _check_result(result: Any, command: list[str]) -> None:
     returncode = getattr(result, "returncode", None)
     if returncode not in (None, 0):
@@ -116,14 +161,49 @@ def _checked(command: list[str], runner: CommandRunner) -> Any:
     return result
 
 
-def _image_id(runner: CommandRunner) -> str:
-    command = ["docker", "image", "inspect", "--format", "{{.Id}}", IMAGE_TAG]
-    result = runner(command, check=True, capture_output=True, text=True)
-    _check_result(result, command)
-    image_id = str(getattr(result, "stdout", "")).strip()
-    if not IMAGE_ID.fullmatch(image_id):
+def build_image(runner: CommandRunner) -> tuple[str, str, str, str]:
+    with tempfile.TemporaryDirectory(prefix="strict-image-metadata-") as temporary:
+        metadata_path = Path(temporary) / "metadata.json"
+        _checked(
+            [
+                "docker",
+                "buildx",
+                "build",
+                "--load",
+                "--provenance=false",
+                "--metadata-file",
+                str(metadata_path),
+                "--tag",
+                IMAGE_TAG,
+                ".",
+            ],
+            runner,
+        )
+        metadata = json.loads(metadata_path.read_text())
+    manifest = metadata.get("containerimage.digest")
+    config = metadata.get("containerimage.config.digest")
+    inspected = (
+        runner(
+            ["docker", "image", "inspect", "--format", "{{.Id}} {{.Os}}/{{.Architecture}}", IMAGE_TAG],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .split()
+    )
+    if len(inspected) != 2 or not IMAGE_ID.fullmatch(inspected[0]):
         raise RuntimeError("docker image inspect did not return an immutable sha256 image ID")
-    return image_id
+    if (
+        not isinstance(manifest, str)
+        or not IMAGE_ID.fullmatch(manifest)
+        or not isinstance(config, str)
+        or not IMAGE_ID.fullmatch(config)
+        or inspected[0] != manifest
+        or inspected[1] not in {"linux/arm64", "linux/amd64"}
+    ):
+        raise RuntimeError("BuildKit did not bind one loaded OCI image")
+    return inspected[0], manifest, config, inspected[1]
 
 
 def _validate_path(label: str, path: Path, home: Path) -> None:
@@ -151,8 +231,7 @@ def _launch(
     if verified != 0:
         return verified
 
-    _checked(["docker", "build", "--quiet", "--tag", IMAGE_TAG, "."], runner)
-    image_id = _image_id(runner)
+    image_id, manifest_digest, config_digest, platform = build_image(runner)
 
     try:
         _checked(
@@ -174,6 +253,7 @@ def _launch(
                 env_file=env_file,
                 state=state,
                 preflight_only=preflight_only,
+                binding=(manifest_digest, config_digest, platform),
             ),
             runner,
         )

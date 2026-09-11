@@ -35,7 +35,9 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from solver.attempt_executor_contracts import AttemptRequest, EnvelopeSpec, NetworkPolicy, ResourceOutcome
 from solver.record import NO_MODEL, SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.shell import run
 from solver.wrapper import compiled, found_in
@@ -77,6 +79,11 @@ EXIFTOOL = ("exiftool", "-a", "-G1", "-s")
 # before the model has read a word, and a Challenge shipping a directory of frames would otherwise
 # spend the opening frame on them.
 PICTURES = 4
+
+DISPATCH_MEMORY_BYTES = 128 * 1024 * 1024
+DISPATCH_PIDS = 8
+DISPATCH_FILESYSTEM_BYTES = 128 * 1024 * 1024
+DISPATCH_CLEANUP_SECONDS = 5.0
 
 # Keyed by the full mime type, then by its major part, then by nothing at all — which is the
 # unknown branch and is empty by design. Every entry is argv without the artefact, which is
@@ -153,6 +160,8 @@ def recon(
     attempt_id: str,
     limits: Limits = Limits(),
     first_step: int = 1,
+    generation_id: str = "",
+    executor: Any | None = None,
 ) -> Recon:
     """Work a Challenge's prose and its files, and return what was observed.
 
@@ -166,7 +175,15 @@ def recon(
     deployed before anything is reconned, and two counters would put two Steps at the same address
     (`solver/instance.py`).
     """
-    cascade = _Cascade(recorder, attempt_id, limits, tuple(flag_wrappers), first_step - 1)
+    cascade = _Cascade(
+        recorder,
+        attempt_id,
+        limits,
+        tuple(flag_wrappers),
+        first_step - 1,
+        generation_id=generation_id,
+        executor=executor,
+    )
     cascade.read(description)
     for artefact in artefacts:
         cascade.work(Path(artefact))
@@ -178,7 +195,15 @@ class _Cascade:
     place a probe of any kind — external command or in-process reading — becomes a record."""
 
     def __init__(
-        self, recorder: Recorder, attempt_id: str, limits: Limits, flag_wrappers: tuple[str, ...], spent: int = 0
+        self,
+        recorder: Recorder,
+        attempt_id: str,
+        limits: Limits,
+        flag_wrappers: tuple[str, ...],
+        spent: int = 0,
+        *,
+        generation_id: str = "",
+        executor: Any | None = None,
     ) -> None:
         self._recorder = recorder
         self._attempt_id = attempt_id
@@ -186,6 +211,8 @@ class _Cascade:
         self._wrappers = flag_wrappers
         self._deadline = time.monotonic() + limits.cascade_seconds
         self._step = spent
+        self._generation_id = generation_id
+        self._executor = executor
         self.probes: list[Probe] = []
         self.pictures: list[Path] = []
 
@@ -218,10 +245,42 @@ class _Cascade:
     def _dispatch(self, subject: str, artefact: Path) -> str:
         """What `file` said, read from its own bytes rather than from the record's rendering of
         them — dispatch is a function of the tool's answer, and never of how a Step is shown."""
-        exit_code, answered = self._command(subject, (*DISPATCH, str(artefact)))
+        if self._executor is None:
+            exit_code, answered = self._command(subject, (*DISPATCH, str(artefact)))
+        else:
+            exit_code, answered = self._executor_command(subject, artefact)
         if exit_code != 0 or not answered.strip():
             return ""
         return answered.decode("utf-8", "replace").strip().splitlines()[0]
+
+    def _executor_command(self, subject: str, artefact: Path) -> tuple[int | None, bytes]:
+        argv = (*DISPATCH, artefact.name)
+
+        def execute(_budget: float) -> tuple[int | None, bytes]:
+            result = self._executor.start(
+                AttemptRequest(
+                    generation_id=self._generation_id,
+                    attempt_id=self._attempt_id,
+                    step_id=f"{self._attempt_id}:step-{self._step}",
+                    argv=argv,
+                    workspace=artefact.parent,
+                    envelope=EnvelopeSpec(
+                        cpu_seconds=self._limits.command_seconds,
+                        cpu_quota_us=100_000,
+                        memory_bytes=DISPATCH_MEMORY_BYTES,
+                        pids=DISPATCH_PIDS,
+                        filesystem_bytes=DISPATCH_FILESYSTEM_BYTES,
+                        network=NetworkPolicy.DENY,
+                        wall_seconds=self._limits.command_seconds,
+                        cleanup_seconds=DISPATCH_CLEANUP_SECONDS,
+                    ),
+                )
+            ).result()
+            if result.outcome is ResourceOutcome.EXITED:
+                return result.exit_code, result.output
+            return None, f"{MARK} Attempt executor returned {result.outcome.value}".encode()
+
+        return self._probe(subject, " ".join(argv), argv[0], execute)
 
     def _floor(self, subject: str, artefact: Path) -> None:
         self._command(subject, (*STRINGS, str(artefact)))

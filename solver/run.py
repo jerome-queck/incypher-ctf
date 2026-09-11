@@ -210,6 +210,7 @@ class Run:
         idle_seconds: float = IDLE_SECONDS,
         now: Callable[[], dt.datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        attempt_executor=None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -228,6 +229,7 @@ class Run:
         self._idle_seconds = idle_seconds
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self._sleep = sleep
+        self._attempt_executor = attempt_executor
         self._boundaries: dict[int | str, Boundary] = {}
         self._pending: dict[int | str, Pending] = {}
         # Every candidate already put to the submission gate, per Challenge. Turns of one Attempt
@@ -659,6 +661,8 @@ class Run:
             recorder=self._recorder,
             attempt_id=held.attempt_id,
             first_step=self._steps.next_index(),
+            generation_id=held.generation_id,
+            executor=self._attempt_executor,
         )
         self._steps.reached(self._steps.spent + len(found.probes))
         return found

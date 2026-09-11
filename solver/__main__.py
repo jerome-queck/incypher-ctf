@@ -25,6 +25,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from solver import boot, profile
+from solver.attempt_executor import AttemptExecutor
+from solver.attempt_executor_contracts import RuntimeBinding
+from solver.attempt_executor_pool import POOL_ENV, attach_attempt_pool
+from solver.attempt_executor_runtime import AttemptRuntime
 from solver.board import Board
 from solver.boot import Refusal
 from solver.capability_service import CapabilityService
@@ -33,6 +37,8 @@ from solver.event_store import EventStoreDamage
 from solver.flag import Flags, Pace
 from solver.instance import Instances
 from solver.intake import Intake
+from solver.isolation import IMAGE_ID as STRICT_IMAGE_ENV
+from solver.isolation_receipt import RECEIPT_FILENAME as ISOLATION_RECEIPT_FILENAME
 from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.replay import verify_and_materialize_run_state
@@ -182,6 +188,23 @@ def _run_admitted(
     # Board's to withdraw, and a Run whose judge kept it would be playing one invocation outside the
     # rules the rest of it obeys (ADR-0014).
     judge = asking(held.chain[0], recorder=recorder, workdir=run_state / JUDGE_WORKDIR, web_search=rules.web_search)
+    attempt_executor = None
+    if POOL_ENV in environ:
+        binding = RuntimeBinding(
+            image_id=environ.get(STRICT_IMAGE_ENV, ""),
+            image_manifest_digest=environ.get("INCYPHER_IMAGE_MANIFEST", ""),
+            image_config_digest=environ.get("INCYPHER_IMAGE_CONFIG", ""),
+            platform=environ.get("INCYPHER_IMAGE_PLATFORM", ""),
+        )
+        attempt_executor = AttemptExecutor(
+            state=run_state,
+            run_id=held.run_id,
+            isolation_receipt=(run_state / "runs" / held.run_id / "canonical" / ISOLATION_RECEIPT_FILENAME),
+            binding=binding,
+            generation_fence=recorder.generations,
+            runtime=AttemptRuntime(attach_attempt_pool(environ)),
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
     run = Run(
         profile=discovered,
         recorder=recorder,
@@ -200,9 +223,14 @@ def _run_admitted(
         chain=held.chain,
         invocation=Invocation(reasoning_effort=dials.reasoning_effort, web_search=rules.web_search),
         work_root=run_state / ATTEMPT_WORKDIRS,
+        attempt_executor=attempt_executor,
     )
     _on_signal(run)
-    return run.work()
+    try:
+        return run.work()
+    finally:
+        if attempt_executor is not None:
+            attempt_executor.close()
 
 
 def _on_signal(run: Run) -> None:

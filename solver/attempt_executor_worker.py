@@ -1,0 +1,183 @@
+"""Capability-free PID-namespace init for one fixed hostile-execution slot."""
+
+from __future__ import annotations
+
+import base64
+import ctypes
+import json
+import os
+import resource
+import selectors
+import signal
+import socket
+import subprocess
+import sys
+
+
+MAX_FRAME = 4 * 1024 * 1024
+MAX_OUTPUT = 1 * 1024 * 1024
+MAX_ARGV = 1024
+PR_SET_DUMPABLE = 4
+STRACE = "/usr/bin/strace"
+NETWORK_MARKERS = ("socket(", "socketpair(", "connect(", "bind(", "sendto(", "sendmsg(")
+
+
+def encode_frame(message: dict[str, object]) -> bytes:
+    frame = json.dumps(message, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(frame) > MAX_FRAME:
+        raise ValueError("worker protocol frame exceeds bound")
+    return frame
+
+
+def read_frame(connection: socket.socket) -> dict[str, object] | None:
+    data = connection.recv(MAX_FRAME + 1)
+    if not data:
+        return None
+    if len(data) > MAX_FRAME:
+        raise ValueError("worker protocol frame exceeds bound")
+    value = json.loads(data.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("worker frame must be a JSON object")
+    return value
+
+
+def _hardening() -> None:
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+    except (AttributeError, OSError):
+        pass
+    for caught in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(caught, signal.SIG_IGN)
+
+
+def _validated(request: dict[str, object]) -> tuple[str, tuple[str, ...], int]:
+    nonce = request.get("nonce")
+    argv = request.get("argv")
+    filesystem_bytes = request.get("filesystem_bytes")
+    if (
+        not isinstance(nonce, str)
+        or len(nonce) != 32
+        or any(character not in "0123456789abcdef" for character in nonce)
+    ):
+        raise ValueError("launch nonce is invalid")
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or len(argv) > MAX_ARGV
+        or any(not isinstance(item, str) or not item or "\x00" in item for item in argv)
+    ):
+        raise ValueError("argv is invalid")
+    if isinstance(filesystem_bytes, bool) or not isinstance(filesystem_bytes, int) or filesystem_bytes <= 0:
+        raise ValueError("filesystem limit is invalid")
+    return nonce, tuple(argv), filesystem_bytes
+
+
+def _gate(connection: socket.socket, nonce: str) -> None:
+    connection.send(encode_frame({"type": "gated", "nonce": nonce}))
+    answer = read_frame(connection)
+    if answer != {"type": "go", "nonce": nonce}:
+        os._exit(125)
+
+
+def _capture(process: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
+    assert process.stdout is not None
+    descriptor = process.stdout.fileno()
+    os.set_blocking(descriptor, False)
+    selector = selectors.DefaultSelector()
+    selector.register(descriptor, selectors.EVENT_READ)
+    output = bytearray()
+    truncated = False
+    while process.poll() is None:
+        for _key, _events in selector.select(0.05):
+            chunk = os.read(descriptor, 65536)
+            if len(output) < MAX_OUTPUT:
+                room = MAX_OUTPUT - len(output)
+                output.extend(chunk[:room])
+                truncated = truncated or len(chunk) > room
+            elif chunk:
+                truncated = True
+    while True:
+        try:
+            chunk = os.read(descriptor, 65536)
+        except BlockingIOError:
+            break
+        if not chunk:
+            break
+        if len(output) < MAX_OUTPUT:
+            room = MAX_OUTPUT - len(output)
+            output.extend(chunk[:room])
+            truncated = truncated or len(chunk) > room
+        else:
+            truncated = True
+    selector.close()
+    process.stdout.close()
+    return bytes(output), truncated
+
+
+def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, object]:
+    nonce, argv, filesystem_bytes = _validated(request)
+    trace = os.memfd_create("attempt-network-trace", flags=getattr(os, "MFD_CLOEXEC", 0))
+
+    def before_exec() -> None:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (filesystem_bytes, filesystem_bytes))
+        _gate(connection, nonce)
+        connection.close()
+
+    command = [STRACE, "-f", "-qq", "-e", "trace=network", "-o", f"/proc/self/fd/{trace}", "--", *argv]
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd="/work",
+            env={"HOME": "/home/attempt", "PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/work"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            pass_fds=(connection.fileno(), trace),
+            preexec_fn=before_exec,
+        )
+        output, truncated = _capture(process)
+        process.wait()
+        os.lseek(trace, 0, os.SEEK_SET)
+        traced = os.read(trace, MAX_FRAME).decode("utf-8", errors="replace")
+        network_breach = any(marker in traced for marker in NETWORK_MARKERS)
+        return {
+            "type": "result",
+            "exit_code": process.returncode,
+            "output": base64.b64encode(output).decode("ascii"),
+            "output_truncated": truncated,
+            "network_breach": network_breach,
+            "network_trace_bytes": len(traced.encode("utf-8")),
+        }
+    finally:
+        os.close(trace)
+
+
+def serve(connection: socket.socket) -> int:
+    _hardening()
+    connection.send(encode_frame({"type": "ready", "uid": os.getuid()}))
+    while True:
+        try:
+            request = read_frame(connection)
+            if request is None or request.get("type") == "close":
+                return 0
+            if request.get("type") != "launch":
+                raise ValueError("unsupported request")
+            response = _run(connection, request)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            response = {"type": "error", "error": f"{type(error).__name__}: {error}"[:512]}
+        connection.send(encode_frame(response))
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        return 2
+    descriptor = int(sys.argv[1])
+    return serve(socket.socket(fileno=descriptor))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+__all__ = ["MAX_FRAME", "MAX_OUTPUT", "encode_frame", "read_frame", "serve"]
