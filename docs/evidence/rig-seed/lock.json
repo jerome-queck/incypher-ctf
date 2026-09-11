@@ -1,0 +1,46 @@
+{
+  "candidate_digest": "sha256:0f39d11f45b144d00b530846f9a6df5a71c3c1150c02df0029b292f27f49ecf6",
+  "image_digests": {
+    "board": "sha256:45fa690b88f2b7f031a098776f1d3b60b66292853dac3729eb08a0fdfe1bbe63",
+    "target": "sha256:45fa690b88f2b7f031a098776f1d3b60b66292853dac3729eb08a0fdfe1bbe63"
+  },
+  "proofs": [
+    {
+      "expected": {
+        "infrastructure_failure": null,
+        "infrastructure_valid": true,
+        "solver_exit_code": 2,
+        "solver_outcome": "failed"
+      },
+      "name": "solver-failure",
+      "public_key": "solver-failure.public.pem",
+      "receipt": "solver-failure.receipt.json",
+      "sha256": {
+        "public_key": "378d8eec30e83c26dda15c60bf0f1bb7e94068cc9bc88ba56c9e2133ac64ff14",
+        "receipt": "175ede56c8768999e49c28f6a1614999858fc560227472423bf075545d66374f",
+        "signature": "8be73c8969f39e6591b080a0cac74ed99df7017406c560d1ef068e2371eac96f"
+      },
+      "signature": "solver-failure.receipt.sig.b64"
+    },
+    {
+      "expected": {
+        "infrastructure_failure": "target_unavailable",
+        "infrastructure_valid": false,
+        "solver_exit_code": null,
+        "solver_outcome": "not_observed"
+      },
+      "name": "rig-failure",
+      "public_key": "rig-failure.public.pem",
+      "receipt": "rig-failure.receipt.json",
+      "sha256": {
+        "public_key": "bfd9f121ac6d8212e3a9faeeb1da7ba6350bf79f5b8b0876fea664baf28032df",
+        "receipt": "d43389794f42071f144aedd322402e8e411fafbb74446fdbde1f0a17544d28b5",
+        "signature": "22ccbafbefdf6fc198d6ca1b677a7d68fe15bec2ea293b70db7be04867b48902"
+      },
+      "signature": "rig-failure.receipt.sig.b64"
+    }
+  ],
+  "repository": "https://github.com/jerome-queck/incypher-practice-rig",
+  "rig_commit": "9df9ea7743d9b6b3f2b19bb0718df99c2a3d7dd1",
+  "schema": "rig-seed-lock/v1"
+}
