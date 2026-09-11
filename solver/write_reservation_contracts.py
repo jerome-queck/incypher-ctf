@@ -102,6 +102,7 @@ class WriteReservation:
     object_slots: tuple[str, ...] = ()
     observation: Mapping[str, Any] | None = None
     boot_id: str = ""
+    retain_objects: bool = False
 
     def transitioned(
         self,
@@ -109,12 +110,14 @@ class WriteReservation:
         observation: Mapping[str, Any] | None = None,
         *,
         boot_id: str | None = None,
+        retain_objects: bool | None = None,
     ) -> WriteReservation:
         return replace(
             self,
             state=state,
             observation=dict(observation) if observation is not None else None,
             boot_id=boot_id or self.boot_id,
+            retain_objects=self.retain_objects if retain_objects is None else retain_objects,
         )
 
 

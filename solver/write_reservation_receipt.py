@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
+from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.write_reservation_contracts import (
     MANIFEST_RECEIPT_REF,
     MANIFEST_ROW_ID,
@@ -66,9 +65,10 @@ def write_receipt(authority: WriteAuthority, key: str, destination: Path | None 
         raise ValueError(f"unknown reservation {key!r}")
     document = receipt_document(authority, reservation)
     document["receipt_digest"] = digest(document)
-    destination = destination or authority.receipts_dir / f"{hashlib.sha256(key.encode()).hexdigest()}.json"
-    atomic_write(destination, canonical_bytes(document) + b"\n")
-    return destination
+    reserved_path = authority.object_path(reservation)
+    if destination is not None and Path(destination) != reserved_path:
+        raise ValueError("write-reservation receipt must use its precreated reserved object")
+    return authority.persist_reserved_record(reservation, canonical_bytes(document) + b"\n")
 
 
 def verify_receipt(authority: WriteAuthority, path: Path) -> dict[str, Any]:
@@ -98,20 +98,19 @@ def manifest_receipt(path: Path) -> dict[str, str]:
         raise ValueError("write-reservation receipt does not identify a sealed profile") from error
     document = _read_document(receipt_path)
     storage = AuthorityStorage(receipt_path.parents[2], profile, provision=False)
-    with storage.locked():
-        current = storage.latest_locked().get(str(document.get("key", "")))
-        if current is None:
-            raise ValueError("write-reservation receipt identifies no durable reservation")
-        expected = _receipt_document(
-            digest(profile.as_dict()),
-            current,
-            [row for row in storage.rows_locked() if row["key"] == current.key],
-            storage.extent_path(current.pool).stat().st_size,
-        )
+    snapshot = storage.snapshot(str(document.get("key", "")))
+    if snapshot is None:
+        raise ValueError("write-reservation receipt identifies no durable reservation")
+    expected = _receipt_document(
+        digest(profile.as_dict()),
+        snapshot.reservation,
+        list(snapshot.trace),
+        snapshot.extent_remaining,
+    )
     if document != expected:
         raise ValueError("write-reservation receipt differs from durable authority")
     return {
         "ref": MANIFEST_RECEIPT_REF,
         "kind": RECEIPT_TYPE,
-        "digest": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        "digest": digest_bytes(receipt_path.read_bytes()),
     }

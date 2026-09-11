@@ -7,6 +7,7 @@ import json
 import os
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,13 @@ _WRITER_REGISTRY_LOCK = threading.Lock()
 _HELD_WRITERS: set[Path] = set()
 
 
+@dataclass(frozen=True)
+class AuthoritySnapshot:
+    reservation: WriteReservation
+    trace: tuple[dict[str, Any], ...]
+    extent_remaining: int
+
+
 class AuthorityStorage:
     """One flock-serialized store whose future records and objects already exist."""
 
@@ -42,7 +50,6 @@ class AuthorityStorage:
         elif not self.root.is_dir() or not self.lock_path.is_file():
             raise ReservationConflict("sealed write authority is unavailable")
         self.profile_path = self.root / "profile.json"
-        self.receipts_dir = self.root / "receipts"
         self.profile = profile
         with self.locked():
             if provision:
@@ -83,6 +90,18 @@ class AuthorityStorage:
             raise ReservationConflict("reservation has no such precreated object slot") from error
         return self._slots_dir(reservation.pool) / name
 
+    def snapshot(self, key: str) -> AuthoritySnapshot | None:
+        with self.locked():
+            reservation = self.latest_locked().get(key)
+            if reservation is None:
+                return None
+            trace = tuple(row for row in self.rows_locked() if row["key"] == key)
+            return AuthoritySnapshot(
+                reservation=reservation,
+                trace=trace,
+                extent_remaining=self.extent_path(reservation.pool).stat().st_size,
+            )
+
     def append_locked(self, reservation: WriteReservation) -> None:
         ledger = self._ledger_path(reservation.pool)
         slot = self._first_empty_record(ledger)
@@ -100,6 +119,7 @@ class AuthorityStorage:
             "object_slots": list(reservation.object_slots),
             "observation": dict(reservation.observation) if reservation.observation is not None else None,
             "boot_id": reservation.boot_id,
+            "retain_objects": reservation.retain_objects,
         }
         encoded = canonical_bytes(row) + b"\n"
         if len(encoded) > LEDGER_RECORD_BYTES:
@@ -147,6 +167,7 @@ class AuthorityStorage:
                 object_slots=tuple(row["object_slots"]),
                 observation=dict(row["observation"]) if row["observation"] is not None else None,
                 boot_id=str(row["boot_id"]),
+                retain_objects=bool(row.get("retain_objects", False)),
             )
         return latest
 
@@ -163,7 +184,10 @@ class AuthorityStorage:
         claimed = {
             slot
             for reservation in self.latest_locked().values()
-            if reservation.pool is pool and reservation.state in {ReservationState.RESERVED, ReservationState.STARTED}
+            if reservation.pool is pool
+            and (
+                reservation.state in {ReservationState.RESERVED, ReservationState.STARTED} or reservation.retain_objects
+            )
             for slot in reservation.object_slots
         }
         available = []
@@ -178,6 +202,32 @@ class AuthorityStorage:
     def release_object_slots_locked(self, reservation: WriteReservation) -> None:
         for name in reservation.object_slots:
             self._clear_slot(self._slots_dir(reservation.pool) / name)
+
+    def write_object(self, reservation: WriteReservation, body: bytes) -> Path:
+        if not reservation.retain_objects or not reservation.object_slots:
+            raise ReservationConflict("reservation retained no object capacity for this record")
+        if len(body) > reservation.need.bytes:
+            raise ReservationUnavailable("record exceeds its reserved byte capacity")
+        path = self.object_path(reservation)
+        with self.locked():
+            current = self.latest_locked().get(reservation.key)
+            if (
+                current is None
+                or current.effect_fingerprint != reservation.effect_fingerprint
+                or not current.retain_objects
+                or current.object_slots != reservation.object_slots
+            ):
+                raise ReservationConflict("record reservation no longer matches durable authority")
+            descriptor = os.open(path, os.O_WRONLY | os.O_TRUNC)
+            try:
+                remaining = memoryview(body)
+                while remaining:
+                    remaining = remaining[os.write(descriptor, remaining) :]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            fsync_directory(path.parent)
+        return path
 
     def shrink_extent_locked(self, pool: Pool, amount: int) -> None:
         path = self.extent_path(pool)

@@ -641,6 +641,7 @@ class Flags:
                 http_status=int(answer["http_status"]),
             ),
             observe=observe,
+            retain_receipt=True,
         )
         shape = submission_shape({"message": verdict.message})
         return Graded(candidate, verdict, shape)

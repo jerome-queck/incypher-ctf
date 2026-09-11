@@ -259,6 +259,33 @@ def test_closed_transactions_release_the_reusable_physical_grant(tmp_path):
     assert authority.extent_path(Pool.SHARED).stat().st_size == profile.shared.bytes
 
 
+def test_required_receipt_uses_the_effects_precreated_object_and_spent_extent(tmp_path):
+    profile = WriteProfile(
+        ordinary=Capacity(0, 0, 0),
+        shared=Capacity(4_096, 1, 6),
+        terminal=Capacity(0, 0, 0),
+    )
+    authority = WriteAuthority(tmp_path, profile)
+
+    ReservedEffect(authority).execute(
+        "submit:42:one",
+        identity(),
+        NEED,
+        lambda: {"outcome": "incorrect"},
+        encode=lambda verdict: verdict,
+        decode=lambda verdict: verdict,
+        retain_receipt=True,
+    )
+
+    committed = authority.current("submit:42:one")
+    receipt_path = authority.object_path(committed)
+    assert committed.retain_objects is True
+    assert json.loads(receipt_path.read_text())["state"] == "committed"
+    assert authority.extent_path(Pool.SHARED).stat().st_size == 0
+    with pytest.raises(ReservationUnavailable):
+        authority.reserve("submit:42:two", identity("sha256:two"), NEED)
+
+
 def _controlled_proof_observation(root):
     crash_outcomes = {}
     for crash_point in ("before_reserve", "after_reserve", "after_effect"):
@@ -375,11 +402,17 @@ def test_receipt_binds_profile_identity_capacity_and_durable_trace(tmp_path):
     authority = WriteAuthority(tmp_path, PROFILE)
     reservation = authority.reserve("submit:42:one", identity(), NEED)
     authority.start(reservation)
-    authority.commit(reservation, {"outcome": "incorrect"})
+    authority.commit(
+        reservation,
+        {"outcome": "incorrect"},
+        replenish=False,
+        retain_objects=True,
+    )
 
     receipt_path = authority.write_receipt("submit:42:one")
     receipt = json.loads(receipt_path.read_text())
 
+    assert receipt_path == authority.object_path(authority.current("submit:42:one"))
     assert receipt["receipt_type"] == "write-reservation"
     assert receipt["profile_digest"] == authority.profile_digest
     assert receipt["effect_fingerprint"] == reservation.effect_fingerprint

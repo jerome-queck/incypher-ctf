@@ -70,6 +70,7 @@ def test_a_reopened_run_continues_its_sequence(tmp_path):
     Counting from one again would put two records at the same address in one stream."""
     first = Recorder(tmp_path, run_id="run-1", redactor=Redactor({}))
     first.run_open(board_profile={})
+    first.write_authority.close()
 
     second = Recorder(tmp_path, run_id="run-1", redactor=Redactor({}))
     second.run_close(cause="window-closed")
@@ -86,6 +87,7 @@ def test_a_crash_costs_one_line_and_not_two(tmp_path):
     first.run_open(board_profile={})
     with first.stream_path.open("a") as stream:
         stream.write('{"seq": 2, "record": "step-be')
+    first.write_authority.close()
 
     Recorder(tmp_path, run_id="run-1", redactor=Redactor({})).run_close(cause="crashed")
 

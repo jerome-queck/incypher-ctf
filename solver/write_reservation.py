@@ -93,15 +93,14 @@ class WriteAuthority:
     def profile_digest(self) -> str:
         return digest(self._profile.as_dict())
 
-    @property
-    def receipts_dir(self) -> Path:
-        return self._storage.receipts_dir
-
     def extent_path(self, pool: Pool) -> Path:
         return self._storage.extent_path(pool)
 
     def object_path(self, reservation: WriteReservation, index: int = 0) -> Path:
         return self._storage.object_path(reservation, index)
+
+    def persist_reserved_record(self, reservation: WriteReservation, body: bytes) -> Path:
+        return self._storage.write_object(reservation, body)
 
     def reserve(
         self,
@@ -158,8 +157,15 @@ class WriteAuthority:
         observation: Mapping[str, Any],
         *,
         replenish: bool = True,
+        retain_objects: bool = False,
     ) -> WriteReservation:
-        return self._finish(reservation, ReservationState.COMMITTED, observation, replenish=replenish)
+        return self._finish(
+            reservation,
+            ReservationState.COMMITTED,
+            observation,
+            replenish=replenish,
+            retain_objects=retain_objects,
+        )
 
     def possibly_sent(self, reservation: WriteReservation, reason: str) -> WriteReservation:
         return self._finish(reservation, ReservationState.POSSIBLY_SENT, {"reason": reason})
@@ -216,6 +222,7 @@ class WriteAuthority:
         observation: Mapping[str, Any],
         *,
         replenish: bool = True,
+        retain_objects: bool = False,
     ) -> WriteReservation:
         with self._storage.locked():
             current = self._require_current_locked(reservation)
@@ -229,9 +236,14 @@ class WriteAuthority:
             }
             if allowed.get(state) is not current.state:
                 raise ReservationConflict(f"{current.state.value} cannot transition to {state.value}")
-            closed = current.transitioned(state, _bounded(observation, self._redactor))
+            closed = current.transitioned(
+                state,
+                _bounded(observation, self._redactor),
+                retain_objects=retain_objects,
+            )
             self._storage.append_locked(closed)
-            self._storage.release_object_slots_locked(closed)
+            if not closed.retain_objects:
+                self._storage.release_object_slots_locked(closed)
             if replenish:
                 self._storage.replenish_extent_locked(closed.pool, closed.need.bytes)
             return closed
@@ -327,13 +339,18 @@ class ReservedEffect:
         encode: Callable[[Result], Mapping[str, Any]],
         decode: Callable[[Mapping[str, Any]], Result],
         observe: Callable[[Result], None] | None = None,
+        retain_receipt: bool = False,
     ) -> Result:
         reservation = self._authority.reserve(key, identity, need)
         if reservation.state is ReservationState.COMMITTED:
+            if retain_receipt:
+                self._authority.write_receipt(key)
             return decode(reservation.observation or {})
         if reservation.state is ReservationState.STARTED:
             reservation = self._await_terminal(reservation)
             if reservation.state is ReservationState.COMMITTED:
+                if retain_receipt:
+                    self._authority.write_receipt(key)
                 return decode(reservation.observation or {})
         if reservation.state is not ReservationState.RESERVED:
             raise EffectIndeterminate(f"effect {key!r} is {reservation.state.value} and cannot be repeated")
@@ -346,12 +363,19 @@ class ReservedEffect:
         try:
             result = effect()
             self._authority._call_hook("after_effect")
-            committed = self._authority.commit(started, encode(result))
+            committed = self._authority.commit(
+                started,
+                encode(result),
+                replenish=not retain_receipt,
+                retain_objects=retain_receipt,
+            )
         except BaseException as error:
             current = self._authority.current(key)
             if current is not None and current.state is ReservationState.STARTED:
                 self._authority.possibly_sent(started, type(error).__name__)
             raise
+        if retain_receipt:
+            self._authority.write_receipt(key)
         if observe is not None:
             try:
                 observe(result)
