@@ -47,10 +47,11 @@ class ExitedBoot:
         return False
 
 
-def services(*, verify=lambda: None, admit=lambda: None, launch, reap=lambda: 0):
+def services(*, verify=lambda: None, admit=lambda: None, isolate=lambda: None, launch, reap=lambda: 0):
     return SupervisorServices(
         verify_replay=verify,
         admit_storage=admit,
+        preflight_isolation=isolate,
         launch_controller=launch,
         reap_children=reap,
     )
@@ -65,6 +66,9 @@ def test_replay_and_storage_admission_precede_the_effect_capable_boot(tmp_path):
     def admit() -> None:
         trace.append("storage-admission")
 
+    def isolate() -> None:
+        trace.append("strict-isolation")
+
     def launch(boot_id: str) -> ExitedBoot:
         trace.append(f"run-controller:{boot_id}")
         return ExitedBoot(0)
@@ -73,10 +77,10 @@ def test_replay_and_storage_admission_precede_the_effect_capable_boot(tmp_path):
         state=tmp_path,
         run_id="run-1",
         redactor=Redactor({}),
-        services=services(verify=verify, admit=admit, launch=launch),
+        services=services(verify=verify, admit=admit, isolate=isolate, launch=launch),
     ).run()
 
-    assert trace == ["verified-replay", "storage-admission", "run-controller:boot-000001"]
+    assert trace == ["verified-replay", "storage-admission", "strict-isolation", "run-controller:boot-000001"]
     assert result.run_id == "run-1"
     assert result.boot_id == "boot-000001"
     assert result.disposition == NORMAL
@@ -96,6 +100,7 @@ def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp
         "run-open",
         "service-started",
         "service-started",
+        "service-started",
         "boot-open",
         "service-started",
         "child-reaped",
@@ -105,6 +110,7 @@ def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp
     assert [event["service"] for event in lifecycle if event["record"] == "service-started"] == [
         "verified-replay",
         "storage-admission",
+        "strict-isolation",
         "run-controller",
     ]
     assert lifecycle[-3]["reaped_children"] == 3
@@ -114,7 +120,12 @@ def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp
     receipt = json.loads(result.receipt_path.read_text())
     assert receipt["receipt_type"] == "supervisor-lifecycle"
     assert receipt["boot_ids"] == ["boot-000001"]
-    assert receipt["service_order"] == ["verified-replay", "storage-admission", "run-controller"]
+    assert receipt["service_order"] == [
+        "verified-replay",
+        "storage-admission",
+        "strict-isolation",
+        "run-controller",
+    ]
     assert receipt["terminal_disposition"] == NORMAL
     assert receipt["child_reap_result"] == {"reaped_children": 3}
     assert receipt["manifest_link"] == {
@@ -376,6 +387,11 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
     )
     monkeypatch.setattr(
         supervisor_module,
+        "preflight_isolation",
+        lambda *_args: trace.append("strict-isolation"),
+    )
+    monkeypatch.setattr(
+        supervisor_module,
         "launch_boot",
         lambda boot_id, _environ: trace.append(f"run-controller:{boot_id}") or ExitedBoot(0),
     )
@@ -384,7 +400,7 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
     exit_code = supervisor_module.main({"RUN_ID": "run-main"}, state=tmp_path, stay_quiescent=False)
 
     assert exit_code == 0
-    assert trace == ["verified-replay", "storage-admission", "run-controller:boot-000001"]
+    assert trace == ["verified-replay", "storage-admission", "strict-isolation", "run-controller:boot-000001"]
     assert "normal: Run run-main, Boot boot-000001" in capsys.readouterr().out
 
 

@@ -44,6 +44,7 @@ class ForwardedSignal(str, enum.Enum):
 class ServiceName(str, enum.Enum):
     VERIFIED_REPLAY = "verified-replay"
     STORAGE_ADMISSION = "storage-admission"
+    STRICT_ISOLATION = "strict-isolation"
     RUN_CONTROLLER = "run-controller"
 
 

@@ -1,0 +1,201 @@
+"""Run the Solver through the pinned host-side strict Colima profile."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import runtime
+
+CGROUP_PARENT = "incypher-v2-strict"
+CGROUP_SOURCE = "/sys/fs/cgroup/system.slice/incypher-v2-strict"
+IMAGE_TAG = "incypher-solver:strict"
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
+CommandRunner = Callable[..., Any]
+
+
+def _subprocess_run(command: list[str], **kwargs: Any) -> Any:
+    return subprocess.run(command, **kwargs)
+
+
+def container_command(
+    image_id: str,
+    *,
+    env_file: Path | None,
+    state: Path | None,
+    preflight_only: bool,
+) -> list[str]:
+    """Return the one Docker command allowed to start the strict Solver image."""
+    command = ["docker", "run"]
+    if preflight_only:
+        command.append("--rm")
+    else:
+        command.extend(["--restart", "unless-stopped"])
+    command.extend(
+        [
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "SYS_ADMIN",
+            "--cap-add",
+            "NET_ADMIN",
+            "--cap-add",
+            "SETPCAP",
+            "--cap-add",
+            "SETUID",
+            "--cap-add",
+            "SETGID",
+            "--security-opt",
+            "seccomp=unconfined",
+            "--security-opt",
+            "systempaths=unconfined",
+            "--security-opt",
+            "apparmor=unconfined",
+            "--cgroup-parent",
+            CGROUP_PARENT,
+            "--cgroupns",
+            "private",
+            "--mount",
+            f"type=bind,source={CGROUP_SOURCE},target=/run/cgroup-parent",
+            "--env",
+            f"INCYPHER_STRICT_IMAGE={image_id}",
+        ]
+    )
+
+    if not preflight_only:
+        if env_file is not None:
+            command.extend(["--env-file", str(env_file)])
+        if state is not None:
+            command.extend(["--mount", f"type=bind,source={state},target=/state"])
+
+    if preflight_only:
+        command.extend(["--entrypoint", "python3", image_id, "-m", "solver.isolation_preflight"])
+    else:
+        command.append(image_id)
+    return command
+
+
+def _check_result(result: Any, command: list[str]) -> None:
+    returncode = getattr(result, "returncode", None)
+    if returncode not in (None, 0):
+        raise subprocess.CalledProcessError(returncode, command)
+
+
+def _checked(command: list[str], runner: CommandRunner) -> Any:
+    result = runner(command, check=True)
+    _check_result(result, command)
+    return result
+
+
+def _image_id(runner: CommandRunner) -> str:
+    command = ["docker", "image", "inspect", "--format", "{{.Id}}", IMAGE_TAG]
+    result = runner(command, check=True, capture_output=True, text=True)
+    _check_result(result, command)
+    image_id = str(getattr(result, "stdout", "")).strip()
+    if not IMAGE_ID.fullmatch(image_id):
+        raise RuntimeError("docker image inspect did not return an immutable sha256 image ID")
+    return image_id
+
+
+def _validate_path(label: str, path: Path, home: Path) -> None:
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be an absolute path")
+    if not path.exists():
+        raise ValueError(f"{label} does not exist: {path}")
+
+    home_root = home.resolve()
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(home_root)
+    except ValueError as error:
+        raise ValueError(f"{label} must be within the user's home: {path}") from error
+
+
+def _launch(
+    *,
+    env_file: Path | None,
+    state: Path | None,
+    preflight_only: bool,
+    runner: CommandRunner,
+) -> int:
+    verified = runtime.verify()
+    if verified != 0:
+        return verified
+
+    _checked(["docker", "build", "--quiet", "--tag", IMAGE_TAG, "."], runner)
+    image_id = _image_id(runner)
+
+    try:
+        _checked(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--cgroup-parent",
+                CGROUP_PARENT,
+                "--entrypoint",
+                "/bin/true",
+                image_id,
+            ],
+            runner,
+        )
+        _checked(
+            container_command(
+                image_id,
+                env_file=env_file,
+                state=state,
+                preflight_only=preflight_only,
+            ),
+            runner,
+        )
+    finally:
+        _checked(["colima", "ssh", "--", "sudo", "rmdir", CGROUP_SOURCE], runner)
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the Solver through strict Colima isolation.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("preflight", help="run the image's strict isolation preflight")
+    run = commands.add_parser("run", help="run the image's Solver entrypoint")
+    run.add_argument("--env-file", type=Path, required=True)
+    run.add_argument("--state", type=Path, required=True)
+    return parser
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    runner: CommandRunner | None = None,
+    home: Path | None = None,
+) -> int:
+    arguments = _parser().parse_args(argv)
+    command_runner = runner or _subprocess_run
+
+    if arguments.command == "preflight":
+        return _launch(env_file=None, state=None, preflight_only=True, runner=command_runner)
+
+    home_root = Path.home() if home is None else home
+    try:
+        _validate_path("--env-file", arguments.env_file, home_root)
+        _validate_path("--state", arguments.state, home_root)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    return _launch(
+        env_file=arguments.env_file,
+        state=arguments.state,
+        preflight_only=False,
+        runner=command_runner,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
