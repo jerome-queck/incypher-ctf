@@ -3,20 +3,24 @@
 import copy
 import hashlib
 import json
-from dataclasses import replace
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+import solver.evidence_capsule_storage as capsule_storage
 
-from solver.evidence_capsule import CapsuleRefused, CapsuleRequest, promote_capsule
+from solver.evidence_capsule import CapsuleRefused, CapsuleRequest, EvidenceCapsulePromoter
 from solver.evidence_capsule_contracts import (
     PUBLICATION_PRESENT_AUTHORITY_UNCERTAIN,
     BlobSelection,
     CapsuleInvalid,
     ReceiptContract,
     ReceiptRegistry,
-    SanitizationPolicy,
 )
-from solver.evidence_capsule_reader import read_evidence, read_promoted_evidence, verify_evidence_content
+from solver.evidence_capsule_reader import read_evidence, verify_evidence_content
+from solver.evidence_capsule_scan import HostSanitizationAuthority
 from solver.event_store import EventStore
 from solver.event_store_contracts import (
     LifecycleRecorded,
@@ -80,37 +84,163 @@ def receipt(digest, *, producer="synthetic-proof", schema_version=1):
 
 def registry(*, producer="synthetic-proof", structured=True):
     def validate(document, source):
-        assert source.events
-        return [BlobSelection(document["evidence_digest"], "application/json", structured)]
+        causal = [
+            event["payload"]["blob_digest"] for event in source.events if event["event_type"] == "observation.recorded"
+        ]
+        if len(causal) != 1 or document.get("evidence_digest") != causal[0]:
+            raise CapsuleRefused("receipt evidence claim does not match its causal source")
+        return [BlobSelection(causal[0], "application/json", structured)]
 
     return ReceiptRegistry([ReceiptContract("promotion-transaction", 1, producer, validate)])
 
 
-def request(tmp_path, **overrides):
+def scan_authority(tmp_path, *, secrets=(), forbidden_paths=("/Users/private",)):
+    root = tmp_path / "host-scan-authority"
+    root.mkdir(parents=True, exist_ok=True)
+    lines = [f"{name}={value}" for name, value in secrets]
+    (root / ".env").write_text("\n".join(lines) + ("\n" if lines else ""))
+    return HostSanitizationAuthority(root, host_paths=tuple(Path(path) for path in forbidden_paths))
+
+
+def transaction(tmp_path, **overrides):
     source = overrides.pop("source", None)
     store, digest = source if source is not None else terminal_store(tmp_path)
-    values = {
-        "store": store,
-        "receipt": receipt(digest),
-        "receipt_ref": "receipt:promotion-transaction",
-        "candidate_manifest": draft(),
-        "manifest_row_id": "core.receipts-capsules",
-        "registry": registry(),
-        "sanitization": SanitizationPolicy((), ("/Users/private",)),
-        "authority": authority(tmp_path),
-        "runs_directory": tmp_path / "runs",
-    }
-    values.update(overrides)
-    return CapsuleRequest(**values)
+    write_authority = overrides.pop("write_authority", None)
+    if write_authority is None:
+        write_authority = authority(tmp_path)
+    trusted_scan = overrides.pop("scan_authority", None)
+    if trusted_scan is None:
+        trusted_scan = scan_authority(tmp_path)
+    promoter = EvidenceCapsulePromoter(
+        store=store,
+        candidate_manifest=overrides.pop("candidate_manifest", draft()),
+        manifest_row_id=overrides.pop("manifest_row_id", "core.receipts-capsules"),
+        registry=overrides.pop("registry", registry()),
+        scan_authority=trusted_scan,
+        write_authority=write_authority,
+        runs_directory=overrides.pop("runs_directory", tmp_path / "runs"),
+        hook=overrides.pop("hook", None),
+    )
+    request = CapsuleRequest(
+        receipt=overrides.pop("receipt", receipt(digest)),
+        receipt_ref=overrides.pop("receipt_ref", "receipt:promotion-transaction"),
+    )
+    assert not overrides
+    return promoter, request, write_authority
+
+
+def publish(configured):
+    promoter, request, _write_authority = configured
+    return promoter.promote(request)
+
+
+def test_producer_request_cannot_inject_scan_or_receipt_authority(tmp_path):
+    assert set(CapsuleRequest.__dataclass_fields__) == {"receipt", "receipt_ref"}
+    with pytest.raises(TypeError):
+        CapsuleRequest(receipt=b"{}", receipt_ref="receipt:x", registry=ReceiptRegistry())
+    empty = transaction(tmp_path / "empty-request")
+    with pytest.raises(CapsuleRefused, match="lacks typed schema"):
+        empty[0].promote(CapsuleRequest(b"{}", "receipt:empty"))
+
+    store, digest = terminal_store(tmp_path)
+    forged = receipt(digest, producer="self-authorized")
+    with pytest.raises(CapsuleRefused, match="not registered"):
+        publish(transaction(tmp_path / "forged", source=(store, digest), receipt=forged))
+    with pytest.raises(CapsuleRefused, match="does not match its causal source"):
+        publish(transaction(tmp_path / "empty", source=(store, digest), receipt=receipt("0" * 64)))
+
+
+def test_host_scan_authority_refuses_missing_or_changed_history(tmp_path):
+    missing = tmp_path / "missing-history"
+    missing.mkdir()
+    with pytest.raises(CapsuleRefused, match="canonical .env"):
+        HostSanitizationAuthority(missing, host_paths=())
+
+    trusted = scan_authority(tmp_path, secrets=(("CTFD_API_TOKEN", "historical"),))
+    (tmp_path / "host-scan-authority" / ".env.older").write_text("CTFD_API_TOKEN=older\n")
+    with pytest.raises(CapsuleRefused, match="history changed"):
+        publish(transaction(tmp_path, scan_authority=trusted))
+
+
+def test_host_scan_authority_includes_every_discovered_historical_value(tmp_path):
+    root = tmp_path / "history"
+    root.mkdir()
+    (root / ".env").write_text("CTFD_API_TOKEN=current\n")
+    (root / ".env.older").write_text("CTFD_API_TOKEN=old-secret\n")
+    source = terminal_store(tmp_path, evidence=b"leaked old-secret")
+
+    with pytest.raises(CapsuleRefused, match="credential CTFD_API_TOKEN"):
+        publish(
+            transaction(
+                tmp_path,
+                source=source,
+                scan_authority=HostSanitizationAuthority(root, host_paths=()),
+            )
+        )
+
+
+def test_host_scan_authority_preserves_repeated_values_and_rechecks_before_rename(tmp_path):
+    source = terminal_store(tmp_path, evidence=b'{"secret":"old-secret"}')
+    repeated = scan_authority(
+        tmp_path / "repeated",
+        secrets=(("CTFD_API_TOKEN", "old-secret"), ("CTFD_API_TOKEN", "current")),
+    )
+    with pytest.raises(CapsuleRefused, match="credential CTFD_API_TOKEN"):
+        publish(transaction(tmp_path / "repeated", source=source, scan_authority=repeated))
+
+    staged = tmp_path / "staged"
+    trusted = scan_authority(staged)
+
+    def add_history(phase):
+        if phase == "before_rename":
+            (staged / "host-scan-authority" / ".env.older").write_text("CTFD_API_TOKEN=old-secret\n")
+
+    with pytest.raises(CapsuleRefused, match="history changed"):
+        publish(transaction(staged, source=source, scan_authority=trusted, hook=add_history))
+    assert not (staged / "runs" / "capsules").exists()
+
+
+def test_directory_durability_precedes_authority_commit_in_full_order(tmp_path, monkeypatch):
+    ordered = []
+    monkeypatch.setattr(capsule_storage, "fsync_directory", lambda path: ordered.append(("fsync", path)))
+    configured = transaction(tmp_path, hook=lambda phase: ordered.append(("hook", phase)))
+
+    promoted = publish(configured)
+
+    stage_parent = tmp_path / ".evidence-capsule-staging"
+    runs = tmp_path / "runs"
+    capsules = runs / "capsules"
+    labels = [item[1] for item in ordered]
+    assert labels.index(stage_parent) < labels.index("after_stage")
+    assert labels.index("before_rename") < labels.index(runs) < labels.index(capsules)
+    assert labels.index(capsules) < labels.index("after_rename") < labels.index("before_authority_commit")
+    assert labels.index("before_authority_commit") < labels.index("after_authority_commit")
+    assert ordered[-1] == ("fsync", stage_parent)
+    assert promoted.path.parent == capsules
+
+
+def test_failed_stage_is_removed_before_refusal_returns(tmp_path, monkeypatch):
+    def fail_verification(_path):
+        raise CapsuleInvalid("staged capsule failed verification")
+
+    monkeypatch.setattr(capsule_storage, "verify_evidence_content", fail_verification)
+    configured = transaction(tmp_path)
+
+    with pytest.raises(CapsuleInvalid, match="failed verification"):
+        publish(configured)
+
+    stage_parent = tmp_path / ".evidence-capsule-staging"
+    assert stage_parent.is_dir()
+    assert not list(stage_parent.iterdir())
+    assert configured[2].reservations()[0].state is ReservationState.ABORTED
 
 
 def test_synthetic_receipt_passes_the_whole_transaction_and_versioned_read(tmp_path):
-    capsule_request = request(tmp_path)
-    promoted = promote_capsule(capsule_request)
-    read = read_evidence(promoted.path, capsule_request.authority)
+    configured = transaction(tmp_path)
+    promoted = publish(configured)
+    read = read_evidence(promoted.path, configured[2])
 
     assert read.capsule_id == promoted.capsule_id
-    assert read_promoted_evidence(promoted.path, capsule_request.authority).capsule_id == promoted.capsule_id
     assert (promoted.path / "receipt.json").is_file()
     assert (promoted.path / "source" / "events.jsonl").is_file()
     row = next(row for row in promoted.candidate_manifest["requirements"] if row["row_id"] == "core.receipts-capsules")
@@ -121,9 +251,9 @@ def test_synthetic_receipt_passes_the_whole_transaction_and_versioned_read(tmp_p
 
 
 def test_identity_basis_binds_candidate_profile_source_blobs_schema_and_producer(tmp_path):
-    capsule_request = request(tmp_path)
-    promoted = promote_capsule(capsule_request)
-    basis = read_evidence(promoted.path, capsule_request.authority).manifest["content_basis"]
+    configured = transaction(tmp_path)
+    promoted = publish(configured)
+    basis = read_evidence(promoted.path, configured[2]).manifest["content_basis"]
     source_events = promoted.path.joinpath("source/events.jsonl").read_bytes().splitlines()
 
     assert basis["candidate"] == {
@@ -148,7 +278,7 @@ def test_identity_basis_binds_candidate_profile_source_blobs_schema_and_producer
 
 
 def test_reader_requires_exact_reciprocal_candidate_link_even_when_other_hashes_agree(tmp_path):
-    promoted = promote_capsule(request(tmp_path))
+    promoted = publish(transaction(tmp_path))
     candidate = copy.deepcopy(promoted.candidate_manifest)
     row = next(row for row in candidate["requirements"] if row["row_id"] == "core.receipts-capsules")
     row["evidence_refs"] = []
@@ -177,32 +307,43 @@ def test_reader_requires_exact_reciprocal_candidate_link_even_when_other_hashes_
 
 
 @pytest.mark.parametrize(
-    ("evidence", "policy", "message"),
+    ("evidence", "secrets", "forbidden_paths", "message"),
     [
-        (b"token=old-secret", SanitizationPolicy((("TOKEN", "old-secret"),), ()), "credential TOKEN"),
-        (b"copied /Users/private/file", SanitizationPolicy((), ("/Users/private",)), "host path"),
-        (b'{"a":1,"a":2}', SanitizationPolicy((), ()), "duplicate JSON key"),
+        (b"token=old-secret", (("CTFD_API_TOKEN", "old-secret"),), (), "credential CTFD_API_TOKEN"),
+        (b"copied /Users/private/file", (), ("/Users/private",), "host path"),
+        (b'{"a":1,"a":2}', (), (), "duplicate JSON key"),
     ],
 )
-def test_sanitization_refuses_before_anything_appears_under_runs(tmp_path, evidence, policy, message):
+def test_sanitization_refuses_before_anything_appears_under_runs(tmp_path, evidence, secrets, forbidden_paths, message):
     source = terminal_store(tmp_path, evidence=evidence)
     with pytest.raises(CapsuleRefused, match=message):
-        promote_capsule(request(tmp_path, source=source, sanitization=policy))
+        publish(
+            transaction(
+                tmp_path,
+                source=source,
+                scan_authority=scan_authority(tmp_path, secrets=secrets, forbidden_paths=forbidden_paths),
+            )
+        )
     assert not (tmp_path / "runs").exists()
 
 
 def test_opaque_binary_is_scanned_raw_without_forcing_semantic_decode(tmp_path):
     source = terminal_store(tmp_path, evidence=b"\x00\xffclean")
-    capsule_request = request(tmp_path, source=source, registry=registry(structured=False))
-    promoted = promote_capsule(capsule_request)
-    assert read_evidence(promoted.path, capsule_request.authority).capsule_id == promoted.capsule_id
+    configured = transaction(tmp_path, source=source, registry=registry(structured=False))
+    promoted = publish(configured)
+    assert read_evidence(promoted.path, configured[2]).capsule_id == promoted.capsule_id
 
 
 def test_canonical_stream_is_scanned_in_addition_to_selected_blobs(tmp_path):
     source = terminal_store(tmp_path, command="old-secret")
-    policy = SanitizationPolicy((("HISTORICAL_TOKEN", "old-secret"),), ())
     with pytest.raises(CapsuleRefused, match="source event 2 carries declared credential"):
-        promote_capsule(request(tmp_path, source=source, sanitization=policy))
+        publish(
+            transaction(
+                tmp_path,
+                source=source,
+                scan_authority=scan_authority(tmp_path, secrets=(("CTFD_API_TOKEN", "old-secret"),)),
+            )
+        )
     assert not (tmp_path / "runs").exists()
 
 
@@ -217,9 +358,10 @@ def test_power_loss_yields_no_partial_capsule_and_preserves_v1(tmp_path, crash_p
         if point == crash_point:
             raise RuntimeError("power lost")
 
-    capsule_request = request(tmp_path, runs_directory=runs, hook=crash)
+    source = terminal_store(tmp_path)
+    configured = transaction(tmp_path, source=source, runs_directory=runs, hook=crash)
     with pytest.raises(RuntimeError, match="power lost"):
-        promote_capsule(capsule_request)
+        publish(configured)
 
     capsules = list((runs / "capsules").iterdir()) if (runs / "capsules").exists() else []
     assert v1.read_bytes() == b'{"record":"run-open"}\n'
@@ -228,19 +370,70 @@ def test_power_loss_yields_no_partial_capsule_and_preserves_v1(tmp_path, crash_p
         assert verify_evidence_content(capsules[0]).capsule_id == capsules[0].name
         original_manifest = (capsules[0] / "capsule.json").read_bytes()
         original_inode = capsules[0].stat().st_ino
-        capsule_request.authority.close()
+        configured[2].close()
         recovered_authority = WriteAuthority(tmp_path / "authority", PROFILE)
         for _ in range(2):
             with pytest.raises(CapsuleRefused) as refused:
-                read_promoted_evidence(capsules[0], recovered_authority)
+                read_evidence(capsules[0], recovered_authority)
             assert refused.value.classification == PUBLICATION_PRESENT_AUTHORITY_UNCERTAIN
         with pytest.raises(CapsuleRefused) as duplicate:
-            promote_capsule(replace(capsule_request, authority=recovered_authority, hook=None))
+            publish(
+                transaction(
+                    tmp_path,
+                    source=source,
+                    runs_directory=runs,
+                    write_authority=recovered_authority,
+                )
+            )
         assert duplicate.value.classification == PUBLICATION_PRESENT_AUTHORITY_UNCERTAIN
         assert (capsules[0] / "capsule.json").read_bytes() == original_manifest
         assert capsules[0].stat().st_ino == original_inode
         reservation_key = json.loads(original_manifest)["reservation"]["key"]
         assert recovered_authority.current(reservation_key).state is ReservationState.POSSIBLY_SENT
+
+
+@pytest.mark.parametrize("crash_point", ["before_rename", "after_rename"])
+def test_abrupt_process_loss_recovers_absent_or_forensically_complete_publication(tmp_path, crash_point):
+    store = EventStore(tmp_path / "source", run_id="process-loss")
+    store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
+    store.append(ObservationRecorded("attempt-1", 1, "solve", "solve", "bash"), body=b'{"proof":true}')
+    closed = store.append(
+        LifecycleRecorded("run:close", RunClosed(TerminalDisposition.NORMAL)),
+        body=b"",
+    )
+    (tmp_path / "candidate.json").write_bytes(canonical_manifest_bytes(draft()))
+    host_scan = tmp_path / "host-scan-authority"
+    host_scan.mkdir()
+    (host_scan / ".env").write_bytes(b"")
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    v1 = runs / "gate-v1.jsonl"
+    original_v1 = b'{"record":"run-open"}\n'
+    v1.write_bytes(original_v1)
+    driver = Path(__file__).parent / "fixtures" / "evidence_capsule_crash.py"
+
+    finished = subprocess.run(
+        [sys.executable, str(driver), str(tmp_path), crash_point],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1])},
+        check=False,
+    )
+
+    assert finished.returncode == 91, finished.stderr
+    assert EventStore(tmp_path / "source", run_id="process-loss").terminal_snapshot().chain_head == closed.event_digest
+    assert v1.read_bytes() == original_v1
+    recovered_authority = WriteAuthority(tmp_path / "authority", PROFILE)
+    capsules = list((runs / "capsules").iterdir()) if (runs / "capsules").exists() else []
+    assert len(capsules) == (1 if crash_point == "after_rename" else 0)
+    expected_state = ReservationState.POSSIBLY_SENT if capsules else ReservationState.ABORTED
+    assert [reservation.state for reservation in recovered_authority.reservations()] == [expected_state]
+    if capsules:
+        assert verify_evidence_content(capsules[0]).capsule_id == capsules[0].name
+        with pytest.raises(CapsuleRefused) as refused:
+            read_evidence(capsules[0], recovered_authority)
+        assert refused.value.classification == PUBLICATION_PRESENT_AUTHORITY_UNCERTAIN
 
 
 def test_versioned_reader_keeps_v1_run_bytes_intact(tmp_path):
@@ -253,9 +446,9 @@ def test_versioned_reader_keeps_v1_run_bytes_intact(tmp_path):
 def test_nonterminal_source_and_unregistered_receipt_refuse(tmp_path):
     store = EventStore(tmp_path / "live", run_id="live")
     store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
-    with pytest.raises(CapsuleRefused, match="not a terminal Run"):
-        promote_capsule(request(tmp_path, source=(store, hashlib.sha256(b"").hexdigest())))
+    with pytest.raises(CapsuleRefused, match="terminal snapshot"):
+        publish(transaction(tmp_path, source=(store, hashlib.sha256(b"").hexdigest())))
 
     source = terminal_store(tmp_path, run_id="closed")
     with pytest.raises(CapsuleRefused, match="not registered"):
-        promote_capsule(request(tmp_path, source=source, registry=ReceiptRegistry()))
+        publish(transaction(tmp_path, source=source, registry=ReceiptRegistry()))

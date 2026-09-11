@@ -7,10 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from solver.event_store import EventStore
 from solver.manifest_contracts import ReleaseCandidateManifestDraft
-from solver.write_reservation import WriteAuthority
-
 
 CAPSULE_SCHEMA_VERSION = 1
 CAPSULE_KIND = "evidence-capsule"
@@ -86,16 +83,8 @@ class SanitizationPolicy:
 
 @dataclass(frozen=True)
 class CapsuleRequest:
-    store: EventStore
     receipt: bytes
     receipt_ref: str
-    candidate_manifest: ReleaseCandidateManifestDraft
-    manifest_row_id: str
-    registry: ReceiptRegistry
-    sanitization: SanitizationPolicy
-    authority: WriteAuthority
-    runs_directory: Path
-    hook: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True)

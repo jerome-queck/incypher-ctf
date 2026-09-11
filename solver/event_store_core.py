@@ -23,12 +23,15 @@ from solver.event_store_contracts import (
     EventStoreDamage,
     EventDigestMismatchError,
     InvalidEventError,
+    LifecycleRecord,
     MissingBlobError,
     PreviousDigestMismatchError,
     SequenceGapError,
     TornAppendError,
     UnknownSchemaError,
     ReservationStatus,
+    RunSealedError,
+    TerminalEventStoreSnapshot,
     event_contract,
 )
 from solver.event_store_storage import append_durable, atomic_write, canonical_bytes, digest_bytes
@@ -83,6 +86,7 @@ class EventStoreCore:
         )
         with self._locked():
             existing = self._read_verified()
+            self._refuse_after_terminal(existing)
             prior = self._find_identity(existing, event, payload)
             if prior is not None:
                 self._recover_reservation_locked(prior)
@@ -106,6 +110,7 @@ class EventStoreCore:
         payload = _redact(event.payload(blob_digest=blob_digest, blob_bytes=blob_bytes), self._redactor)
         with self._locked():
             existing = self._read_verified()
+            self._refuse_after_terminal(existing)
             prior = self._find_identity(existing, event, payload)
             if prior is not None:
                 self._recover_reservation_locked(prior)
@@ -129,6 +134,7 @@ class EventStoreCore:
         )
         with self._locked():
             existing = self._read_verified()
+            self._refuse_after_terminal(existing)
             prior = self._find_identity(existing, event, payload)
             if prior is not None:
                 self._recover_reservation_locked(prior)
@@ -137,6 +143,22 @@ class EventStoreCore:
 
     def events(self) -> list[CommittedEvent]:
         return self._read_verified()
+
+    def terminal_snapshot(self) -> TerminalEventStoreSnapshot:
+        """Hand off a verified terminal chain while holding the canonical writer lock."""
+
+        with self._locked():
+            events = self._read_verified()
+            if not events or events[0].payload.get("record") != LifecycleRecord.RUN_OPEN.value:
+                raise RunSealedError("terminal snapshot has no Run genesis")
+            records = [event.payload.get("record") for event in events]
+            if (
+                records[-1] != LifecycleRecord.RUN_CLOSE.value
+                or records.count(LifecycleRecord.RUN_OPEN.value) != 1
+                or records.count(LifecycleRecord.RUN_CLOSE.value) != 1
+            ):
+                raise RunSealedError("terminal snapshot requires one complete closed Run")
+            return TerminalEventStoreSnapshot(self.run_id, tuple(events), events[-1].event_digest)
 
     def reservations(self) -> list[EventReservation]:
         return self._read_reservations()
@@ -154,6 +176,11 @@ class EventStoreCore:
     def reservation(self, sequence: int) -> EventReservation | None:
         """Return the latest durable status for one canonical sequence."""
         return self._reservation_for_sequence(sequence)
+
+    @staticmethod
+    def _refuse_after_terminal(existing: list[CommittedEvent]) -> None:
+        if existing and existing[-1].payload.get("record") == LifecycleRecord.RUN_CLOSE.value:
+            raise RunSealedError("canonical Run is sealed by its terminal event")
 
     def _commit_locked(
         self,

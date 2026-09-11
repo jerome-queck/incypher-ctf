@@ -18,10 +18,12 @@ from solver.event_store import (
     MissingBlobError,
     ObservationRecorded,
     PreviousDigestMismatchError,
+    RunSealedError,
     ReservationStatus,
     TornAppendError,
     UnknownSchemaError,
 )
+from solver.event_store_contracts import LifecycleRecorded, RunClosed, RunOpened, TerminalDisposition
 from solver.record import Recorder, Usage
 from solver.redaction import Redactor
 from solver.observation import digest_of
@@ -408,3 +410,27 @@ def test_canonical_event_store_receipt_is_versioned_sanitized_and_checkable(tmp_
     assert SECRET not in receipt_path.read_text()
     assert str(tmp_path) not in receipt_path.read_text()
     assert recorder.event_store.verify_receipt(receipt_path).event_chain_head == receipt["event_chain_head"]
+
+
+def test_terminal_snapshot_fences_every_concurrent_post_close_append(tmp_path):
+    store = EventStore(tmp_path / "terminal", run_id="terminal")
+    store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
+    closed = store.append(
+        LifecycleRecorded("run:close", RunClosed(TerminalDisposition.NORMAL)),
+        body=b"",
+    )
+
+    snapshot = store.terminal_snapshot()
+
+    with pytest.raises(RunSealedError):
+        store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
+
+    def append(index):
+        with pytest.raises(RunSealedError):
+            store.append(_event(step_index=index + 1), body=f"late-{index}".encode())
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        list(workers.map(append, range(16)))
+
+    assert snapshot.chain_head == closed.event_digest
+    assert len(snapshot.events) == len(store.events()) == 2
