@@ -32,6 +32,37 @@ class FakeCgroup:
     def count(self, path: Path) -> int:
         return len((path / "cgroup.procs").read_text().split())
 
+    def pids(self, path: Path) -> tuple[int, ...]:
+        return tuple(int(value) for value in (path / "cgroup.procs").read_text().split())
+
+    def term(self, path: Path, pids: tuple[int, ...]) -> None:
+        (path / "cgroup.procs").write_text("")
+
+
+class EscalatingCgroup(FakeCgroup):
+    def __init__(self) -> None:
+        self.terms: list[tuple[int, ...]] = []
+        self.kills = 0
+
+    def term(self, path: Path, pids: tuple[int, ...]) -> None:
+        self.terms.append(pids)
+        (path / "cgroup.procs").write_text(f"{pids[-1]}\n")
+
+    def kill(self, path: Path) -> None:
+        self.kills += 1
+        super().kill(path)
+
+
+class UnreadableCgroup(FakeCgroup):
+    def __init__(self) -> None:
+        self.kills = 0
+
+    def pids(self, path: Path) -> tuple[int, ...]:
+        raise OSError("inventory unavailable")
+
+    def kill(self, path: Path) -> None:
+        self.kills += 1
+
 
 def _request(tmp_path: Path) -> AttemptRequest:
     work = tmp_path / "work"
@@ -148,6 +179,142 @@ def test_live_network_breach_terminates_and_drains_the_worker_result(tmp_path: P
         parent.recv(1_000_000)
     parent.close()
     worker.close()
+
+
+def test_result_terms_the_adopted_tree_then_kills_and_reaps_the_survivor(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, cgroup = _runtime(tmp_path, parent)
+    lifecycle = EscalatingCgroup()
+    runtime.cgroup = lifecycle
+    incoming = type("I", (), {"request": _request(tmp_path)})()
+    runtime.prepare("envelope-1", incoming)
+    _initial_counters(cgroup)
+
+    def reply() -> None:
+        launch = json.loads(worker.recv(1_000_000))
+        go = json.loads(worker.recv(1_000_000))
+        assert launch["type"] == "launch" and go["type"] == "go"
+        (cgroup / "cgroup.procs").write_text("4321 4322 4323\n")
+        worker.send(
+            json.dumps(
+                {
+                    "type": "result",
+                    "exit_code": 0,
+                    "output": base64.b64encode(b"bounded").decode(),
+                    "output_bytes_total": 7000,
+                    "output_truncated": True,
+                }
+            ).encode()
+        )
+        terminate = json.loads(worker.recv(1_000_000))
+        assert terminate == {"type": "terminate", "nonce": launch["nonce"]}
+        worker.send(json.dumps({"type": "term-sent", "pids": [2, 3, 4]}).encode())
+
+    thread = threading.Thread(target=reply)
+    thread.start()
+    result = runtime.launch("envelope-1", incoming)
+    thread.join()
+
+    process = result.process_lifecycle
+    assert process is not None
+    assert process.descendants == (4321, 4322, 4323)
+    assert process.after_term == (4323,)
+    assert process.after_kill == ()
+    assert process.term_sent is True and process.kill_sent is True
+    assert process.stream_captured_bytes == len(b"bounded")
+    assert process.stream_total_bytes == 7000
+    assert process.stream_truncated is True
+    assert lifecycle.terms == [(4321, 4322, 4323)]
+    assert lifecycle.kills == 1
+    parent.close()
+    worker.close()
+
+
+def test_restart_reconciles_the_recorded_tree_before_a_replacement_reserves(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, cgroup = _runtime(tmp_path, parent)
+    _initial_counters(cgroup)
+    (cgroup / "cgroup.procs").write_text("4321 4322\n")
+
+    def acknowledge() -> None:
+        terminate = json.loads(worker.recv(1_000_000))
+        assert terminate == {"type": "terminate", "nonce": "durable-nonce"}
+        worker.send(json.dumps({"type": "term-sent", "pids": [4321, 4322]}).encode())
+
+    thread = threading.Thread(target=acknowledge)
+    thread.start()
+    result = runtime.reconcile(
+        (
+            {
+                "envelope_id": "envelope-1",
+                "cgroup_path": str(cgroup),
+                "executor_uid": 20_000,
+                "declared": {"cleanup_seconds": 0.1},
+                "observed": {"control_nonce": "durable-nonce"},
+            },
+        )
+    )[0]
+    thread.join()
+
+    assert result.cleanup_complete is True
+    assert result.process_lifecycle is not None
+    assert result.process_lifecycle.descendants == (4321, 4322)
+    assert result.process_lifecycle.after_kill == ()
+    assert result.process_lifecycle.teardown_acknowledged is True
+    replacement = runtime.prepare("envelope-2", type("I", (), {"request": _request(tmp_path)})())
+    assert replacement.cgroup_path == str(cgroup)
+    parent.close()
+    worker.close()
+
+
+def test_unreadable_process_inventory_cannot_be_recorded_as_clean(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, cgroup = _runtime(tmp_path, parent)
+    unreadable = UnreadableCgroup()
+    runtime.cgroup = unreadable
+    result = runtime.reconcile(
+        (
+            {
+                "envelope_id": "envelope-1",
+                "cgroup_path": str(cgroup),
+                "executor_uid": 20_000,
+                "declared": {"cleanup_seconds": 0.1},
+            },
+        )
+    )[0]
+
+    assert result.cleanup_complete is False
+    assert result.process_lifecycle is not None
+    assert result.process_lifecycle.inventory_complete is False
+    assert unreadable.kills == 1
+    parent.close()
+    worker.close()
+
+
+def test_control_eof_during_teardown_is_explicit_incomplete_evidence(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, cgroup = _runtime(tmp_path, parent)
+    incoming = type("I", (), {"request": _request(tmp_path)})()
+    runtime.prepare("envelope-1", incoming)
+    _initial_counters(cgroup)
+
+    def reply_then_close() -> None:
+        worker.recv(1_000_000)
+        worker.recv(1_000_000)
+        (cgroup / "cgroup.procs").write_text("4321\n")
+        worker.send(json.dumps({"type": "result", "exit_code": 0, "output": ""}).encode())
+        worker.close()
+
+    thread = threading.Thread(target=reply_then_close)
+    thread.start()
+    result = runtime.launch("envelope-1", incoming)
+    thread.join()
+
+    assert result.cleanup_complete is False
+    assert result.process_lifecycle is not None
+    assert result.process_lifecycle.control_eof is True
+    assert result.process_lifecycle.teardown_acknowledged is False
+    parent.close()
 
 
 def test_fixed_worker_has_private_namespaces_uid_root_and_no_control_path(tmp_path: Path) -> None:

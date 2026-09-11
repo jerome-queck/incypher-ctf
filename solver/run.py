@@ -37,7 +37,7 @@ from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
 from solver.profile import Profile
 from solver.prompt import APPROACH
-from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder
+from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder, generation_disposition
 from solver.schedule import Ended, Pick, Scheduler
 from solver.staging import Staged
 from solver.stall import Breaker, Deadline, Watch
@@ -313,10 +313,10 @@ class Run:
                 # ledger still lists at this boundary is a leak by definition.
                 self._sweep(attempt_id=held.attempt_id, keeping=None)
             except Exception:
-                self._recorder.interrupt_generation(held.generation_id)
+                self._close_generation(held.generation_id, CRASHED)
                 raise
             else:
-                self._recorder.close_generation(held.generation_id, held.cause)
+                self._close_generation(held.generation_id, held.cause)
             if backoff := self._breaker.backoff():
                 self._sleep(backoff)
 
@@ -371,7 +371,7 @@ class Run:
                 generation_id=held.generation_id,
             )
         except Exception:
-            self._recorder.interrupt_generation(generation.generation_id)
+            self._close_generation(generation.generation_id, CRASHED)
             raise
         self._in_flight = held.deadline
         try:
@@ -404,6 +404,12 @@ class Run:
                 close_generation=False,
             )
         return held
+
+    def _close_generation(self, generation_id: str, cause: str) -> None:
+        if self._attempt_executor is None:
+            self._recorder.close_generation(generation_id, cause)
+            return
+        self._attempt_executor.close_generation(generation_id, generation_disposition(cause))
 
     def _turn(self, held: _Held, challenge: Sighting) -> bool:
         """One invocation of the vendor's agent, and whether it ended the Attempt.

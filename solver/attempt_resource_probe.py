@@ -20,10 +20,11 @@ from solver.attempt_executor_contracts import (
 from solver.attempt_executor_pool import AttemptPool, close_attempt_pool, prepare_attempt_pool
 from solver.attempt_executor_runtime import AttemptRuntime
 from solver.attempt_resource_receipt import verify_receipt
+from solver.attempt_process_lifecycle_receipt import verify_receipt as verify_process_receipt
 from solver.isolation import IMAGE_ID, strict_preflight
 from solver.isolation_receipt import write_receipt as write_isolation_receipt
 from solver.redaction import Redactor
-from solver.work_generation import GenerationFence
+from solver.work_generation import GenerationDisposition, GenerationFence
 
 
 STATE = Path("/state")
@@ -83,6 +84,19 @@ for descriptor in Path('/proc/self/fd').iterdir():
 assert not any(sockets)
 print('attempt-deny-ok')
 """
+    process_tree = """\
+import os, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if os.fork() == 0:
+    if os.fork() == 0:
+        while True:
+            time.sleep(1)
+    while True:
+        time.sleep(1)
+print('process-tree-ready', flush=True)
+while True:
+    time.sleep(1)
+"""
     return (
         ("normal", (python, "-c", deny_probe), _spec(), ResourceOutcome.EXITED),
         ("cpu", (python, "-c", "while True: pass"), _spec(cpu=0.15), ResourceOutcome.CPU),
@@ -115,6 +129,7 @@ print('attempt-deny-ok')
             ResourceOutcome.NETWORK,
         ),
         ("deadline", ("/bin/sleep", "5"), _spec(wall=0.2), ResourceOutcome.DEADLINE),
+        ("process-tree", (python, "-c", process_tree), _spec(wall=0.2), ResourceOutcome.DEADLINE),
     )
 
 
@@ -177,9 +192,14 @@ def qualify(environ, *, state: Path = STATE) -> Path:
                 if name == "normal" and result.output != b"attempt-deny-ok\n":
                     raise RuntimeError(f"deny probe did not attest the child boundary: {result.output!r}")
         finally:
+            executor.close_generation(generation.generation_id, GenerationDisposition.COMPLETE)
             executor.close()
         receipt = run_root / "canonical" / "attempt-resource-envelope.receipt.json"
         verify_receipt(receipt, require_qualified=True)
+        verify_process_receipt(
+            run_root / "canonical" / "attempt-process-lifecycle.receipt.json",
+            require_qualified=True,
+        )
         return receipt
     finally:
         close_attempt_pool(pool)

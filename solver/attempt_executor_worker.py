@@ -83,18 +83,29 @@ def _trace_bytes(trace: int) -> bytes:
     return os.pread(trace, MAX_FRAME, 0)
 
 
-def _capture(process: subprocess.Popen[bytes], trace: int, connection: socket.socket) -> tuple[bytes, bool, bytes]:
+def _capture(
+    process: subprocess.Popen[bytes], trace: int, connection: socket.socket, nonce: str
+) -> tuple[bytes, bool, bytes, int]:
     assert process.stdout is not None
     descriptor = process.stdout.fileno()
     os.set_blocking(descriptor, False)
     selector = selectors.DefaultSelector()
     selector.register(descriptor, selectors.EVENT_READ)
+    selector.register(connection, selectors.EVENT_READ)
     output = bytearray()
+    total = 0
     truncated = False
     network_reported = False
     while process.poll() is None:
-        for _key, _events in selector.select(0.05):
+        for key, _events in selector.select(0.05):
+            if key.fileobj is connection:
+                message = read_frame(connection)
+                if message != {"type": "terminate", "nonce": nonce}:
+                    raise ValueError("Attempt termination request is invalid")
+                connection.send(encode_frame({"type": "term-sent", "pids": list(_terminate_descendants())}))
+                continue
             chunk = os.read(descriptor, 65536)
+            total += len(chunk)
             if len(output) < MAX_OUTPUT:
                 room = MAX_OUTPUT - len(output)
                 output.extend(chunk[:room])
@@ -120,6 +131,7 @@ def _capture(process: subprocess.Popen[bytes], trace: int, connection: socket.so
             break
         if not chunk:
             break
+        total += len(chunk)
         if len(output) < MAX_OUTPUT:
             room = MAX_OUTPUT - len(output)
             output.extend(chunk[:room])
@@ -128,7 +140,17 @@ def _capture(process: subprocess.Popen[bytes], trace: int, connection: socket.so
             truncated = True
     selector.close()
     process.stdout.close()
-    return bytes(output), truncated, _trace_bytes(trace)
+    return bytes(output), truncated, _trace_bytes(trace), total
+
+
+def _terminate_descendants(proc_root: str = "/proc") -> tuple[int, ...]:
+    descendants = tuple(sorted(int(name) for name in os.listdir(proc_root) if name.isdigit() and int(name) != 1))
+    for pid in descendants:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    return descendants
 
 
 def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, object]:
@@ -153,7 +175,7 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
             pass_fds=(connection.fileno(), trace),
             preexec_fn=before_exec,
         )
-        output, truncated, traced_bytes = _capture(process, trace, connection)
+        output, truncated, traced_bytes, total = _capture(process, trace, connection, nonce)
         process.wait()
         traced = traced_bytes.decode("utf-8", errors="replace")
         network_breach = any(marker in traced for marker in NETWORK_MARKERS)
@@ -162,6 +184,7 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
             "exit_code": process.returncode,
             "output": base64.b64encode(output).decode("ascii"),
             "output_truncated": truncated,
+            "output_bytes_total": total,
             "network_breach": network_breach,
             "network_trace_bytes": len(traced.encode("utf-8")),
         }
@@ -177,9 +200,12 @@ def serve(connection: socket.socket) -> int:
             request = read_frame(connection)
             if request is None or request.get("type") == "close":
                 return 0
-            if request.get("type") != "launch":
+            if request.get("type") == "terminate":
+                response = {"type": "term-sent", "pids": list(_terminate_descendants())}
+            elif request.get("type") != "launch":
                 raise ValueError("unsupported request")
-            response = _run(connection, request)
+            else:
+                response = _run(connection, request)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             response = {"type": "error", "error": f"{type(error).__name__}: {error}"[:512]}
         connection.send(encode_frame(response))

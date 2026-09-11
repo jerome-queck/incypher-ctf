@@ -20,6 +20,7 @@ from typing import Any
 
 from solver.attempt_executor_contracts import (
     AttemptRequest,
+    ProcessLifecycle,
     ResourceOutcome,
     RuntimeObservation,
     RuntimeReservation,
@@ -69,7 +70,7 @@ class AttemptRuntime:
         self.gate = gate or self._await_gated
         self._cancelled: set[str] = set()
         self._cancel_lock = threading.Lock()
-        self._reservations: dict[str, tuple[AttemptSlot, Path, int]] = {}
+        self._reservations: dict[str, tuple[AttemptSlot, Path, int, str]] = {}
 
     def prepare(self, envelope_id: str, incoming: Any) -> RuntimeReservation:
         """Reserve and configure a childless envelope before canonical launch records."""
@@ -90,25 +91,22 @@ class AttemptRuntime:
         except (OSError, ValueError) as error:
             self.pool.release(slot)
             raise RuntimeUnavailable(f"Attempt envelope preparation failed: {error}") from error
-        self._reservations[envelope_id] = slot, cgroup, baseline_bytes
-        return RuntimeReservation(str(cgroup), slot.uid)
+        nonce = secrets.token_hex(16)
+        self._reservations[envelope_id] = slot, cgroup, baseline_bytes, nonce
+        return RuntimeReservation(str(cgroup), slot.uid, nonce)
 
     def cancel(self, envelope_id: str) -> None:
         with self._cancel_lock:
             if envelope_id in self._cancelled:
                 return
             self._cancelled.add(envelope_id)
-        reserved = self._reservations.get(envelope_id)
-        if reserved is not None:
-            self._kill_cgroup(reserved[1])
 
     def launch(self, envelope_id: str, incoming: Any) -> RuntimeObservation:
         try:
-            slot, cgroup, baseline_bytes = self._reservations[envelope_id]
+            slot, cgroup, baseline_bytes, nonce = self._reservations[envelope_id]
         except KeyError as error:
             raise RuntimeUnavailable("Attempt envelope was not prepared") from error
         request = incoming.request
-        nonce = secrets.token_hex(16)
         try:
             slot.connection.send(
                 encode_frame(
@@ -127,7 +125,7 @@ class AttemptRuntime:
                 self._cgroup_write(cgroup, "cgroup.procs", f"{child_pid}\n")
             baseline = self._cgroup_counters(cgroup)
             slot.connection.send(encode_frame({"type": "go", "nonce": nonce}))
-            return self._monitor(envelope_id, request, slot, cgroup, baseline, baseline_bytes)
+            return self._monitor(envelope_id, request, slot, cgroup, baseline, baseline_bytes, nonce)
         except (OSError, ValueError, ConnectionError, RuntimeUnavailable) as error:
             slot.healthy = False
             cleanup = self._cleanup(cgroup, request.envelope.cleanup_seconds)
@@ -161,12 +159,16 @@ class AttemptRuntime:
         if path.resolve(strict=False) not in allowed:
             observed["cgroup_path_rejected"] = supplied
             return RuntimeObservation(ResourceOutcome.RECONCILED, None, b"", supplied, -1, observed, False)
-        before = self._cgroup_count(path)
+        slot = self._slot_for_cgroup(path)
+        before, inventory_complete = self._inventory(path)
         started = self.clock()
         cleanup_seconds = float(dict(state.get("declared", {})).get("cleanup_seconds", 1.0))
-        cleanup = self._cleanup(path, cleanup_seconds)
-        observed.update(processes_before_kill=before, **self._cleanup_observed(cleanup))
+        nonce = str(dict(state.get("observed", {})).get("control_nonce", ""))
+        cleanup = self._terminate(slot, path, nonce, cleanup_seconds)
+        observed.update(processes_before_kill=len(before), **self._cleanup_observed(cleanup))
+        observed["inventory_complete_before_cleanup"] = inventory_complete
         observed["cleanup_seconds"] = max(0.0, self.clock() - started)
+        lifecycle = self._process_lifecycle(cleanup, None)
         return RuntimeObservation(
             ResourceOutcome.RECONCILED,
             None,
@@ -175,6 +177,7 @@ class AttemptRuntime:
             int(state.get("executor_uid", -1)),
             observed,
             bool(cleanup["complete"]),
+            lifecycle,
         )
 
     def _await_gated(self, connection: socket.socket, nonce: str, wall_seconds: float, expected_uid: int) -> int:
@@ -203,6 +206,7 @@ class AttemptRuntime:
         cgroup: Path,
         baseline: Mapping[str, int],
         baseline_bytes: int,
+        nonce: str,
     ) -> RuntimeObservation:
         envelope = request.envelope
         started = self.clock()
@@ -238,6 +242,7 @@ class AttemptRuntime:
                     network,
                     cause,
                     response,
+                    nonce,
                 )
             self.sleep(min(MAX_POLL_INTERVAL, max(0.0, envelope.wall_seconds - (now - started))))
 
@@ -273,9 +278,12 @@ class AttemptRuntime:
         network: bool,
         cause: ResourceOutcome | None,
         response: dict[str, object] | None,
+        nonce: str,
     ) -> RuntimeObservation:
         envelope = request.envelope
-        cleanup, response, worker_acknowledged = self._cleanup_and_drain(slot, cgroup, envelope, cause, response)
+        cleanup, response, worker_acknowledged = self._cleanup_and_drain(slot, cgroup, envelope, cause, response, nonce)
+        if not cleanup["complete"]:
+            slot.healthy = False
         observed = self._observed(
             envelope,
             baseline,
@@ -289,6 +297,7 @@ class AttemptRuntime:
             response=response,
         )
         observed["worker_acknowledged_cleanup"] = worker_acknowledged
+        process_lifecycle = self._process_lifecycle(cleanup, response)
         if cause is not None:
             return RuntimeObservation(
                 cause,
@@ -298,8 +307,11 @@ class AttemptRuntime:
                 slot.uid,
                 observed,
                 bool(cleanup["complete"]) and worker_acknowledged,
+                process_lifecycle,
             )
-        return self._observation_from_terminal_response(request, slot, cgroup, sample, cleanup, response, observed)
+        return self._observation_from_terminal_response(
+            request, slot, cgroup, sample, cleanup, response, observed, process_lifecycle
+        )
 
     def _cleanup_and_drain(
         self,
@@ -308,10 +320,15 @@ class AttemptRuntime:
         envelope: Any,
         cause: ResourceOutcome | None,
         response: dict[str, object] | None,
+        nonce: str,
     ) -> tuple[Mapping[str, object], dict[str, object] | None, bool]:
-        cleanup = self._cleanup(cgroup, envelope.cleanup_seconds)
+        cleanup = self._terminate(slot, cgroup, nonce, envelope.cleanup_seconds)
+        terminal_during_term = cleanup.get("terminal")
+        if isinstance(terminal_during_term, dict):
+            response = {**(response or {}), **terminal_during_term}
+        acknowledged = bool(cleanup["teardown_acknowledged"])
         if cause is None or (response is not None and response.get("type") in {"result", "error"}):
-            return cleanup, response, True
+            return cleanup, response, acknowledged
         terminal = _await_worker_result(slot.connection, envelope.cleanup_seconds)
         if terminal is None:
             slot.healthy = False
@@ -327,6 +344,7 @@ class AttemptRuntime:
         cleanup: Mapping[str, object],
         response: dict[str, object] | None,
         observed: dict[str, int | float | str | bool],
+        process_lifecycle: ProcessLifecycle,
     ) -> RuntimeObservation:
         assert response is not None
         if response.get("type") == "error":
@@ -339,6 +357,7 @@ class AttemptRuntime:
                 slot.uid,
                 observed,
                 bool(cleanup["complete"]),
+                process_lifecycle,
             )
         if cleanup["complete"] and not sample.unsafe_workspace and not self._sync_result_workspace(request, slot):
             observed["workspace_sync_failed"] = True
@@ -350,6 +369,7 @@ class AttemptRuntime:
                 slot.uid,
                 observed,
                 True,
+                process_lifecycle,
             )
         return RuntimeObservation(
             ResourceOutcome.EXITED,
@@ -359,6 +379,29 @@ class AttemptRuntime:
             slot.uid,
             observed,
             bool(cleanup["complete"]),
+            process_lifecycle,
+        )
+
+    @staticmethod
+    def _process_lifecycle(cleanup: Mapping[str, object], response: Mapping[str, object] | None) -> ProcessLifecycle:
+        output = _output(response)
+        total = _nonnegative_int(response.get("output_bytes_total")) if response else 0
+        total = max(total, len(output))
+        return ProcessLifecycle(
+            descendants=tuple(cleanup["descendants"]),
+            after_term=tuple(cleanup["after_term"]),
+            after_kill=tuple(cleanup["after_kill"]),
+            term_sent=bool(cleanup["term_sent"]),
+            kill_sent=bool(cleanup["kill_sent"]),
+            term_grace_seconds=float(cleanup["term_grace_seconds"]),
+            cleanup_seconds=float(cleanup["seconds"]),
+            stream_limit_bytes=MAX_OUTPUT,
+            stream_captured_bytes=len(output),
+            stream_total_bytes=total,
+            stream_truncated=bool(response and response.get("output_truncated") is True),
+            control_eof=bool(cleanup["control_eof"]),
+            inventory_complete=bool(cleanup["inventory_complete"]),
+            teardown_acknowledged=bool(cleanup["teardown_acknowledged"]),
         )
 
     def _sync_result_workspace(self, request: AttemptRequest, slot: AttemptSlot) -> bool:
@@ -416,7 +459,7 @@ class AttemptRuntime:
             self._cancelled.discard(envelope_id)
         if reserved is None:
             return
-        slot, cgroup, _baseline = reserved
+        slot, _cgroup, _baseline, _nonce = reserved
         self.pool.release(slot)
 
     def _configure_envelope(self, cgroup: Path, request: AttemptRequest) -> None:
@@ -489,21 +532,107 @@ class AttemptRuntime:
             return int(self.cgroup.count(path))
         try:
             return len((path / "cgroup.procs").read_text(encoding="ascii").split())
-        except OSError:
-            return 0
+        except OSError as error:
+            raise RuntimeUnavailable("Attempt process inventory is unreadable") from error
+
+    def _cgroup_pids(self, path: Path) -> tuple[int, ...]:
+        if self.cgroup is not None and hasattr(self.cgroup, "pids"):
+            return tuple(sorted(int(pid) for pid in self.cgroup.pids(path)))
+        try:
+            return tuple(sorted(int(pid) for pid in (path / "cgroup.procs").read_text(encoding="ascii").split()))
+        except (OSError, ValueError) as error:
+            raise RuntimeUnavailable("Attempt process inventory is unreadable") from error
+
+    def _inventory(self, path: Path) -> tuple[tuple[int, ...], bool]:
+        try:
+            return self._cgroup_pids(path), True
+        except (OSError, RuntimeUnavailable, TypeError, ValueError):
+            return (), False
+
+    def _terminate(self, slot: AttemptSlot, path: Path, nonce: str, seconds: float) -> dict[str, object]:
+        started = self.clock()
+        descendants, inventory_complete = self._inventory(path)
+        grace = seconds / 2
+        term_sent = bool(descendants)
+        teardown_acknowledged = not term_sent
+        control_eof = False
+        if term_sent:
+            try:
+                slot.connection.send(encode_frame({"type": "terminate", "nonce": nonce}))
+                if self.cgroup is not None and hasattr(self.cgroup, "term"):
+                    self.cgroup.term(path, descendants)
+                terminal, teardown_acknowledged, control_eof = _await_worker_ack(slot.connection, grace)
+            except OSError:
+                slot.healthy = False
+                terminal = None
+                control_eof = True
+        else:
+            terminal = None
+        term_end = started + grace
+        after_term, readable = self._inventory(path)
+        inventory_complete = inventory_complete and readable
+        while readable and after_term and self.clock() < term_end:
+            self.sleep(min(MAX_POLL_INTERVAL, max(0.0, term_end - self.clock())))
+            after_term, readable = self._inventory(path)
+            inventory_complete = inventory_complete and readable
+        kill_sent = bool(after_term)
+        if kill_sent or not inventory_complete:
+            self._kill_cgroup(path)
+        end = started + seconds
+        after_kill, readable = self._inventory(path)
+        inventory_complete = inventory_complete and readable
+        while readable and after_kill and self.clock() < end:
+            self.sleep(min(MAX_POLL_INTERVAL, max(0.0, end - self.clock())))
+            after_kill, readable = self._inventory(path)
+            inventory_complete = inventory_complete and readable
+        elapsed = max(0.0, self.clock() - started)
+        complete = (
+            inventory_complete and not after_kill and (not term_sent or teardown_acknowledged) and not control_eof
+        )
+        return {
+            "descendants": descendants,
+            "after_term": after_term,
+            "after_kill": after_kill,
+            "after": len(after_kill),
+            "complete": complete,
+            "seconds": elapsed,
+            "term_grace_seconds": grace,
+            "term_sent": term_sent,
+            "kill_sent": kill_sent or not inventory_complete,
+            "inventory_complete": inventory_complete,
+            "teardown_acknowledged": teardown_acknowledged,
+            "control_eof": control_eof,
+            "result": "empty" if complete else "deadline",
+            "terminal": terminal,
+        }
 
     def _cleanup(self, path: Path, seconds: float) -> dict[str, object]:
         started = self.clock()
+        descendants, inventory_complete = self._inventory(path)
         self._kill_cgroup(path)
         end = started + seconds
-        while (after := self._cgroup_count(path)) and self.clock() < end:
+        after_kill, readable = self._inventory(path)
+        inventory_complete = inventory_complete and readable
+        while readable and after_kill and self.clock() < end:
             self.sleep(min(MAX_POLL_INTERVAL, max(0.0, end - self.clock())))
+            after_kill, readable = self._inventory(path)
+            inventory_complete = inventory_complete and readable
         elapsed = max(0.0, self.clock() - started)
+        after = len(after_kill)
         return {
+            "descendants": descendants,
+            "after_term": descendants,
+            "after_kill": after_kill,
             "after": after,
-            "complete": after == 0,
+            "complete": inventory_complete and after == 0,
             "seconds": elapsed,
-            "result": "empty" if after == 0 else "deadline",
+            "term_grace_seconds": 0.0,
+            "term_sent": False,
+            "kill_sent": bool(descendants),
+            "inventory_complete": inventory_complete,
+            "teardown_acknowledged": True,
+            "control_eof": False,
+            "result": "empty" if inventory_complete and after == 0 else "deadline",
         }
 
 
@@ -531,6 +660,26 @@ def _await_worker_result(connection: socket.socket, seconds: float) -> dict[str,
         return value if isinstance(value, dict) and value.get("type") in {"result", "error"} else None
     except (OSError, ValueError, json.JSONDecodeError):
         return None
+    finally:
+        connection.setblocking(False)
+
+
+def _await_worker_ack(connection: socket.socket, seconds: float) -> tuple[dict[str, object] | None, bool, bool]:
+    connection.settimeout(seconds)
+    try:
+        raw = connection.recv(MAX_FRAME)
+        if not raw:
+            return None, False, True
+        value = json.loads(raw)
+        if isinstance(value, dict) and value.get("type") == "term-sent":
+            return None, True, False
+        if isinstance(value, dict) and value.get("type") in {"result", "error"}:
+            return value, False, False
+        return None, False, False
+    except TimeoutError:
+        return None, False, False
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None, False, True
     finally:
         connection.setblocking(False)
 
@@ -658,6 +807,10 @@ def _output(response: Mapping[str, object] | None) -> bytes:
 
 def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _nonnegative_int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 __all__ = ["AttemptRuntime", "RuntimeUnavailable"]
