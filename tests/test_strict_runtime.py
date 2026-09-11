@@ -67,6 +67,33 @@ def test_preflight_uses_the_image_entrypoint_and_never_mounts_run_inputs() -> No
     assert "/state" not in command
 
 
+def test_tool_probe_uses_the_same_strict_profile_and_binds_the_distributable_image() -> None:
+    command = strict_runtime.tool_probe_command(
+        IMAGE_ID,
+        "sha256:" + "b" * 64,
+        "sha256:" + "c" * 64,
+        "linux/arm64",
+        "fixture.identity",
+    )
+
+    strict_prefix = strict_runtime.container_command(IMAGE_ID, env_file=None, state=None, preflight_only=True)[:-5]
+    assert command[: len(strict_prefix)] == strict_prefix
+    assert ["--env", "INCYPHER_TOOL_IMAGE_MANIFEST=sha256:" + "b" * 64] in [
+        command[index : index + 2] for index in range(len(command) - 1)
+    ]
+    assert ["--env", "INCYPHER_TOOL_IMAGE_CONFIG=sha256:" + "c" * 64] in [
+        command[index : index + 2] for index in range(len(command) - 1)
+    ]
+    assert command[-6:] == [
+        "--entrypoint",
+        "python3",
+        IMAGE_ID,
+        "-m",
+        "solver.tool_supply_probe",
+        "fixture.identity",
+    ]
+
+
 class Runner:
     def __init__(
         self,

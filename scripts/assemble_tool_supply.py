@@ -38,11 +38,37 @@ class FileLock:
 
 
 @dataclass(frozen=True)
+class SourceLock:
+    uri: str
+    file: str
+
+
+@dataclass(frozen=True)
+class LicenseLock:
+    authority: str
+    file: str
+
+
+@dataclass(frozen=True)
+class FixtureLock:
+    fixture_id: str
+    argv: tuple[str, ...]
+    input_file: str
+    expected_stdout_sha256: str
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class ComponentLock:
     component_id: str
     version: str
     license_expression: str
     license_classification: str
+    source: SourceLock
+    license: LicenseLock
+    entrypoint: str
+    version_argv: tuple[str, ...]
+    fixture: FixtureLock
     platforms: tuple[str, ...]
     packages: tuple[PackageLock, ...]
     files: tuple[FileLock, ...]
@@ -53,6 +79,8 @@ class ComponentLock:
         record["platforms"] = list(self.platforms)
         record["packages"] = [asdict(package) for package in self.packages]
         record["files"] = [asdict(declared_file) for declared_file in self.files]
+        record["version_argv"] = list(self.version_argv)
+        record["fixture"]["argv"] = list(self.fixture.argv)
         record["profiles"] = [record.pop("profile_id")]
         return record
 
@@ -163,6 +191,11 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
             "version",
             "license_expression",
             "license_classification",
+            "source",
+            "license",
+            "entrypoint",
+            "version_argv",
+            "fixture",
             "platforms",
             "packages",
             "files",
@@ -191,18 +224,77 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
     files = item["files"]
     if not isinstance(packages, list) or not isinstance(files, list):
         raise ValueError(f"packages and files must be lists: {component_id}")
+    parsed_files = tuple(
+        sorted((parse_file(declared_file, profile_id) for declared_file in files), key=lambda row: row.destination)
+    )
+    files_by_source = {declared.source: declared for declared in parsed_files}
+    files_by_destination = {declared.destination: declared for declared in parsed_files}
+    source_record = object_with_keys(item["source"], {"uri", "file"}, f"source in {component_id}")
+    source_uri = source_record["uri"]
+    source_file = source_record["file"]
+    if not isinstance(source_uri, str) or not source_uri.startswith("repo:"):
+        raise ValueError(f"source URI is not immutable repository evidence: {component_id}")
+    if not isinstance(source_file, str) or source_file not in files_by_source:
+        raise ValueError(f"source file is not in the locked component closure: {component_id}")
+    license_record = object_with_keys(item["license"], {"authority", "file"}, f"license in {component_id}")
+    license_authority = license_record["authority"]
+    license_file = license_record["file"]
+    if not isinstance(license_authority, str) or not license_authority:
+        raise ValueError(f"missing licence authority: {component_id}")
+    if not isinstance(license_file, str) or license_file not in files_by_source:
+        raise ValueError(f"licence file is not in the locked component closure: {component_id}")
+    entrypoint = item["entrypoint"]
+    if not isinstance(entrypoint, str) or entrypoint not in files_by_destination:
+        raise ValueError(f"entrypoint is not in the locked component closure: {component_id}")
+    if not files_by_destination[entrypoint].mode.endswith(("5", "7")):
+        raise ValueError(f"entrypoint is not executable: {component_id}")
+    version_argv = item["version_argv"]
+    if not isinstance(version_argv, list) or not version_argv or any(not isinstance(arg, str) for arg in version_argv):
+        raise ValueError(f"invalid version argv: {component_id}")
+    fixture_record = object_with_keys(
+        item["fixture"],
+        {"fixture_id", "argv", "input_file", "expected_stdout_sha256", "timeout_seconds"},
+        f"fixture in {component_id}",
+    )
+    fixture_id = fixture_record["fixture_id"]
+    fixture_argv = fixture_record["argv"]
+    input_file = fixture_record["input_file"]
+    expected_stdout = fixture_record["expected_stdout_sha256"]
+    timeout_seconds = fixture_record["timeout_seconds"]
+    if not isinstance(fixture_id, str) or not ID_PATTERN.fullmatch(fixture_id):
+        raise ValueError(f"invalid fixture_id: {component_id}")
+    if not isinstance(fixture_argv, list) or any(not isinstance(arg, str) for arg in fixture_argv):
+        raise ValueError(f"invalid fixture argv: {component_id}")
+    if not isinstance(input_file, str) or input_file not in files_by_source:
+        raise ValueError(f"fixture input is not in the locked component closure: {component_id}")
+    input_destination = files_by_source[input_file].destination
+    if input_destination not in fixture_argv:
+        raise ValueError(f"fixture argv does not consume its locked input: {component_id}")
+    if not isinstance(expected_stdout, str) or not SHA256_PATTERN.fullmatch(expected_stdout):
+        raise ValueError(f"invalid fixture expected output: {component_id}")
+    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or not 1 <= timeout_seconds <= 60:
+        raise ValueError(f"invalid fixture timeout: {component_id}")
     return ComponentLock(
         component_id=component_id,
         version=version,
         license_expression=license_expression,
         license_classification=cast(str, classification),
+        source=SourceLock(cast(str, source_uri), cast(str, source_file)),
+        license=LicenseLock(cast(str, license_authority), cast(str, license_file)),
+        entrypoint=entrypoint,
+        version_argv=tuple(cast(list[str], version_argv)),
+        fixture=FixtureLock(
+            fixture_id=fixture_id,
+            argv=tuple(cast(list[str], fixture_argv)),
+            input_file=input_file,
+            expected_stdout_sha256=expected_stdout,
+            timeout_seconds=timeout_seconds,
+        ),
         platforms=tuple(sorted(cast(list[str], platforms))),
         packages=tuple(
             sorted((parse_package(package, component_id) for package in packages), key=lambda row: row.name)
         ),
-        files=tuple(
-            sorted((parse_file(declared_file, profile_id) for declared_file in files), key=lambda row: row.destination)
-        ),
+        files=parsed_files,
         profile_id=profile_id,
     )
 

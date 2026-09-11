@@ -81,6 +81,29 @@ def container_command(
     return command
 
 
+def tool_probe_command(
+    image_id: str, manifest_digest: str, config_digest: str, platform: str, component_id: str
+) -> list[str]:
+    """Run a fixed component fixture through the identical strict outer profile."""
+
+    command = container_command(image_id, env_file=None, state=None, preflight_only=True)
+    command[-5:] = [
+        "--env",
+        f"INCYPHER_TOOL_IMAGE_MANIFEST={manifest_digest}",
+        "--env",
+        f"INCYPHER_TOOL_IMAGE_CONFIG={config_digest}",
+        "--env",
+        f"INCYPHER_TOOL_PLATFORM={platform}",
+        "--entrypoint",
+        "python3",
+        image_id,
+        "-m",
+        "solver.tool_supply_probe",
+        component_id,
+    ]
+    return command
+
+
 def _check_result(result: Any, command: list[str]) -> None:
     returncode = getattr(result, "returncode", None)
     if returncode not in (None, 0):

@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from solver.tool_supply_receipt import issue_manifest_receipt, validate_receipt
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSEMBLER = REPO_ROOT / "scripts" / "assemble_tool_supply.py"
@@ -44,21 +46,45 @@ def test_the_repository_fragment_assembles_once_and_is_copied_into_the_image(tmp
         )
         == 1
     )
+    assert copy_lines.count("COPY scripts/apply_tool_supply_modes.py scripts/apply_tool_supply_modes.py") == 1
     install_position = dockerfile.index("xargs apt-get install --yes --no-install-recommends")
     assert install_position < dockerfile.index("COPY tool-supply/generated/rootfs/ /")
     assert install_position < dockerfile.index(
         "COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json"
     )
+    assert dockerfile.index("COPY tool-supply/generated/rootfs/ /") < dockerfile.index(
+        "python3 -m scripts.apply_tool_supply_modes"
+    )
 
     committed = REPO_ROOT / "tool-supply" / "generated"
     assembled_files = {
-        path.relative_to(output): (path.read_bytes(), path.stat().st_mode & 0o777)
+        path.relative_to(output): (path.read_bytes(), bool(path.stat().st_mode & 0o111))
         for path in output.rglob("*")
         if path.is_file()
     }
     committed_files = {
-        path.relative_to(committed): (path.read_bytes(), path.stat().st_mode & 0o777)
+        path.relative_to(committed): (path.read_bytes(), bool(path.stat().st_mode & 0o111))
         for path in committed.rglob("*")
         if path.is_file()
     }
     assert assembled_files == committed_files
+
+
+def test_the_promoted_sample_receipt_is_self_contained_and_manifest_addressable() -> None:
+    path = REPO_ROOT / "tool-supply" / "receipts" / "fixture.identity.json"
+    receipt = json.loads(path.read_text())
+
+    validate_receipt(receipt, expected_image_manifest_digest=receipt["image"]["manifest_digest"])
+
+    assert set(receipt["materials"]) == {
+        "lock",
+        "inventory",
+        "supply_receipt",
+        "closure",
+        "source",
+        "licence",
+        "fixture",
+    }
+    assert issue_manifest_receipt(receipt)["ref"] == "receipt:tool-supply:fixture.identity"
+    assert receipt["semantic_fixture"]["outcome"] == "pass"
+    assert "/Users/" not in path.read_text()
