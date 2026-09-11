@@ -11,6 +11,7 @@ which is precisely why the reserve is tested rather than discovered at 14:00 on 
 """
 
 import datetime as dt
+import hashlib
 import json
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from solver.flag import (
 from solver.instance import EXPIRED_AT_SUBMIT_SAYS, INSTANCE_EXPIRED_AT_SUBMIT, Instances, Lease, Terms
 from solver.record import NO_MODEL, SOURCE_BOARD, SOURCE_SOLVER, Recorder
 from solver.redaction import Redactor
+from solver.write_reservation import ReservationState
 
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
 
@@ -155,6 +157,76 @@ def test_a_flag_in_a_commands_output_is_a_candidate_and_the_command_is_kept_with
 
     assert [(candidate.text, candidate.strength) for candidate in found] == [(FLAG, OBSERVED)]
     assert found[0].command == "cat note.txt"
+
+
+def test_submission_reserves_authority_before_the_wire_and_commits_after_its_verdict(recorder):
+    wire = Wire(graded(CORRECT, "accepted"))
+    candidate_digest = hashlib.sha256(FLAG.encode()).hexdigest()
+    key = f"board-submit:{CHALLENGE}:{candidate_digest}"
+    states_at_wire = []
+    transport = wire.transport
+
+    def observed_transport(request):
+        if request.full_url.endswith(ATTEMPT):
+            states_at_wire.append(recorder.write_authority.current(key).state)
+        return transport(request)
+
+    board = Board("https://board.example", "not-a-real-token", observed_transport)
+    outcome = Flags(
+        board,
+        recorder,
+        flag_wrappers=(WRAPPER,),
+        runner=Runner((0, FLAG.encode())),
+        now=lambda: NOON,
+        sleep=lambda _seconds: None,
+    ).submit(
+        [Candidate(FLAG, REPRODUCED)],
+        attempt_id=ATTEMPT_ID,
+        challenge_id=CHALLENGE,
+        slots=Slots(max_attempts=0),
+        workdir=WORKDIR,
+    )
+
+    assert outcome.solved is True
+    assert states_at_wire == [ReservationState.STARTED]
+    assert [row["state"] for row in recorder.write_authority.trace(key)] == [
+        "reserved",
+        "started",
+        "committed",
+    ]
+    assert submitted(recorder) == [f"[flag] submit {FLAG}"]
+
+
+def test_reserved_verdict_survives_failed_v1_observation_sanitized_and_bounded(tmp_path, monkeypatch):
+    secret = "board-secret-that-must-never-reach-state"
+    recorder = Recorder(
+        tmp_path / "state",
+        run_id="run-1",
+        redactor=Redactor({"BOARD_TOKEN": secret}),
+    )
+    message = f"accepted {FLAG} with {secret} " + "hostile-board-body" * 200
+    wire = Wire(graded(CORRECT, message))
+    flags = flags_of(recorder, wire)
+    monkeypatch.setattr(flags, "_record", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("full")))
+
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
+
+    key = f"board-submit:{CHALLENGE}:{hashlib.sha256(FLAG.encode()).hexdigest()}"
+    reservation = recorder.write_authority.current(key)
+    assert outcome.solved is True
+    assert reservation.state is ReservationState.COMMITTED
+    assert reservation.observation["outcome"] == CORRECT
+    assert reservation.observation["http_status"] == 200
+    trace = json.dumps(recorder.write_authority.trace(key))
+    assert FLAG not in trace
+    assert secret not in trace
+    assert "[submitted-candidate]" in trace
+    assert "[redacted:BOARD_TOKEN]" in trace
+    assert "[truncated:" in trace
+    receipt = recorder.write_authority.write_receipt(key).read_text()
+    assert FLAG not in receipt
+    assert secret not in receipt
+    assert "[redacted:BOARD_TOKEN]" in receipt
 
 
 def test_a_flag_the_model_only_stated_is_never_authorised_by_its_own_prose(recorder):

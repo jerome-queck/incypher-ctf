@@ -266,6 +266,7 @@ def test_restart_reconciles_canonical_commit_into_one_matching_v1_projection(tmp
 
     with pytest.raises(RuntimeError, match="injected crash"):
         step.end(exit_code=0, output=b"output", usage=Usage(model="gpt-5"))
+    recorder.write_authority.close()
     restarted = Recorder(tmp_path, run_id="run-1", redactor=Redactor({}))
     event = restarted.event_store.events()[0]
     rows = [json.loads(line) for line in restarted.stream_path.read_text().splitlines()]
