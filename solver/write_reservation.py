@@ -64,12 +64,30 @@ class WriteAuthority:
         hook: Callable[[str], None] | None = None,
     ) -> None:
         self._storage = AuthorityStorage(root, profile)
+        self._writer_descriptor: int | None = None
         self._profile = profile
         self._redactor = redactor or Redactor({})
         self._hook = hook
         self._boot_id = uuid.uuid4().hex
-        with self._storage.locked():
-            self._reconcile_prior_boots_locked()
+        self._writer_descriptor = self._storage.acquire_writer()
+        try:
+            with self._storage.locked():
+                self._reconcile_prior_boots_locked()
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if self._writer_descriptor is None:
+            return
+        descriptor, self._writer_descriptor = self._writer_descriptor, None
+        self._storage.release_writer(descriptor)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except (AttributeError, OSError):
+            pass
 
     @property
     def profile_digest(self) -> str:
@@ -213,6 +231,7 @@ class WriteAuthority:
                 raise ReservationConflict(f"{current.state.value} cannot transition to {state.value}")
             closed = current.transitioned(state, _bounded(observation, self._redactor))
             self._storage.append_locked(closed)
+            self._storage.release_object_slots_locked(closed)
             if replenish:
                 self._storage.replenish_extent_locked(closed.pool, closed.need.bytes)
             return closed
@@ -228,6 +247,7 @@ class WriteAuthority:
                     boot_id=self._boot_id,
                 )
                 self._storage.append_locked(recovered)
+                self._storage.release_object_slots_locked(recovered)
                 self._storage.replenish_extent_locked(recovered.pool, recovered.need.bytes)
             elif reservation.state is ReservationState.STARTED:
                 recovered = reservation.transitioned(
@@ -236,6 +256,7 @@ class WriteAuthority:
                     boot_id=self._boot_id,
                 )
                 self._storage.append_locked(recovered)
+                self._storage.release_object_slots_locked(recovered)
                 self._storage.replenish_extent_locked(recovered.pool, recovered.need.bytes)
 
     def _record_refusal_locked(

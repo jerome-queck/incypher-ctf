@@ -204,7 +204,7 @@ def test_reserved_verdict_survives_failed_v1_observation_sanitized_and_bounded(t
         run_id="run-1",
         redactor=Redactor({"BOARD_TOKEN": secret}),
     )
-    message = f"accepted {secret} " + "hostile-board-body" * 200
+    message = f"accepted {FLAG} with {secret} " + "hostile-board-body" * 200
     wire = Wire(graded(CORRECT, message))
     flags = flags_of(recorder, wire)
     monkeypatch.setattr(flags, "_record", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("full")))
@@ -218,10 +218,13 @@ def test_reserved_verdict_survives_failed_v1_observation_sanitized_and_bounded(t
     assert reservation.observation["outcome"] == CORRECT
     assert reservation.observation["http_status"] == 200
     trace = json.dumps(recorder.write_authority.trace(key))
+    assert FLAG not in trace
     assert secret not in trace
+    assert "[submitted-candidate]" in trace
     assert "[redacted:BOARD_TOKEN]" in trace
     assert "[truncated:" in trace
     receipt = recorder.write_authority.write_receipt(key).read_text()
+    assert FLAG not in receipt
     assert secret not in receipt
     assert "[redacted:BOARD_TOKEN]" in receipt
 

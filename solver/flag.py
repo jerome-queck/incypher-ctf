@@ -632,7 +632,7 @@ class Flags:
             lambda: self._board.submit(challenge_id, candidate.text),
             encode=lambda answer: {
                 "outcome": answer.outcome,
-                "message": answer.message,
+                "message": answer.message.replace(candidate.text, "[submitted-candidate]"),
                 "http_status": answer.http_status,
             },
             decode=lambda answer: Verdict(

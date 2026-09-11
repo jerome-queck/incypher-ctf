@@ -1,8 +1,10 @@
 """Authority-space reservation is observable at the effect boundary and after restart."""
 
 import copy
+import errno
 import json
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 import pytest
 
@@ -54,6 +56,7 @@ def test_full_ordinary_area_preserves_physical_authority_and_terminal_capacity(t
     authority.start(ordinary)
     authority.commit(ordinary, {"digest": "sha256:ordinary"}, replenish=False)
     assert ordinary_extent.stat().st_size == 0
+    assert authority.object_path(ordinary).stat().st_size == 0
     with pytest.raises(ReservationUnavailable):
         authority.reserve(
             "ordinary:second",
@@ -75,7 +78,9 @@ def test_full_ordinary_area_preserves_physical_authority_and_terminal_capacity(t
     assert shared_extent.stat().st_size == PROFILE.shared.bytes
     assert terminal_extent.stat().st_size == PROFILE.terminal.bytes
     assert authority.current(reservation.key).state is ReservationState.COMMITTED
-    assert WriteAuthority(tmp_path, PROFILE).current(terminal.key).state is ReservationState.TERMINAL
+    authority.close()
+    restarted = WriteAuthority(tmp_path, PROFILE)
+    assert restarted.current(terminal.key).state is ReservationState.TERMINAL
 
 
 def test_effect_trace_places_durable_reserve_before_wire_and_commit_after_observation(tmp_path):
@@ -125,6 +130,7 @@ def test_crash_boundaries_never_repeat_an_effect(tmp_path, crash_point):
             decode=lambda verdict: verdict,
         )
 
+    authority.close()
     restarted = WriteAuthority(tmp_path, PROFILE)
     if crash_point == "before_reserve":
         assert restarted.current("submit:42:one") is None
@@ -188,8 +194,25 @@ def test_one_idempotency_key_binds_one_effect_across_concurrency_and_reopen(tmp_
 
     assert results == [{"outcome": "correct"}] * 4
     assert calls == ["wire"]
+    authority.close()
+    reopened = WriteAuthority(tmp_path, PROFILE)
     with pytest.raises(ReservationConflict):
-        authority.reserve("submit:42:one", identity("sha256:different"), NEED)
+        reopened.reserve("submit:42:one", identity("sha256:different"), NEED)
+
+
+def test_second_live_writer_is_refused_without_terminalizing_the_first(tmp_path):
+    authority = WriteAuthority(tmp_path, PROFILE)
+    reserved = authority.reserve("submit:42:one", identity(), NEED)
+    started = authority.start(reserved)
+
+    with pytest.raises(ReservationConflict, match="live canonical writer"):
+        WriteAuthority(tmp_path, PROFILE)
+
+    assert authority.current(started.key).state is ReservationState.STARTED
+    authority.possibly_sent(started, "controlled-finish")
+    authority.close()
+    restarted = WriteAuthority(tmp_path, PROFILE)
+    assert restarted.current(started.key).state is ReservationState.POSSIBLY_SENT
 
 
 def test_concurrent_distinct_effects_cannot_overcommit_one_physical_grant(tmp_path):
@@ -256,7 +279,10 @@ def _controlled_proof_observation(root):
                 encode=lambda verdict: verdict,
                 decode=lambda verdict: verdict,
             )
-        current = WriteAuthority(crash_root, PROFILE).current("submit:42:one")
+        authority.close()
+        restarted = WriteAuthority(crash_root, PROFILE)
+        current = restarted.current("submit:42:one")
+        restarted.close()
         crash_outcomes[crash_point] = {
             "durable_state": current.state.value if current is not None else "absent",
             "effect_count": len(calls),
@@ -287,13 +313,52 @@ def _controlled_proof_observation(root):
         Capacity(4_096, 0, 3),
         classification="storage-terminal",
     )
-    physical_result = {
+    reserved_capacity_result = {
         "ordinary_extent_remaining": authority.extent_path(Pool.ORDINARY).stat().st_size,
         "ordinary_state": authority.current(ordinary.key).state.value,
         "shared_effect_state": authority.current("submit:42:one").state.value,
         "terminal_state": terminal.state.value,
     }
-    return {"crash_point_outcomes": crash_outcomes, "physical_exhaustion_result": physical_result}
+
+    fault_root = root / "enospc"
+    authority = WriteAuthority(fault_root, PROFILE)
+    with patch(
+        "solver.write_reservation_storage.os.pwrite",
+        side_effect=OSError(errno.ENOSPC, "controlled ordinary-ledger exhaustion"),
+    ):
+        with pytest.raises(OSError) as failed:
+            authority.reserve(
+                "ordinary:enospc",
+                EffectIdentity("body.write", "enospc"),
+                NEED,
+                pool=Pool.ORDINARY,
+            )
+    ReservedEffect(authority).execute(
+        "submit:42:enospc",
+        identity("sha256:enospc"),
+        NEED,
+        lambda: {"outcome": "incorrect"},
+        encode=lambda verdict: verdict,
+        decode=lambda verdict: verdict,
+    )
+    terminal = authority.record_terminal(
+        "run:terminal-enospc",
+        EffectIdentity("run.terminal", "run-enospc"),
+        Capacity(4_096, 0, 3),
+        classification="storage-terminal",
+    )
+    fault_result = {
+        "fault_errno": failed.value.errno,
+        "fault_site": "ordinary-ledger-pwrite",
+        "ordinary_state": "absent",
+        "shared_effect_state": authority.current("submit:42:enospc").state.value,
+        "terminal_state": terminal.state.value,
+    }
+    return {
+        "crash_point_outcomes": crash_outcomes,
+        "fault_injection_result": fault_result,
+        "reserved_capacity_exhaustion_result": reserved_capacity_result,
+    }
 
 
 def test_controlled_proof_matches_independently_executed_boundaries(tmp_path):
@@ -301,7 +366,8 @@ def test_controlled_proof_matches_independently_executed_boundaries(tmp_path):
 
     assert _controlled_proof_observation(tmp_path) == {
         "crash_point_outcomes": proof["crash_point_outcomes"],
-        "physical_exhaustion_result": proof["physical_exhaustion_result"],
+        "fault_injection_result": proof["fault_injection_result"],
+        "reserved_capacity_exhaustion_result": proof["reserved_capacity_exhaustion_result"],
     }
 
 
@@ -320,7 +386,7 @@ def test_receipt_binds_profile_identity_capacity_and_durable_trace(tmp_path):
     assert receipt["need"] == {"bytes": 4_096, "objects": 1, "operations": 3}
     proof = load_controlled_proof()
     assert receipt["crash_point_outcomes"] == proof["crash_point_outcomes"]
-    assert receipt["physical_exhaustion_result"] == proof["physical_exhaustion_result"]
+    assert receipt["reserved_capacity_exhaustion_result"] == proof["reserved_capacity_exhaustion_result"]
     assert receipt["manifest_link"] == {
         "row_id": "core.canonical-state-replay-restart",
         "receipt_ref": "receipt:write-reservation",

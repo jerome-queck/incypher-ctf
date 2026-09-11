@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -25,19 +26,52 @@ from solver.write_reservation_contracts import (
 )
 
 
+_WRITER_REGISTRY_LOCK = threading.Lock()
+_HELD_WRITERS: set[Path] = set()
+
+
 class AuthorityStorage:
     """One flock-serialized store whose future records and objects already exist."""
 
-    def __init__(self, run_root: Path, profile: WriteProfile) -> None:
+    def __init__(self, run_root: Path, profile: WriteProfile, *, provision: bool = True) -> None:
         self.root = Path(run_root) / "write-authority"
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock_path = self.root / "authority.lock"
-        self.lock_path.touch(exist_ok=True, mode=0o600)
+        if provision:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.lock_path.touch(exist_ok=True, mode=0o600)
+        elif not self.root.is_dir() or not self.lock_path.is_file():
+            raise ReservationConflict("sealed write authority is unavailable")
         self.profile_path = self.root / "profile.json"
         self.receipts_dir = self.root / "receipts"
         self.profile = profile
         with self.locked():
-            self._provision_locked()
+            if provision:
+                self._provision_locked()
+            else:
+                self._validate_locked()
+
+    def acquire_writer(self) -> int:
+        path = self.root.resolve()
+        with _WRITER_REGISTRY_LOCK:
+            if path in _HELD_WRITERS:
+                raise ReservationConflict("this Run already has a live canonical writer")
+            descriptor = os.open(self.root / "writer.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                os.close(descriptor)
+                raise ReservationConflict("this Run already has a live canonical writer") from error
+            _HELD_WRITERS.add(path)
+        return descriptor
+
+    def release_writer(self, descriptor: int) -> None:
+        path = self.root.resolve()
+        with _WRITER_REGISTRY_LOCK:
+            if path not in _HELD_WRITERS:
+                return
+            _HELD_WRITERS.remove(path)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def extent_path(self, pool: Pool) -> Path:
         return self.root / f"{Pool(pool).value}.extent"
@@ -124,14 +158,26 @@ class AuthorityStorage:
         )
 
     def available_object_slots_locked(self, pool: Pool, count: int) -> tuple[str, ...]:
+        if count == 0:
+            return ()
         claimed = {
             slot
             for reservation in self.latest_locked().values()
             if reservation.pool is pool and reservation.state in {ReservationState.RESERVED, ReservationState.STARTED}
             for slot in reservation.object_slots
         }
-        available = [path for path in sorted(self._slots_dir(pool).glob("*.slot")) if path.name not in claimed]
-        return tuple(path.name for path in available[:count])
+        available = []
+        for path in sorted(self._slots_dir(pool).glob("*.slot")):
+            if path.name in claimed or not self._clear_slot(path):
+                continue
+            available.append(path.name)
+            if len(available) == count:
+                break
+        return tuple(available)
+
+    def release_object_slots_locked(self, reservation: WriteReservation) -> None:
+        for name in reservation.object_slots:
+            self._clear_slot(self._slots_dir(reservation.pool) / name)
 
     def shrink_extent_locked(self, pool: Pool, amount: int) -> None:
         path = self.extent_path(pool)
@@ -208,6 +254,33 @@ class AuthorityStorage:
                 (slots / f"{index:04d}.slot").touch(exist_ok=True, mode=0o600)
             fsync_directory(slots)
         fsync_directory(self.root)
+
+    def _validate_locked(self) -> None:
+        try:
+            held = profile_from(json.loads(self.profile_path.read_text()))
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+            raise ReservationConflict("sealed write profile is unavailable") from error
+        if held != self.profile:
+            raise ReservationConflict("sealed write profile differs from the requested profile")
+        for pool in Pool:
+            capacity = getattr(self.profile, pool.value)
+            if self._ledger_path(pool).stat().st_size != capacity.operations * LEDGER_RECORD_BYTES:
+                raise ReservationConflict(f"{pool.value} ledger size differs from the sealed profile")
+            if self.extent_path(pool).stat().st_size > capacity.bytes:
+                raise ReservationConflict(f"{pool.value} extent exceeds the sealed profile")
+
+    @staticmethod
+    def _clear_slot(path: Path) -> bool:
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_TRUNC)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            fsync_directory(path.parent)
+        except OSError:
+            return False
+        return True
 
     @staticmethod
     def _allocate_file(path: Path, size: int, fill: bytes) -> None:
