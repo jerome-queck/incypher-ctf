@@ -75,7 +75,7 @@ def project_lead(events: list[Any], run_id: str, engagement_id: str | None = Non
     if binding.run_id != run_id:
         raise InvalidEventError("Lead Engagement belongs to another Run")
 
-    _verify_authority(events, selected)
+    _verify_authority(events, selected, run_id)
     admitted: dict[int, Any] = {}
     transitions: list[LeadTransition] = []
     disposition: str | None = None
@@ -167,7 +167,7 @@ def project_lead(events: list[Any], run_id: str, engagement_id: str | None = Non
     )
 
 
-def _verify_authority(events: list[Any], selected: list[Any]) -> None:
+def _verify_authority(events: list[Any], selected: list[Any], run_id: str) -> None:
     by_sequence = {event.sequence: event for event in events}
     references = Counter(
         event.payload["authority_sequence"] for event in events if event.event_type == LEAD_ENGAGEMENT_RECORDED
@@ -186,6 +186,8 @@ def _verify_authority(events: list[Any], selected: list[Any]) -> None:
         binding = event.payload["binding"]
         if not (
             authority.event_type == "work-generation.recorded"
+            and event.payload["authority_run_id"] == run_id
+            and event.payload["authority_run_id"] == binding["run_id"]
             and authority.payload["record"] == "authority"
             and authority.payload["authority"] == GenerationAuthority.AUTHORITY.value
             and authority.payload["event_id"] == event.payload["authority_event_id"]

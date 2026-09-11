@@ -93,6 +93,7 @@ class AuthorityGrant:
 
     event_id: str
     sequence: int
+    run_id: str
     generation_id: str
     work_id: str
     attempt_id: str
@@ -328,6 +329,7 @@ class GenerationFence:
                 AuthorityGrant(
                     event_id=event_id,
                     sequence=committed.sequence,
+                    run_id=self.run_id,
                     generation_id=state.generation_id,
                     work_id=state.work_id,
                     attempt_id=state.attempt_id,

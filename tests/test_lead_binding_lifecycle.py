@@ -287,9 +287,27 @@ def test_lead_fact_keeps_its_exact_authority_when_an_unrelated_fence_interleaves
     for fact in lead:
         exact = next(event for event in events if event.sequence == fact.payload["authority_sequence"])
         between = next(event for event in events if event.sequence == exact.sequence + 1)
+        assert fact.payload["authority_run_id"] == "run-1"
         assert exact.payload["event_id"] == fact.payload["authority_event_id"]
         assert exact.payload["authority"] == GenerationAuthority.AUTHORITY.value
         assert between.payload["authority"] == GenerationAuthority.AUTHORITY.value
         assert between.payload["event_id"] != fact.payload["authority_event_id"]
         assert fact.sequence == between.sequence + 1
     assert project_lead(events, "run-1", "engagement-1") == outcome.state
+
+
+def test_projection_refuses_a_forged_cross_run_authority_claim(tmp_path):
+    controller, _model, bound = make_controller(tmp_path, measured("inspect", ToolProposal("strings")))
+    controller.handle(LeadRequest(bound, 1, LeadInitialContext("observed")))
+    events = EventStore(tmp_path, run_id="run-1").events()
+    fact_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.event_type == "lead-engagement.recorded" and event.payload["record"] == "turn"
+    )
+    forged = dict(events[fact_index].payload)
+    forged["authority_run_id"] = "run-2"
+    events[fact_index] = replace(events[fact_index], payload=forged)
+
+    with pytest.raises(InvalidEventError, match="authority binding disagrees"):
+        project_lead(events, "run-1", "engagement-1")

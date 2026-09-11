@@ -254,6 +254,7 @@ class LeadEngagementRecorded:
     event_id: str
     record: LeadRecord
     binding: LeadBinding
+    authority_run_id: str
     authority_event_id: str
     authority_sequence: int
     turn_index: int
@@ -294,6 +295,7 @@ class LeadEngagementRecorded:
             "event_id": self.event_id,
             "record": self.record.value,
             "binding": self.binding.document(),
+            "authority_run_id": self.authority_run_id,
             "authority_event_id": self.authority_event_id,
             "authority_sequence": self.authority_sequence,
             "turn_index": self.turn_index,
@@ -323,6 +325,7 @@ class LeadEngagementRecorded:
         strings = (
             "event_id",
             "record",
+            "authority_run_id",
             "authority_event_id",
             "classification",
             "request_digest",
@@ -367,6 +370,7 @@ class LeadEngagementRecorded:
             raise InvalidEventError("Lead classification is unsupported", sequence=sequence)
         if (
             not payload["event_id"]
+            or not payload["authority_run_id"]
             or not payload["authority_event_id"]
             or payload["turn_index"] < 1
             or payload["authority_sequence"] < 1
