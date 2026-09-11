@@ -35,7 +35,15 @@ RECEIPT_FIELDS = {
     "control_plane_reachable",
     "sanitization",
 }
-PROFILE_FIELDS = {"board_url", "target_url", "run_id", "run_seconds", "state_storage"}
+PROFILE_FIELDS = {
+    "board_url",
+    "target_url",
+    "run_id",
+    "run_seconds",
+    "state_storage",
+    "timeout_seconds",
+    "terminal_mode",
+}
 HOST_PATH = re.compile(r"(?:^|[\s\"'])(?:/Users/|/home/|/var/folders/|[A-Za-z]:\\)")
 FORBIDDEN_TEXT = ("-----begin private key-----", "signing-key", ".rig-private", "oracle")
 
@@ -126,6 +134,8 @@ def _verify_receipt(
         raise ValueError("receipt candidate profile duration is invalid")
     if profile["state_storage"] != "isolated_tmpfs":
         raise ValueError("receipt candidate profile bounds are invalid")
+    if profile["timeout_seconds"] != 20 or profile["terminal_mode"] != "exit_on_terminal":
+        raise ValueError("receipt candidate terminal policy is invalid")
     if str(uuid.UUID(profile["run_id"])) != profile["run_id"]:
         raise ValueError("receipt candidate profile run ID is invalid")
     if any(receipt[field] != value for field, value in expected.items()):
@@ -146,7 +156,7 @@ def _verify_result(receipt: dict[str, object]) -> None:
     exit_code = receipt["solver_exit_code"]
     if not isinstance(valid, bool):
         raise ValueError("receipt infrastructure validity is invalid")
-    if failure not in {None, "target_unavailable", "candidate_launch_failed"}:
+    if failure not in {None, "target_unavailable", "candidate_launch_failed", "candidate_timeout"}:
         raise ValueError("receipt infrastructure failure is invalid")
     if valid != (failure is None):
         raise ValueError("receipt infrastructure result is inconsistent")

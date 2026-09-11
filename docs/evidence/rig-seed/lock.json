@@ -1,8 +1,8 @@
 {
   "candidate_digest": "sha256:0f39d11f45b144d00b530846f9a6df5a71c3c1150c02df0029b292f27f49ecf6",
   "image_digests": {
-    "board": "sha256:06d2599278ddb3c8dc251c6a7897574ee8edc8c91044a7655e4a81ed00882fd4",
-    "target": "sha256:06d2599278ddb3c8dc251c6a7897574ee8edc8c91044a7655e4a81ed00882fd4"
+    "board": "sha256:5e396baea18ffa75acbf8142800c0ec70f6b975c91e889568a3faa7aea322d28",
+    "target": "sha256:5e396baea18ffa75acbf8142800c0ec70f6b975c91e889568a3faa7aea322d28"
   },
   "proofs": [
     {
@@ -16,9 +16,9 @@
       "public_key": "solver-failure.public.pem",
       "receipt": "solver-failure.receipt.json",
       "sha256": {
-        "public_key": "902a1915c7a8245e81abdb7321b5c3aea15204d94eedc4a4c21d411f90448c86",
-        "receipt": "5f2de7ca2ed595c3d8cd93a1583be3db4f625d190e3949e0cad18d0182ee6157",
-        "signature": "fce28a8845ac138350a1ad45e727756a19c498afc4f83e9456b5b18dcff2a949"
+        "public_key": "ef517e3e53aabdfe99f27f5efae46192cb04d947cf042e3a97dd1852985be624",
+        "receipt": "d5f41cc90430954245a4863faa20c42dd251834ed945af59cd4eb62085e95d17",
+        "signature": "3c09c38715b888a5b9cdf590a82d6e8fd7c9d7cae28b9641d577fdd97b7db0f5"
       },
       "signature": "solver-failure.receipt.sig.b64"
     },
@@ -33,14 +33,14 @@
       "public_key": "rig-failure.public.pem",
       "receipt": "rig-failure.receipt.json",
       "sha256": {
-        "public_key": "251701893815f42fac7ec3a5fc320039a2c7ff7be9862cfc24e5960f7fd22e93",
-        "receipt": "1f99af4d705a68b868985395572e4905cb36d63d6fce913104164fb3b8480bf4",
-        "signature": "cc744db15b73de76a5061d444cb34226191a4489e425c049680c8ac3086b3d6d"
+        "public_key": "3f75b2b86b3316957aba8569ed08ed1bc653d634e99cb0b986a2f39e84727feb",
+        "receipt": "4c2269fd0a41ac1fb53664367b84faf040640c1918c7340149ff73397f98b86d",
+        "signature": "30a4a48fe37e9c6f33a2d369d14f85142adb0762ba3f068597e7667e25b19cde"
       },
       "signature": "rig-failure.receipt.sig.b64"
     }
   ],
   "repository": "https://github.com/jerome-queck/incypher-practice-rig",
-  "rig_commit": "a6007eaa6849ad183ac74b02c275dd09c8b18d8a",
+  "rig_commit": "e82831c38f9116441fc171fb807458246640594a",
   "schema": "rig-seed-lock/v1"
 }
