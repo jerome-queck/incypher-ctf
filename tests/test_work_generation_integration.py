@@ -9,6 +9,7 @@ from solver.record import LateGenerationEvent, Recorder, Usage
 from solver.redaction import Redactor
 from solver.replay import verify_and_materialize_run_state
 from solver.work_generation import GenerationFence
+from solver.work_generation_receipt import verify_receipt
 from test_run_loop import Agent, Clock, Wire, solver
 
 
@@ -43,6 +44,8 @@ def test_attempt_effects_are_fenced_while_legacy_attempt_rows_keep_their_v1_shap
     assert closed_row["attempt_id"] == acquired.payload["attempt_id"]
     assert "generation_id" not in opened
     assert "generation_id" not in closed_row
+    receipt = tmp_path / "state" / "runs" / "gate" / "canonical" / "work-generation-fence.receipt.json"
+    assert verify_receipt(receipt) == receipt
 
 
 def test_a_crashed_attempt_closes_its_generation_as_interrupted(tmp_path):

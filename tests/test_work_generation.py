@@ -11,9 +11,11 @@ from solver.event_store import (
     GenerationDisposition,
     GenerationRecord,
     InvalidReceiptError,
+    LifecycleRecorded,
     WorkGenerationRecorded,
     WORK_GENERATION_RECORDED,
 )
+from solver.event_store_contracts import RunClosed, TerminalDisposition
 from solver.manifest import generate_manifest
 from solver.redaction import Redactor
 from solver.work_generation import (
@@ -134,7 +136,7 @@ def test_active_authority_is_durably_reserved_before_the_caller_mutates_state(tm
     identity = fence.acquire("challenge-1", "attempt-1")
     decision = fence.authorize(identity.generation_id, GenerationAuthority.CANDIDATE, b"candidate")
 
-    assert decision == AuthorityDecision(True, "current-generation")
+    assert decision == AuthorityDecision(True, GenerationClassification.CURRENT)
     reservation = EventStore(tmp_path, run_id="run-1").events()[-1]
     assert reservation.payload["record"] == "authority"
     assert reservation.payload["authority"] == "candidate"
@@ -150,7 +152,7 @@ def test_closed_authority_is_recorded_as_redacted_late_evidence(tmp_path):
 
     decision = fence.authorize(identity.generation_id, GenerationAuthority.TOOL, b"secret-value-output")
 
-    assert decision == AuthorityDecision(False, "closed-generation")
+    assert decision == AuthorityDecision(False, GenerationClassification.CLOSED)
     after = fence.projection()
     assert after.generations == before.generations
     late = EventStore(tmp_path, run_id="run-1").events()[-1]
@@ -168,7 +170,7 @@ def test_superseded_authority_has_a_distinct_rejection_classification(tmp_path):
 
     decision = fence.authorize(identity.generation_id, GenerationAuthority.CARRY, b"stale")
 
-    assert decision == AuthorityDecision(False, "superseded-generation")
+    assert decision == AuthorityDecision(False, GenerationClassification.SUPERSEDED)
     assert fence.projection().generations[0].disposition is GenerationDisposition.SUPERSEDE
 
 
@@ -181,7 +183,7 @@ def test_every_closed_authority_domain_is_rejected_without_changing_ownership(tm
 
     decision = fence.authorize(identity.generation_id, authority, b"late")
 
-    assert decision == AuthorityDecision(False, "closed-generation")
+    assert decision == AuthorityDecision(False, GenerationClassification.CLOSED)
     assert fence.projection().generations == before
 
 
@@ -325,3 +327,15 @@ def test_receipt_rejects_noncanonical_or_changed_documents(tmp_path):
 
     with pytest.raises(InvalidReceiptError):
         verify_receipt(path)
+
+
+def test_receipt_tracks_the_generation_substream_not_unrelated_canonical_events(tmp_path):
+    fence = make_fence(tmp_path)
+    fence.acquire("challenge-1", "attempt-1")
+    path = fence.write_receipt()
+    EventStore(tmp_path, run_id="run-1").append(
+        LifecycleRecorded("run:close", RunClosed(TerminalDisposition.NORMAL)),
+        body=b"",
+    )
+
+    assert verify_receipt(path) == path

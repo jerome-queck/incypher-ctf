@@ -81,7 +81,7 @@ class GenerationProjection:
 @dataclass(frozen=True)
 class AuthorityDecision:
     accepted: bool
-    classification: str
+    classification: GenerationClassification
 
 
 def _illegal(message: str, sequence: int | None = None) -> IllegalGenerationTransition:
@@ -102,14 +102,13 @@ def _projection_document(
 
 
 def _project_events(events: list[Any], run_id: str) -> GenerationProjection:
+    work_events = [event for event in events if event.event_type == WORK_GENERATION_RECORDED]
     states_by_id: dict[str, GenerationState] = {}
     order: list[str] = []
     active_by_work: dict[str, GenerationState] = {}
     generation_by_attempt: dict[str, str] = {}
 
-    for event in events:
-        if event.event_type != WORK_GENERATION_RECORDED:
-            continue
+    for event in work_events:
         payload = event.payload
         generation_id = payload["generation_id"]
         work_id = payload["work_id"]
@@ -192,7 +191,7 @@ def _project_events(events: list[Any], run_id: str) -> GenerationProjection:
         generations=states,
         active_by_work=active,
         digest=digest_bytes(canonical_bytes(document)),
-        chain_head=events[-1].event_digest if events else "",
+        chain_head=work_events[-1].event_digest if work_events else "",
     )
 
 
@@ -228,7 +227,7 @@ class GenerationFence:
         if any(state.attempt_id == attempt_id for state in projection.generations):
             raise GenerationConflict(f"attempt {attempt_id!r} already belongs to a generation")
         generation_id = _next_generation_id(projection)
-        self.store.append(
+        self._append(
             WorkGenerationRecorded(
                 event_id=f"{generation_id}:acquire",
                 generation_id=generation_id,
@@ -237,7 +236,7 @@ class GenerationFence:
                 record=GenerationRecord.ACQUIRE,
                 ts=self._timestamp(),
             ),
-            body=b"",
+            b"",
         )
         return GenerationIdentity(generation_id, work_id, attempt_id)
 
@@ -257,7 +256,7 @@ class GenerationFence:
             if state.disposition == disposition:
                 return
             raise GenerationConflict(f"generation {generation_id!r} already closed as {state.disposition.value}")
-        self.store.append(
+        self._append(
             WorkGenerationRecorded(
                 event_id=f"{generation_id}:close",
                 generation_id=generation_id,
@@ -267,7 +266,7 @@ class GenerationFence:
                 disposition=disposition,
                 ts=self._timestamp(),
             ),
-            body=b"",
+            b"",
         )
 
     def authorize(
@@ -281,7 +280,7 @@ class GenerationFence:
         authority = GenerationAuthority(authority)
         if state.active:
             event_id = self._next_authority_event_id(generation_id)
-            self.store.append(
+            self._append(
                 WorkGenerationRecorded(
                     event_id=event_id,
                     generation_id=generation_id,
@@ -292,16 +291,16 @@ class GenerationFence:
                     classification=GenerationClassification.CURRENT,
                     ts=self._timestamp(),
                 ),
-                body=b"",
+                b"",
             )
-            return AuthorityDecision(True, "current-generation")
+            return AuthorityDecision(True, GenerationClassification.CURRENT)
         classification = (
             GenerationClassification.SUPERSEDED
             if state.disposition == GenerationDisposition.SUPERSEDE
             else GenerationClassification.CLOSED
         )
         event_id = self._next_late_event_id(generation_id)
-        self.store.append(
+        self._append(
             WorkGenerationRecorded(
                 event_id=event_id,
                 generation_id=generation_id,
@@ -312,9 +311,9 @@ class GenerationFence:
                 classification=classification,
                 ts=self._timestamp(),
             ),
-            body=evidence,
+            evidence,
         )
-        return AuthorityDecision(False, classification.value)
+        return AuthorityDecision(False, classification)
 
     def reconcile_restart(self) -> tuple[str, ...]:
         active = tuple(state.generation_id for state in self.projection().generations if state.active)
@@ -331,6 +330,10 @@ class GenerationFence:
         events = self.store.events()
         projection = _project_events(events, self.run_id)
         return build_receipt(self.store, events, projection)
+
+    def _append(self, event: WorkGenerationRecorded, body: bytes) -> None:
+        self.store.append(event, body=body)
+        self.write_receipt()
 
     def _next_late_event_id(self, generation_id: str) -> str:
         events = self.store.events()

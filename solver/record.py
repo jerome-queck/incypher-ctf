@@ -616,7 +616,7 @@ class Recorder:
             return
         decision = self.generations.authorize(generation_id, authority, evidence)
         if not decision.accepted:
-            raise LateGenerationEvent(f"{attempt_id!r} belongs to {decision.classification} {generation_id!r}")
+            raise LateGenerationEvent(f"{attempt_id!r} belongs to {decision.classification.value} {generation_id!r}")
 
     def _generation_for_attempt(self, attempt_id: str) -> str | None:
         matching = [state for state in self.generations.projection().generations if state.attempt_id == attempt_id]
