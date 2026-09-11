@@ -25,6 +25,8 @@ from solver.event_store_contracts import (
     SignalForwarded,
     TerminalDisposition,
 )
+from solver.isolation import strict_preflight
+from solver.isolation_receipt import write_receipt as write_isolation_receipt
 from solver.redaction import Redactor
 from solver.replay import verify_and_materialize_run_state
 from solver.supervisor_process import ProcessOutcome, ProcessOwner, SpawnedBoot
@@ -227,6 +229,12 @@ def verify_state(state: Path, run_id: str, redactor: Redactor) -> None:
         raise Refusal(f"{boot.MARK} canonical state verification refused this Run — {damage.classification}") from None
 
 
+def preflight_isolation(environ, state: Path, run_id: str) -> Path:
+    """Admit the exact strict profile before the effect-capable controller opens."""
+
+    return write_isolation_receipt(state, run_id, strict_preflight(environ))
+
+
 def launch_boot(_boot_id: str, environ) -> SpawnedBoot:
     process = subprocess.Popen(
         [sys.executable, "-m", "solver"],
@@ -279,6 +287,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
             services=SupervisorServices(
                 verify_replay=lambda: verify_state(state, run_id, redactor),
                 admit_storage=lambda: admit_storage(state, run_id),
+                preflight_isolation=lambda: preflight_isolation(environ, state, run_id),
                 launch_controller=lambda boot_id: launch_boot(boot_id, environ),
                 reap_children=reap_children,
             ),
@@ -318,6 +327,7 @@ __all__ = [
     "admit_storage",
     "launch_boot",
     "main",
+    "preflight_isolation",
     "quiesce_refusal",
     "reap_children",
     "verify_state",

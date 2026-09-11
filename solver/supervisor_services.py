@@ -15,13 +15,15 @@ class SupervisorServices:
 
     verify_replay: Callable[[], object]
     admit_storage: Callable[[], None]
+    preflight_isolation: Callable[[], object]
     launch_controller: Callable[[str], BootProcess]
     reap_children: Callable[[], int]
 
-    def admit(self) -> tuple[ServiceName, ServiceName]:
+    def admit(self) -> tuple[ServiceName, ServiceName, ServiceName]:
         self.verify_replay()
         self.admit_storage()
-        return ServiceName.VERIFIED_REPLAY, ServiceName.STORAGE_ADMISSION
+        self.preflight_isolation()
+        return ServiceName.VERIFIED_REPLAY, ServiceName.STORAGE_ADMISSION, ServiceName.STRICT_ISOLATION
 
 
 __all__ = ["ServiceName", "SupervisorServices"]
