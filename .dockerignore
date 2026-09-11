@@ -19,6 +19,12 @@ tool-supply/generated/*
 !tool-supply/generated/inventory.json
 !tool-supply/generated/receipt.json
 
+# Git retains only the executable class of committed modes. This build-only helper restores the
+# exact modes from the validated generated inventory after its rootfs crosses that boundary.
+!scripts
+scripts/*
+!scripts/apply_tool_supply_modes.py
+
 # The third thing ADR-0008 bakes in: every event's tracked Board profile, which `CTFD_URL` selects
 # between at run time. Written out one directory at a time rather than as a single `!` line, because
 # a re-inclusion whose parent is excluded is the shape that silently ships nothing — and a missing

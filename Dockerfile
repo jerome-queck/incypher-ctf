@@ -316,6 +316,10 @@ RUN set -eu; \
     rm /tmp/tool-supply-apt-packages.txt
 COPY tool-supply/generated/rootfs/ /
 COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json /opt/solver/tool-supply/
+COPY scripts/apply_tool_supply_modes.py /tmp/apply-tool-supply-modes.py
+RUN python3 /tmp/apply-tool-supply-modes.py \
+      --inventory /opt/solver/tool-supply/inventory.json --root / \
+    && rm /tmp/apply-tool-supply-modes.py
 COPY solver/ solver/
 COPY docs/competitions/*.board.json boards/
 
