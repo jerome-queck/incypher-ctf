@@ -21,6 +21,10 @@ from solver import codex
 from solver.__main__ import BROKEN, CLEAN, REFUSED, main
 from solver.board import Board
 from solver.codex import Child
+from solver.event_store import EventStore, ObservationRecorded
+from solver.record import Recorder, Usage
+from solver.redaction import Redactor
+from solver.replay_proof import load_controlled_proof, subject_digest
 from solver.triage import QUESTION
 from test_board_profile import CONTROL_AGREEABLE, Wire
 from test_run_loop import BOARD
@@ -147,6 +151,48 @@ def composed(monkeypatch) -> list:
     return built
 
 
+def canonical_state(state, *, events=1):
+    store = EventStore(state, run_id="gate-1")
+    for step_index in range(1, events + 1):
+        store.append(
+            ObservationRecorded(
+                attempt_id="attempt-1",
+                step_index=step_index,
+                command_raw="printf output",
+                command_normalised="printf output",
+                tool="bash",
+            ),
+            body=f"output-{step_index}".encode(),
+        )
+    return store
+
+
+def damaged_canonical_state(state, classification):
+    store = canonical_state(state, events=2 if classification == "previous-digest-mismatch" else 1)
+    envelopes = [json.loads(line) for line in store.events_path.read_text().splitlines()]
+    if classification == "event-digest-mismatch":
+        envelopes[0]["event_digest"] = "f" * 64
+    elif classification == "previous-digest-mismatch":
+        envelopes[1]["prev_digest"] = "0" * 64
+    elif classification == "missing-blob":
+        (store.sealed_dir / envelopes[0]["payload"]["blob_digest"]).unlink()
+        return
+    elif classification == "unknown-schema":
+        envelopes[0]["schema_version"] = 999
+    store.events_path.write_text("\n".join(json.dumps(envelope) for envelope in envelopes) + "\n")
+
+
+def stop_at_board_construction(monkeypatch):
+    class BoardConstructed(RuntimeError):
+        pass
+
+    def construct(*_args):
+        raise BoardConstructed
+
+    monkeypatch.setattr(entry, "Board", construct)
+    return BoardConstructed
+
+
 def test_an_empty_environment_refuses_with_a_sentence_and_never_a_traceback(capsys, tmp_path, boards):
     assert main({}, run_state=tmp_path / "state", boards=boards) == REFUSED
     assert "CTFD_URL" in capsys.readouterr().err
@@ -157,6 +203,80 @@ def test_a_board_nothing_holds_rules_for_refuses_before_a_single_request(capsys,
 
     assert code == REFUSED
     assert "no Board profile" in capsys.readouterr().err
+
+
+def test_controlled_replay_proof_matches_the_current_entry_point(capsys, monkeypatch, tmp_path, logged_in, boards):
+    classifications = (
+        "event-digest-mismatch",
+        "previous-digest-mismatch",
+        "missing-blob",
+        "unknown-schema",
+    )
+    constructed = []
+    monkeypatch.setattr(entry, "Board", lambda *args: constructed.append(args))
+    results = {}
+    for classification in classifications:
+        state = tmp_path / classification
+        damaged_canonical_state(state, classification)
+        code = main(env(), run_state=state, boards=boards)
+        refusal = capsys.readouterr().err
+        observed = refusal.rsplit("— ", 1)[-1].strip()
+        assert refusal == f"[boot] canonical state verification refused this Run — {classification}\n"
+        results[classification] = {
+            "status": "refused" if code == REFUSED else "accepted",
+            "observed": observed,
+        }
+
+    proof = load_controlled_proof()
+    assert proof == {
+        "schema_version": 1,
+        "proof_type": "verified-replay-controlled-proof",
+        "subject_digest": subject_digest(),
+        "corruption_fixture_results": results,
+        "pre_authority_refusal": {
+            "entry_point": "solver.__main__.main",
+            "refusal_exit_code": REFUSED,
+            "external_clients_constructed": len(constructed),
+        },
+    }
+
+
+def test_clean_new_state_reaches_board_construction(monkeypatch, tmp_path, logged_in, boards):
+    board_constructed = stop_at_board_construction(monkeypatch)
+
+    with pytest.raises(board_constructed):
+        main(env(), run_state=tmp_path / "state", boards=boards)
+
+
+def test_a_fresh_boot_materializes_the_same_replay_as_its_successor(monkeypatch, tmp_path, logged_in, boards):
+    state = tmp_path / "state"
+    recorder = Recorder(state, run_id="gate-1", redactor=Redactor({}))
+    recorder.step_begin(
+        attempt_id="attempt-1",
+        step_index=1,
+        command_raw="printf output",
+        command_normalised="printf output",
+        tool="bash",
+    ).end(exit_code=0, output=b"output", usage=Usage(model=""))
+    del recorder
+
+    board_constructed = stop_at_board_construction(monkeypatch)
+    with pytest.raises(board_constructed):
+        main(env(), run_state=state, boards=boards)
+
+    canonical = state / "runs" / "gate-1" / "canonical"
+    projection_path = canonical / "projections" / "observation-v1.jsonl"
+    receipt_path = canonical / "verified-replay.receipt.json"
+    first_projection = projection_path.read_bytes()
+    first_receipt = receipt_path.read_bytes()
+
+    with pytest.raises(board_constructed):
+        main(env(), run_state=state, boards=boards)
+
+    assert first_projection
+    assert json.loads(first_projection)["attempt_id"] == "attempt-1"
+    assert first_projection == projection_path.read_bytes()
+    assert first_receipt == receipt_path.read_bytes()
 
 
 def test_a_board_that_fails_the_read_contract_control_refuses_the_run(capsys, monkeypatch, tmp_path, logged_in, boards):
@@ -213,12 +333,12 @@ def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_re
 
 def test_the_read_contract_is_refused_before_a_recorder_is_ever_made(monkeypatch, tmp_path, logged_in, boards):
     """A Board whose replies were not composed by CTFd is not a Run with a hole in its record — it
-    is not a Run. Nothing is written, because nothing happened."""
+    is not a Run. Verification may prove canonical state first, but no v1 Run fact is written."""
     state = tmp_path / "state"
     wired(monkeypatch, Wire(listed=[], control=CONTROL_AGREEABLE))
 
     assert main(env(), run_state=state, boards=boards) == REFUSED
-    assert not (state / "runs").exists()
+    assert not (state / "runs" / "gate-1" / "stream.jsonl").exists()
 
 
 def test_a_state_mount_that_is_not_there_refuses_rather_than_raising(capsys, monkeypatch, tmp_path, logged_in, boards):

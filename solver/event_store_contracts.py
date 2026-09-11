@@ -157,6 +157,68 @@ class ObservationRecorded:
             "event_id": self.event_id,
         }
 
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any], *, sequence: int) -> None:
+        """Refuse a stored Observation that the typed writer could not have produced."""
+
+        field_types: dict[str, tuple[type[Any], ...]] = {
+            "attempt_id": (str,),
+            "step_index": (int,),
+            "command_raw": (str,),
+            "command_normalised": (str,),
+            "tool": (str,),
+            "source": (str,),
+            "exit_code": (int, type(None)),
+            "duration_ms": (int,),
+            "checkpoint": (str, type(None)),
+            "model": (str,),
+            "tokens_in": (int,),
+            "tokens_out": (int,),
+            "cache_read": (int,),
+            "cache_write": (int,),
+            "usage_known": (bool,),
+            "ts": (str, type(None)),
+            "mono": (int, float, type(None)),
+            "blob_digest": (str,),
+            "blob_bytes": (int,),
+            "event_id": (str, type(None)),
+        }
+        missing = [field for field in field_types if field not in payload]
+        if missing:
+            raise InvalidEventError(
+                f"Observation payload is missing required fields: {', '.join(missing)}",
+                sequence=sequence,
+            )
+        integer_fields = {
+            "exit_code",
+            "step_index",
+            "duration_ms",
+            "tokens_in",
+            "tokens_out",
+            "cache_read",
+            "cache_write",
+            "blob_bytes",
+        }
+        for field, expected in field_types.items():
+            value = payload[field]
+            if not isinstance(value, expected) or (field in integer_fields | {"mono"} and isinstance(value, bool)):
+                names = " or ".join(item.__name__ for item in expected if item is not type(None))
+                raise InvalidEventError(
+                    f"Observation payload field {field!r} must be {names}",
+                    sequence=sequence,
+                )
+        digest = payload["blob_digest"]
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise InvalidEventError("Observation blob digest is not lowercase SHA-256", sequence=sequence)
+        if (
+            payload["step_index"] < 1
+            or payload["duration_ms"] < 0
+            or any(
+                payload[field] < 0 for field in ("tokens_in", "tokens_out", "cache_read", "cache_write", "blob_bytes")
+            )
+        ):
+            raise InvalidEventError("Observation payload contains a negative count", sequence=sequence)
+
 
 @dataclass(frozen=True)
 class CommittedEvent:

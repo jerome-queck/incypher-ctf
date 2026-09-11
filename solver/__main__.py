@@ -27,11 +27,13 @@ from solver import boot, profile
 from solver.board import Board
 from solver.boot import Refusal
 from solver.codex import Invocation, asking
+from solver.event_store import EventStoreDamage
 from solver.flag import Flags, Pace
 from solver.instance import Instances
 from solver.intake import Intake
 from solver.record import Recorder
 from solver.redaction import Redactor
+from solver.replay import verify_and_materialize_run_state
 from solver.run import WORK_ROOT, Ending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 
@@ -91,6 +93,12 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
     """
     held = boot.setup(environ)
     rules = profile.rules_for(held.url, boards)
+    try:
+        verify_and_materialize_run_state(run_state, held.run_id, Redactor.for_declared_secrets(environ))
+    except EventStoreDamage as damage:
+        raise Refusal(f"{boot.MARK} canonical state verification refused this Run — {damage.classification}") from None
+    except (OSError, ValueError) as unusable:
+        raise Refusal(f"{boot.MARK} {run_state} is not usable as this Run's state — {unusable}") from None
     board = Board(held.url, held.token)
     # The same Board addressed by nobody. Whether an unauthenticated read is answered is a profile
     # field, and asking it needs a second address rather than a flag — the token is applied by the
