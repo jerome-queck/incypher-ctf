@@ -37,6 +37,8 @@ from solver.codex import ADAPTER, CLAIM, COMMAND, STOPPED, Credential, Invocatio
 from solver.flag import Candidate, Flags, Outcome, Slots
 from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
+from solver.lead_contracts import CandidateProposal
+from solver.lead_v1_adapter import V1LeadTurn
 from solver.profile import Profile
 from solver.prompt import APPROACH
 from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder, generation_disposition
@@ -215,6 +217,7 @@ class Run:
         attempt_executor=None,
         board_broker_path: Path | None = None,
         board_broker_boot_id: str = "",
+        lead_adapter=None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -236,6 +239,7 @@ class Run:
         self._attempt_executor = attempt_executor
         self._board_broker_path = board_broker_path
         self._board_broker_boot_id = board_broker_boot_id
+        self._lead_adapter = lead_adapter
         self._boundaries: dict[int | str, Boundary] = {}
         self._pending: dict[int | str, Pending] = {}
         # Every candidate already put to the submission gate, per Challenge. Turns of one Attempt
@@ -459,36 +463,57 @@ class Run:
             budget_s=held.pick.budget_s,
             lease=held.lease,
         )
-        for taken in codex.run_attempt(
-            text,
-            held.workdir,
-            held.deadline,
-            recorder=self._recorder,
-            attempt_id=held.attempt_id,
-            chain=self._chain,
-            invocation=self._invocation,
-            images=held.pictures,
-            first_step=self._steps.next_index(),
-            launch=self._launch,
-            now=self._now,
-        ):
-            self._steps.reached(taken.step_index)
-            if taken.kind == COMMAND and taken.tool != ADAPTER:
-                # The **model's** Steps and never the invocation's own, which is what `Watch` asks
-                # for: a spawn is the same command line every rung, and a failure the CLI reported
-                # about itself is not the Challenge being worked. Handing those over counted them
-                # toward the step cliff, so an Attempt that never reached the model at all was
-                # closed `cut:step-cliff` — blaming the Challenge for our own broken end.
-                observed += 1
-                watch.observed(taken.command, exit_code=taken.exit_code, digest=taken.digest)
-            elif taken.kind == CLAIM:
-                said.append(taken.shown)
-                watch.said(taken.shown, now=self._now())
-            if watch.cause(self._now()):
-                # The one lever the orchestrator has over a child already running: bring the kill
-                # forward, and let the adapter end every command in flight and reap. Abandoning the
-                # iterator instead would leave a process behind holding the working directory open.
-                held.deadline.shorten(self._now())
+        if self._lead_adapter is not None:
+            outcome = self._lead_adapter(
+                V1LeadTurn(
+                    prompt=text,
+                    boundary=held.boundary,
+                    chain=self._chain,
+                    invocation=self._invocation,
+                    run_id=self._recorder.run_id,
+                    boot_id=self._board_broker_boot_id,
+                    generation_id=held.generation_id,
+                    lane_id="lane-1",
+                    attempt_id=held.attempt_id,
+                    work_id=str(challenge.challenge_id),
+                    budget_seconds=int(held.pick.budget_s),
+                    started_at=held.began,
+                    deadline=held.deadline.at,
+                )
+            )
+            if isinstance(outcome.proposal, CandidateProposal):
+                said.append(outcome.proposal.value)
+        else:
+            for taken in codex.run_attempt(
+                text,
+                held.workdir,
+                held.deadline,
+                recorder=self._recorder,
+                attempt_id=held.attempt_id,
+                chain=self._chain,
+                invocation=self._invocation,
+                images=held.pictures,
+                first_step=self._steps.next_index(),
+                launch=self._launch,
+                now=self._now,
+            ):
+                self._steps.reached(taken.step_index)
+                if taken.kind == COMMAND and taken.tool != ADAPTER:
+                    # The **model's** Steps and never the invocation's own, which is what `Watch` asks
+                    # for: a spawn is the same command line every rung, and a failure the CLI reported
+                    # about itself is not the Challenge being worked. Handing those over counted them
+                    # toward the step cliff, so an Attempt that never reached the model at all was
+                    # closed `cut:step-cliff` — blaming the Challenge for our own broken end.
+                    observed += 1
+                    watch.observed(taken.command, exit_code=taken.exit_code, digest=taken.digest)
+                elif taken.kind == CLAIM:
+                    said.append(taken.shown)
+                    watch.said(taken.shown, now=self._now())
+                if watch.cause(self._now()):
+                    # The one lever the orchestrator has over a child already running: bring the kill
+                    # forward, and let the adapter end every command in flight and reap. Abandoning the
+                    # iterator instead would leave a process behind holding the working directory open.
+                    held.deadline.shorten(self._now())
         held.turns += 1
         held.counted = watch.steps
         held.checkpoints += len(watch.checkpoints)

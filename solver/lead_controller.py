@@ -2,42 +2,48 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from solver.event_store import EventStore, GenerationAuthority
+from solver.event_store import EventStore, GenerationAuthority, InvalidEventError
 from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.lead_codec import (
     PROPOSAL_TYPES,
+    decode_proposal,
     model_output_document,
     proposal_disposition,
     proposal_document,
     proposal_kind,
     request_digest,
     request_document,
-    text,
-    turn_document,
+    result_document,
     valid_proposal,
 )
 from solver.lead_contracts import (
     MAX_APPROACH_BYTES,
-    MAX_CONTEXT_BYTES,
-    MAX_TURN_BYTES,
+    LeadBinding,
     LeadClassification,
     LeadEngagementRecorded,
+    LeadInitialContext,
     LeadModel,
     LeadOutcome,
+    LeadProposalResult,
+    LeadRecord,
     LeadRequest,
+    LeadResume,
     LeadState,
     MeasuredLeadTurn,
+    ProposalResultStatus,
     TurnMeasure,
+    validate_binding,
 )
-from solver.lead_projection import empty_state, primary_events, project_lead, transition_digest
+from solver.lead_projection import lead_events, primary_events, project_lead, transition_digest
 from solver.redaction import Redactor
-from solver.work_generation import GenerationFence
+from solver.work_generation import GenerationFence, UnknownGeneration
 
 
 class LeadController:
-    """Validate one measured model result, fence it, then append one proposal fact."""
+    """Admit exact input, invoke one model Turn, then durably record its proposal."""
 
     def __init__(
         self,
@@ -58,142 +64,193 @@ class LeadController:
 
     def handle(self, request: LeadRequest) -> LeadOutcome:
         self._validate_request(request)
-        request_fingerprint = request_digest(request)
+        fingerprint = request_digest(request)
         events = self.store.events()
+        engagement = lead_events(events, request.engagement_id)
         existing = next(
             (
                 event
-                for event in primary_events(events, request.engagement_id)
-                if event.payload["turn_index"] == request.turn_index
+                for event in engagement
+                if event.payload["record"] == LeadRecord.TURN.value
+                and event.payload["turn_index"] == request.turn_index
             ),
             None,
         )
         if existing is not None:
             state = project_lead(events, self.run_id, request.engagement_id)
-            if existing.payload["request_digest"] == request_fingerprint:
-                return LeadOutcome(LeadClassification.DUPLICATE, state, detail="turn already recorded")
-            return self._conflict(request, request_fingerprint, state)
+            if existing.payload["request_digest"] == fingerprint:
+                proposal = self._decode_recorded_proposal(existing)
+                self._write_receipt()
+                return LeadOutcome(
+                    LeadClassification.DUPLICATE,
+                    state,
+                    proposal,
+                    existing.payload["proposal_id"],
+                    "turn already recorded",
+                )
+            return self._quarantine(request, fingerprint, state, LeadClassification.CONFLICT, "turn identity reused")
 
-        prior = primary_events(events, request.engagement_id)
-        if prior:
-            state = project_lead(events, self.run_id, request.engagement_id)
-            if state.generation_id != request.generation_id:
-                return self._conflict(request, request_fingerprint, state)
-            if state.disposition is not None:
-                return LeadOutcome(LeadClassification.LATE, state, detail="Engagement is terminal")
-            if request.turn_index != state.turn_count + 1:
-                return LeadOutcome(LeadClassification.MALFORMED, state, detail="turn sequence gap")
-        elif request.turn_index != 1:
-            return LeadOutcome(
-                LeadClassification.MALFORMED,
-                empty_state(self.run_id, request),
-                detail="first turn is not one",
+        admitted = next(
+            (
+                event
+                for event in engagement
+                if event.payload["record"] == LeadRecord.ADMITTED.value
+                and event.payload["turn_index"] == request.turn_index
+            ),
+            None,
+        )
+        if admitted is not None:
+            state = self._state_or_empty(request.binding)
+            classification = (
+                LeadClassification.LATE
+                if admitted.payload["request_digest"] == fingerprint
+                else LeadClassification.CONFLICT
             )
+            return LeadOutcome(classification, state, detail="turn was admitted without a durable result")
 
-        if len(request.context.encode()) > MAX_CONTEXT_BYTES:
-            return self._record_rejection(
-                request, request_fingerprint, LeadClassification.OVERSIZED, "context exceeds bound"
+        primary = primary_events(events, request.engagement_id)
+        state = (
+            project_lead(events, self.run_id, request.engagement_id) if primary else self._empty_state(request.binding)
+        )
+        if primary and state.binding.document() != request.binding.document():
+            return self._quarantine(request, fingerprint, state, LeadClassification.CONFLICT, "binding drift")
+        if state.disposition is not None:
+            return LeadOutcome(LeadClassification.LATE, state, detail="Engagement is terminal")
+        if request.turn_index != state.turn_count + 1:
+            return LeadOutcome(LeadClassification.MALFORMED, state, detail="turn sequence gap")
+
+        invalid = self._validate_input(request, state)
+        if invalid is not None:
+            classification, detail = invalid
+            return self._quarantine(request, fingerprint, state, classification, detail)
+        admission_body = canonical_bytes({"request": request_document(request)})
+        if len(admission_body) > request.binding.max_turn_bytes:
+            return self._quarantine(
+                request, fingerprint, state, LeadClassification.OVERSIZED, "admission exceeds bound"
             )
+        admission = self._append_fenced(
+            request,
+            lambda authority_sequence: LeadEngagementRecorded(
+                event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:admitted",
+                record=LeadRecord.ADMITTED,
+                binding=request.binding,
+                authority_sequence=authority_sequence,
+                turn_index=request.turn_index,
+                classification=LeadClassification.ACCEPTED,
+                request_digest=fingerprint,
+                result_digest=self._result_digest(request),
+                context_bytes=len(request.context.encode()),
+                ts=self._timestamp(),
+            ),
+            admission_body,
+            fingerprint,
+        )
+        if not admission:
+            return LeadOutcome(LeadClassification.LATE, state, detail="generation is not current")
+
         try:
             turn = self._model(request)
         except Exception:
-            return self._record_rejection(request, request_fingerprint, LeadClassification.MALFORMED, "model failed")
-        classification, detail = self._validate_turn(turn)
+            return self._record_turn_rejection(
+                request, fingerprint, state, LeadClassification.MALFORMED, "model failed"
+            )
+        classification, detail = self._validate_turn(turn, request.binding)
         if classification is not LeadClassification.ACCEPTED:
-            return self._record_rejection(request, request_fingerprint, classification, detail)
+            return self._record_turn_rejection(request, fingerprint, state, classification, detail)
         assert isinstance(turn, MeasuredLeadTurn)
         model_output = canonical_bytes(model_output_document(turn))
-        body = canonical_bytes(turn_document(request, turn))
-        if len(body) > MAX_TURN_BYTES:
-            return self._record_rejection(
-                request, request_fingerprint, LeadClassification.OVERSIZED, "turn exceeds bound"
+        body = canonical_bytes({"request": request_document(request), "turn": model_output_document(turn)})
+        if len(body) > request.binding.max_turn_bytes:
+            return self._record_turn_rejection(
+                request, fingerprint, state, LeadClassification.OVERSIZED, "turn exceeds bound"
             )
         proposal_body = proposal_document(turn.proposal)
         proposal_fingerprint = digest_bytes(canonical_bytes(proposal_body))
+        proposal_id = f"{request.engagement_id}:proposal-{request.turn_index:06d}"
         disposition = proposal_disposition(turn.proposal)
-        previous = prior[-1].payload["transition_digest"] if prior else ""
+        result_fingerprint = self._result_digest(request)
         transition_fingerprint = transition_digest(
-            previous,
-            request_fingerprint,
+            state.transition_digest,
+            fingerprint,
             LeadClassification.ACCEPTED,
+            proposal_id,
             proposal_kind(turn.proposal),
             proposal_fingerprint,
+            result_fingerprint,
             disposition,
         )
         measure = turn.measure
         assert measure is not None
-        event = LeadEngagementRecorded(
-            event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}",
-            engagement_id=request.engagement_id,
-            generation_id=request.generation_id,
-            turn_index=request.turn_index,
-            classification=LeadClassification.ACCEPTED,
-            request_digest=request_fingerprint,
-            transition_digest=transition_fingerprint,
-            proposal_kind=proposal_kind(turn.proposal),
-            proposal_digest=proposal_fingerprint,
-            context_bytes=len(request.context.encode()),
-            output_bytes=len(model_output),
-            model=measure.model,
-            duration_ms=measure.duration_ms,
-            tokens_in=measure.tokens_in,
-            tokens_out=measure.tokens_out,
-            usage_known=measure.usage_known,
-            disposition=disposition,
-            ts=self._timestamp(),
-        )
-        decision, _ = self._fence.authorize_and_commit(
-            request.generation_id,
-            GenerationAuthority.AUTHORITY,
-            lambda: self.store.append(event, body=body),
-            evidence=canonical_bytes(
-                {
-                    "request_digest": request_fingerprint,
-                    "output_digest": digest_bytes(model_output),
-                    "output_bytes": len(model_output),
-                }
+        committed = self._append_fenced(
+            request,
+            lambda authority_sequence: LeadEngagementRecorded(
+                event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:result",
+                record=LeadRecord.TURN,
+                binding=request.binding,
+                authority_sequence=authority_sequence,
+                turn_index=request.turn_index,
+                classification=LeadClassification.ACCEPTED,
+                request_digest=fingerprint,
+                transition_digest=transition_fingerprint,
+                proposal_id=proposal_id,
+                proposal_kind=proposal_kind(turn.proposal),
+                proposal_digest=proposal_fingerprint,
+                result_digest=result_fingerprint,
+                context_bytes=len(request.context.encode()),
+                output_bytes=len(model_output),
+                model=measure.model,
+                duration_ms=measure.duration_ms,
+                tokens_in=measure.tokens_in,
+                tokens_out=measure.tokens_out,
+                usage_known=measure.usage_known,
+                disposition=disposition,
+                ts=self._timestamp(),
             ),
+            body,
+            digest_bytes(model_output),
         )
-        if not decision.accepted:
-            return LeadOutcome(
-                LeadClassification.LATE, self._state_or_empty(request), detail=decision.classification.value
-            )
+        if not committed:
+            return LeadOutcome(LeadClassification.LATE, state, detail="generation closed after admission")
         self._write_receipt()
-        state = project_lead(self.store.events(), self.run_id, request.engagement_id)
-        return LeadOutcome(LeadClassification.ACCEPTED, state, turn.proposal)
+        projected = project_lead(self.store.events(), self.run_id, request.engagement_id)
+        return LeadOutcome(LeadClassification.ACCEPTED, projected, turn.proposal, proposal_id)
 
-    def _record_rejection(
+    def _record_turn_rejection(
         self,
         request: LeadRequest,
-        request_digest: str,
+        fingerprint: str,
+        state: LeadState,
         classification: LeadClassification,
         detail: str,
     ) -> LeadOutcome:
-        prior = primary_events(self.store.events(), request.engagement_id)
-        previous = prior[-1].payload["transition_digest"] if prior else ""
-        transition_fingerprint = transition_digest(previous, request_digest, classification)
-        event = LeadEngagementRecorded(
-            event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}",
-            engagement_id=request.engagement_id,
-            generation_id=request.generation_id,
-            turn_index=request.turn_index,
-            classification=classification,
-            request_digest=request_digest,
-            transition_digest=transition_fingerprint,
-            context_bytes=len(request.context.encode()),
-            detail=detail,
-            ts=self._timestamp(),
+        result_fingerprint = self._result_digest(request)
+        transition_fingerprint = transition_digest(
+            state.transition_digest,
+            fingerprint,
+            classification,
+            result_digest=result_fingerprint,
         )
-        decision, _ = self._fence.authorize_and_commit(
-            request.generation_id,
-            GenerationAuthority.AUTHORITY,
-            lambda: self.store.append(event, body=b""),
-            evidence=canonical_bytes({"request_digest": request_digest, "classification": classification.value}),
+        committed = self._append_fenced(
+            request,
+            lambda authority_sequence: LeadEngagementRecorded(
+                event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:result",
+                record=LeadRecord.TURN,
+                binding=request.binding,
+                authority_sequence=authority_sequence,
+                turn_index=request.turn_index,
+                classification=classification,
+                request_digest=fingerprint,
+                transition_digest=transition_fingerprint,
+                result_digest=result_fingerprint,
+                context_bytes=len(request.context.encode()),
+                detail=detail,
+                ts=self._timestamp(),
+            ),
+            b"",
+            fingerprint,
         )
-        if not decision.accepted:
-            return LeadOutcome(
-                LeadClassification.LATE, self._state_or_empty(request), detail=decision.classification.value
-            )
+        if not committed:
+            return LeadOutcome(LeadClassification.LATE, state, detail="generation closed after admission")
         self._write_receipt()
         return LeadOutcome(
             classification,
@@ -201,64 +258,137 @@ class LeadController:
             detail=detail,
         )
 
-    def _conflict(self, request: LeadRequest, request_digest: str, state: LeadState) -> LeadOutcome:
+    def _quarantine(
+        self,
+        request: LeadRequest,
+        fingerprint: str,
+        state: LeadState,
+        classification: LeadClassification,
+        detail: str,
+    ) -> LeadOutcome:
         body = canonical_bytes({"request": request_document(request)})
-        if len(body) > MAX_TURN_BYTES:
-            body = canonical_bytes({"request_digest": request_digest, "context_bytes": len(request.context.encode())})
-        event = LeadEngagementRecorded(
-            event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:conflict-{request_digest[:12]}",
-            engagement_id=request.engagement_id,
-            generation_id=request.generation_id,
-            turn_index=request.turn_index,
-            classification=LeadClassification.CONFLICT,
-            request_digest=request_digest,
-            transition_digest=state.transition_digest or "0" * 64,
-            context_bytes=len(request.context.encode()),
-            output_bytes=len(body),
-            detail="turn identity reused with different input",
-            ts=self._timestamp(),
-        )
-        decision, _ = self._fence.authorize_and_commit(
-            request.generation_id,
-            GenerationAuthority.AUTHORITY,
-            lambda: self.store.append(event, body=body),
-            evidence=canonical_bytes({"request_digest": request_digest}),
-        )
-        classification = LeadClassification.CONFLICT if decision.accepted else LeadClassification.LATE
-        if decision.accepted:
+        if len(body) > request.binding.max_turn_bytes:
+            body = canonical_bytes({"request_digest": fingerprint, "context_bytes": len(request.context.encode())})
+        try:
+            committed = self._append_fenced(
+                request,
+                lambda authority_sequence: LeadEngagementRecorded(
+                    event_id=f"{request.engagement_id}:turn-{request.turn_index:06d}:quarantine-{fingerprint[:12]}",
+                    record=LeadRecord.QUARANTINED,
+                    binding=request.binding,
+                    authority_sequence=authority_sequence,
+                    turn_index=request.turn_index,
+                    classification=classification,
+                    request_digest=fingerprint,
+                    context_bytes=len(request.context.encode()),
+                    output_bytes=len(body),
+                    detail=detail,
+                    ts=self._timestamp(),
+                ),
+                body,
+                fingerprint,
+            )
+        except UnknownGeneration:
+            committed = False
+        if committed and primary_events(self.store.events(), request.engagement_id):
             self._write_receipt()
-        return LeadOutcome(classification, state, detail=event.detail)
+        return LeadOutcome(classification if committed else LeadClassification.LATE, state, detail=detail)
+
+    def _append_fenced(self, request, event_factory, body: bytes, evidence_digest: str) -> bool:
+        def commit():
+            authority_sequence = self.store.events()[-1].sequence
+            return self.store.append(event_factory(authority_sequence), body=body)
+
+        try:
+            decision, _ = self._fence.authorize_and_commit(
+                request.generation_id,
+                GenerationAuthority.AUTHORITY,
+                commit,
+                evidence=canonical_bytes({"lead_evidence_digest": evidence_digest}),
+            )
+        except UnknownGeneration:
+            return False
+        return decision.accepted
 
     def _write_receipt(self) -> None:
         from solver.lead_receipt import write_receipt
 
         write_receipt(self._state, self.run_id)
 
-    def _state_or_empty(self, request: LeadRequest) -> LeadState:
-        events = primary_events(self.store.events(), request.engagement_id)
+    def _state_or_empty(self, binding: LeadBinding) -> LeadState:
         return (
-            project_lead(self.store.events(), self.run_id, request.engagement_id)
-            if events
-            else empty_state(self.run_id, request)
+            project_lead(self.store.events(), self.run_id, binding.engagement_id)
+            if primary_events(self.store.events(), binding.engagement_id)
+            else self._empty_state(binding)
         )
+
+    def _empty_state(self, binding: LeadBinding) -> LeadState:
+        return LeadState(self.run_id, binding, 0, None, "", "", "", ())
+
+    @staticmethod
+    def _decode_recorded_proposal(event):
+        if event.payload["classification"] != LeadClassification.ACCEPTED.value:
+            return None
+        try:
+            return decode_proposal(json.loads(event.body)["turn"]["proposal"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise InvalidEventError("accepted Lead Turn body cannot be decoded", sequence=event.sequence) from error
+
+    @staticmethod
+    def _result_digest(request: LeadRequest) -> str:
+        if not isinstance(request.input, LeadResume) or request.input.result is None:
+            return ""
+        return digest_bytes(canonical_bytes(result_document(request.input.result)))
 
     @staticmethod
     def _validate_request(request: LeadRequest) -> None:
         if not isinstance(request, LeadRequest):
             raise TypeError("Lead request has the wrong type")
-        if (
-            not text(request.engagement_id)
-            or not text(request.generation_id)
-            or not isinstance(request.turn_index, int)
-            or isinstance(request.turn_index, bool)
-            or request.turn_index < 1
-        ):
-            raise ValueError("Lead request identity is incomplete")
-        if not isinstance(request.context, str):
-            raise TypeError("Lead context must be text")
+        validate_binding(request.binding)
+        if not isinstance(request.turn_index, int) or isinstance(request.turn_index, bool) or request.turn_index < 1:
+            raise ValueError("Lead turn identity is incomplete")
+        if not isinstance(request.input, (LeadInitialContext, LeadResume)) or not isinstance(request.context, str):
+            raise TypeError("Lead input has the wrong type")
 
     @staticmethod
-    def _validate_turn(turn: object) -> tuple[LeadClassification, str]:
+    def _validate_input(request: LeadRequest, state: LeadState):
+        encoded = request.context.encode()
+        if request.turn_index == 1 and not isinstance(request.input, LeadInitialContext):
+            return LeadClassification.MALFORMED, "first turn requires initial context"
+        if request.turn_index > 1 and not isinstance(request.input, LeadResume):
+            return LeadClassification.MALFORMED, "continuation requires a resume delta"
+        limit = (
+            request.binding.max_context_bytes
+            if isinstance(request.input, LeadInitialContext)
+            else request.binding.max_resume_delta_bytes
+        )
+        if len(encoded) > limit:
+            return LeadClassification.OVERSIZED, "Lead input exceeds its admitted bound"
+        result = request.input.result if isinstance(request.input, LeadResume) else None
+        if state.outstanding_proposal_id:
+            if result is None:
+                return LeadClassification.MALFORMED, "outstanding proposal has no result"
+            if result.proposal_id != state.outstanding_proposal_id:
+                return LeadClassification.CONFLICT, "proposal result identity mismatch"
+        elif result is not None:
+            return LeadClassification.CONFLICT, "unexpected proposal result"
+        if result is not None and not LeadController._valid_result(result):
+            return LeadClassification.MALFORMED, "proposal result is invalid"
+        return None
+
+    @staticmethod
+    def _valid_result(result: LeadProposalResult) -> bool:
+        return (
+            isinstance(result.proposal_id, str)
+            and bool(result.proposal_id)
+            and isinstance(result.status, ProposalResultStatus)
+            and isinstance(result.evidence_refs, tuple)
+            and all(isinstance(item, str) and item for item in result.evidence_refs)
+            and isinstance(result.detail, str)
+        )
+
+    @staticmethod
+    def _validate_turn(turn: object, binding: LeadBinding) -> tuple[LeadClassification, str]:
         if not isinstance(turn, MeasuredLeadTurn) or not isinstance(turn.proposal, PROPOSAL_TYPES):
             return LeadClassification.MALFORMED, "model output does not match the Lead contract"
         if turn.measure is None or not isinstance(turn.measure, TurnMeasure):
@@ -266,24 +396,22 @@ class LeadController:
         measure = turn.measure
         if (
             not isinstance(measure.model, str)
-            or not measure.model
+            or measure.model != binding.effective_model
             or any(
                 not isinstance(value, int) or isinstance(value, bool)
                 for value in (measure.duration_ms, measure.tokens_in, measure.tokens_out)
             )
             or not isinstance(measure.usage_known, bool)
+            or min(measure.duration_ms, measure.tokens_in, measure.tokens_out) < 0
         ):
-            return LeadClassification.UNMEASURED, "turn measure is invalid"
-        if min(measure.duration_ms, measure.tokens_in, measure.tokens_out) < 0:
-            return LeadClassification.UNMEASURED, "turn measure is invalid"
+            return LeadClassification.UNMEASURED, "turn measure is invalid or model drifted"
         if not isinstance(turn.approach, str):
             return LeadClassification.MALFORMED, "approach is not text"
         if not turn.approach or len(turn.approach.encode()) > MAX_APPROACH_BYTES:
             return LeadClassification.OVERSIZED, "approach is empty or exceeds bound"
         if not valid_proposal(turn.proposal):
             return LeadClassification.MALFORMED, "proposal contains invalid values"
-        document = proposal_document(turn.proposal)
-        if len(canonical_bytes(document)) > MAX_TURN_BYTES:
+        if len(canonical_bytes(proposal_document(turn.proposal))) > binding.max_turn_bytes:
             return LeadClassification.OVERSIZED, "proposal exceeds bound"
         return LeadClassification.ACCEPTED, ""
 

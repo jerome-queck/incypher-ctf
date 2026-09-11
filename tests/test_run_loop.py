@@ -245,6 +245,7 @@ def solver(
     work_root=None,
     board_broker_path=None,
     board_broker_boot_id="",
+    lead_adapter=None,
 ):
     """Everything `solver/__main__.py` composes, with the clock and the child under the test's hand.
 
@@ -290,6 +291,7 @@ def solver(
         sleep=lambda seconds: clock.tick(seconds),
         board_broker_path=board_broker_path,
         board_broker_boot_id=board_broker_boot_id,
+        lead_adapter=lead_adapter,
     )
     return run, recorder
 

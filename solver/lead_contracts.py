@@ -1,19 +1,25 @@
-"""Typed values crossing the Solve Lead's narrow model boundary."""
+"""Typed values and durable facts at the Solve Lead boundary."""
 
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Protocol, TypeAlias
 
 from solver.event_store_contracts import EMPTY_BLOB_DIGEST, InvalidEventError
-
 
 LEAD_ENGAGEMENT_RECORDED = "lead-engagement.recorded"
 MAX_CONTEXT_BYTES = 16 * 1024
 MAX_APPROACH_BYTES = 200
 MAX_TURN_BYTES = 16 * 1024
+MAX_RESUME_DELTA_BYTES = 8 * 1024
 ROLE = "solve-lead"
+
+
+class LeadRecord(str, enum.Enum):
+    ADMITTED = "admitted"
+    TURN = "turn"
+    QUARANTINED = "quarantined"
 
 
 class LeadClassification(str, enum.Enum):
@@ -24,6 +30,51 @@ class LeadClassification(str, enum.Enum):
     OVERSIZED = "oversized"
     LATE = "late"
     UNMEASURED = "unmeasured"
+
+
+class ProposalResultStatus(str, enum.Enum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class LeadBinding:
+    """Controller-authored facts immutable for one Engagement."""
+
+    run_id: str
+    boot_id: str
+    generation_id: str
+    lane_id: str
+    attempt_id: str
+    work_id: str
+    engagement_id: str
+    owner_id: str
+    parent_engagement_id: str
+    context_digest: str
+    evidence_digest: str
+    prompt_bundle_digest: str
+    playbook_digest: str
+    tool_schema_digest: str
+    capability_digest: str
+    harness: str
+    requested_route: str
+    requested_model: str
+    selected_model: str
+    effective_model: str
+    requested_effort: str
+    effective_effort: str
+    catalog_digest: str
+    admitted_budget: int
+    deadline: str
+    started_at: str
+    role: str = ROLE
+    max_context_bytes: int = MAX_CONTEXT_BYTES
+    max_turn_bytes: int = MAX_TURN_BYTES
+    max_resume_delta_bytes: int = MAX_RESUME_DELTA_BYTES
+
+    def document(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -76,15 +127,37 @@ LeadProposal: TypeAlias = (
     | StopProposal
 )
 PROPOSAL_CONTRACTS = {
-    BoardProposal: ("board", ""),
-    TargetProposal: ("target", ""),
-    ResearchProposal: ("research", ""),
-    ToolProposal: ("tool", ""),
-    CandidateProposal: ("candidate", "candidate"),
-    ProgressProposal: ("progress", ""),
-    StopProposal: ("stop", "stop"),
+    BoardProposal: ("board", "", True),
+    TargetProposal: ("target", "", True),
+    ResearchProposal: ("research", "", True),
+    ToolProposal: ("tool", "", True),
+    CandidateProposal: ("candidate", "candidate", False),
+    ProgressProposal: ("progress", "", False),
+    StopProposal: ("stop", "stop", False),
 }
-PROPOSAL_KINDS = frozenset(kind for kind, _ in PROPOSAL_CONTRACTS.values())
+PROPOSAL_KINDS = frozenset(kind for kind, _, _ in PROPOSAL_CONTRACTS.values())
+
+
+@dataclass(frozen=True)
+class LeadProposalResult:
+    proposal_id: str
+    status: ProposalResultStatus
+    evidence_refs: tuple[str, ...] = ()
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class LeadInitialContext:
+    context: str
+
+
+@dataclass(frozen=True)
+class LeadResume:
+    delta: str
+    result: LeadProposalResult | None = None
+
+
+LeadInput: TypeAlias = LeadInitialContext | LeadResume
 
 
 @dataclass(frozen=True)
@@ -105,10 +178,21 @@ class MeasuredLeadTurn:
 
 @dataclass(frozen=True)
 class LeadRequest:
-    engagement_id: str
-    generation_id: str
+    binding: LeadBinding
     turn_index: int
-    context: str
+    input: LeadInput
+
+    @property
+    def engagement_id(self) -> str:
+        return self.binding.engagement_id
+
+    @property
+    def generation_id(self) -> str:
+        return self.binding.generation_id
+
+    @property
+    def context(self) -> str:
+        return self.input.context if isinstance(self.input, LeadInitialContext) else self.input.delta
 
 
 class LeadModel(Protocol):
@@ -121,24 +205,38 @@ class LeadTransition:
     event_id: str
     turn_index: int
     classification: LeadClassification
+    proposal_id: str
     proposal_kind: str
     proposal_digest: str
     context_bytes: int
     output_bytes: int
     measure: TurnMeasure
+    result: LeadProposalResult | None
     transition_digest: str
 
 
 @dataclass(frozen=True)
 class LeadState:
     run_id: str
-    engagement_id: str
-    generation_id: str
-    role: str
+    binding: LeadBinding
     turn_count: int
     disposition: str | None
+    outstanding_proposal_id: str
+    outstanding_proposal_kind: str
     transition_digest: str
     transitions: tuple[LeadTransition, ...]
+
+    @property
+    def engagement_id(self) -> str:
+        return self.binding.engagement_id
+
+    @property
+    def generation_id(self) -> str:
+        return self.binding.generation_id
+
+    @property
+    def role(self) -> str:
+        return self.binding.role
 
 
 @dataclass(frozen=True)
@@ -146,20 +244,24 @@ class LeadOutcome:
     classification: LeadClassification
     state: LeadState
     proposal: LeadProposal | None = None
+    proposal_id: str = ""
     detail: str = ""
 
 
 @dataclass(frozen=True)
 class LeadEngagementRecorded:
     event_id: str
-    engagement_id: str
-    generation_id: str
+    record: LeadRecord
+    binding: LeadBinding
+    authority_sequence: int
     turn_index: int
     classification: LeadClassification
     request_digest: str
-    transition_digest: str
+    transition_digest: str = ""
+    proposal_id: str = ""
     proposal_kind: str = ""
     proposal_digest: str = ""
+    result_digest: str = ""
     context_bytes: int = 0
     output_bytes: int = 0
     model: str = ""
@@ -188,15 +290,17 @@ class LeadEngagementRecorded:
     def payload(self, *, blob_digest: str, blob_bytes: int) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
-            "engagement_id": self.engagement_id,
-            "generation_id": self.generation_id,
+            "record": self.record.value,
+            "binding": self.binding.document(),
+            "authority_sequence": self.authority_sequence,
             "turn_index": self.turn_index,
-            "role": ROLE,
             "classification": self.classification.value,
             "request_digest": self.request_digest,
             "transition_digest": self.transition_digest,
+            "proposal_id": self.proposal_id,
             "proposal_kind": self.proposal_kind,
             "proposal_digest": self.proposal_digest,
+            "result_digest": self.result_digest,
             "context_bytes": self.context_bytes,
             "output_bytes": self.output_bytes,
             "model": self.model,
@@ -215,14 +319,14 @@ class LeadEngagementRecorded:
     def validate_payload(cls, payload: Mapping[str, Any], *, sequence: int) -> None:
         strings = (
             "event_id",
-            "engagement_id",
-            "generation_id",
-            "role",
+            "record",
             "classification",
             "request_digest",
             "transition_digest",
+            "proposal_id",
             "proposal_kind",
             "proposal_digest",
+            "result_digest",
             "model",
             "disposition",
             "detail",
@@ -230,6 +334,7 @@ class LeadEngagementRecorded:
             "blob_digest",
         )
         integers = (
+            "authority_sequence",
             "turn_index",
             "context_bytes",
             "output_bytes",
@@ -238,83 +343,137 @@ class LeadEngagementRecorded:
             "tokens_out",
             "blob_bytes",
         )
-        missing = [field for field in (*strings, *integers, "usage_known") if field not in payload]
+        missing = [field for field in (*strings, *integers, "usage_known", "binding") if field not in payload]
         if missing:
             raise InvalidEventError(f"Lead payload is missing required fields: {', '.join(missing)}", sequence=sequence)
         if any(not isinstance(payload[field], str) for field in strings):
             raise InvalidEventError("Lead payload has a non-string field", sequence=sequence)
         if any(not isinstance(payload[field], int) or isinstance(payload[field], bool) for field in integers):
             raise InvalidEventError("Lead payload has a non-integer count", sequence=sequence)
-        if not isinstance(payload["usage_known"], bool):
-            raise InvalidEventError("Lead payload usage_known is not boolean", sequence=sequence)
-        if not all(payload[field] for field in ("event_id", "engagement_id", "generation_id", "request_digest")):
+        if not isinstance(payload["usage_known"], bool) or not isinstance(payload["binding"], Mapping):
+            raise InvalidEventError("Lead payload has an invalid structured field", sequence=sequence)
+        try:
+            binding = LeadBinding(**payload["binding"])
+        except (TypeError, ValueError) as error:
+            raise InvalidEventError("Lead binding is invalid", sequence=sequence) from error
+        validate_binding(binding, sequence)
+        if payload["record"] not in {item.value for item in LeadRecord}:
+            raise InvalidEventError("Lead record is unsupported", sequence=sequence)
+        if payload["classification"] not in {item.value for item in LeadClassification}:
+            raise InvalidEventError("Lead classification is unsupported", sequence=sequence)
+        if not payload["event_id"] or payload["turn_index"] < 1 or payload["authority_sequence"] < 1:
             raise InvalidEventError("Lead identity is incomplete", sequence=sequence)
-        if payload["role"] != ROLE or payload["classification"] not in {item.value for item in LeadClassification}:
-            raise InvalidEventError("Lead role or classification is unsupported", sequence=sequence)
-        if payload["classification"] in {LeadClassification.DUPLICATE.value, LeadClassification.LATE.value}:
-            raise InvalidEventError("Lead outcome-only classification was stored", sequence=sequence)
-        if payload["turn_index"] < 1 or any(payload[field] < 0 for field in integers[1:]):
+        if any(payload[field] < 0 for field in integers[2:]):
             raise InvalidEventError("Lead payload contains an invalid count", sequence=sequence)
-        for field in ("request_digest", "transition_digest", "blob_digest"):
-            digest = payload[field]
-            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-                raise InvalidEventError(f"Lead {field} is not lowercase SHA-256", sequence=sequence)
-        if payload["proposal_digest"]:
-            digest = payload["proposal_digest"]
-            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-                raise InvalidEventError("Lead proposal digest is not lowercase SHA-256", sequence=sequence)
-        accepted = payload["classification"] == LeadClassification.ACCEPTED.value
-        if accepted != bool(payload["proposal_kind"] and payload["proposal_digest"]):
-            raise InvalidEventError("Lead accepted proposal fields disagree", sequence=sequence)
+        for field in ("request_digest", "blob_digest"):
+            require_digest(payload[field], field, sequence)
+        for field in ("transition_digest", "proposal_digest", "result_digest"):
+            if payload[field]:
+                require_digest(payload[field], field, sequence)
         if payload["proposal_kind"] and payload["proposal_kind"] not in PROPOSAL_KINDS:
             raise InvalidEventError("Lead proposal kind is unsupported", sequence=sequence)
         if payload["disposition"] not in {"", "candidate", "stop"}:
             raise InvalidEventError("Lead disposition is unsupported", sequence=sequence)
-        expected_disposition = payload["proposal_kind"] if payload["proposal_kind"] in {"candidate", "stop"} else ""
-        if payload["disposition"] != expected_disposition:
-            raise InvalidEventError("Lead proposal and disposition disagree", sequence=sequence)
-        if accepted and (
-            not payload["model"]
-            or payload["context_bytes"] > MAX_CONTEXT_BYTES
-            or not 0 < payload["output_bytes"] <= MAX_TURN_BYTES
-            or not 0 < payload["blob_bytes"] <= MAX_TURN_BYTES
-        ):
-            raise InvalidEventError("Lead accepted turn exceeds its measured bounds", sequence=sequence)
-        if (
-            not accepted
-            and payload["blob_bytes"] != 0
-            and payload["classification"] != LeadClassification.CONFLICT.value
-        ):
-            raise InvalidEventError("Lead rejected outcome carries an unbounded body", sequence=sequence)
-        if payload["classification"] == LeadClassification.CONFLICT.value and not (
-            0 < payload["blob_bytes"] <= MAX_TURN_BYTES
-        ):
-            raise InvalidEventError("Lead conflict quarantine exceeds its bound", sequence=sequence)
+        record = LeadRecord(payload["record"])
+        if record is LeadRecord.ADMITTED:
+            if payload["classification"] != LeadClassification.ACCEPTED.value:
+                raise InvalidEventError("Lead admission is not accepted", sequence=sequence)
+            if payload["proposal_id"] or payload["proposal_digest"] or payload["transition_digest"]:
+                raise InvalidEventError("Lead admission carries an output", sequence=sequence)
+            if not 0 < payload["blob_bytes"] <= binding.max_turn_bytes:
+                raise InvalidEventError("Lead admission body exceeds its bound", sequence=sequence)
+        elif record is LeadRecord.TURN:
+            accepted = payload["classification"] == LeadClassification.ACCEPTED.value
+            if accepted != bool(payload["proposal_id"] and payload["proposal_kind"] and payload["proposal_digest"]):
+                raise InvalidEventError("Lead accepted proposal fields disagree", sequence=sequence)
+            if not payload["transition_digest"]:
+                raise InvalidEventError("Lead turn has no transition digest", sequence=sequence)
+            if accepted and (not payload["model"] or not 0 < payload["blob_bytes"] <= binding.max_turn_bytes):
+                raise InvalidEventError("Lead accepted turn exceeds its bound", sequence=sequence)
+            if not accepted and payload["blob_bytes"]:
+                raise InvalidEventError("Lead rejected turn carries a body", sequence=sequence)
+        elif not 0 < payload["blob_bytes"] <= binding.max_turn_bytes:
+            raise InvalidEventError("Lead quarantine exceeds its bound", sequence=sequence)
         if payload["blob_bytes"] == 0 and payload["blob_digest"] != EMPTY_BLOB_DIGEST:
             raise InvalidEventError("Lead empty body digest disagrees", sequence=sequence)
+
+
+def require_digest(value: str, field: str, sequence: int = 0) -> None:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise InvalidEventError(f"Lead {field} is not lowercase SHA-256", sequence=sequence or None)
+
+
+def validate_binding(binding: LeadBinding, sequence: int = 0) -> None:
+    required = (
+        binding.run_id,
+        binding.boot_id,
+        binding.generation_id,
+        binding.lane_id,
+        binding.attempt_id,
+        binding.work_id,
+        binding.engagement_id,
+        binding.owner_id,
+        binding.harness,
+        binding.requested_route,
+        binding.requested_model,
+        binding.selected_model,
+        binding.effective_model,
+        binding.requested_effort,
+        binding.effective_effort,
+        binding.deadline,
+        binding.started_at,
+    )
+    if not all(isinstance(value, str) and value for value in required) or binding.role != ROLE:
+        raise InvalidEventError("Lead binding identity is incomplete", sequence=sequence or None)
+    for field in (
+        "context_digest",
+        "evidence_digest",
+        "prompt_bundle_digest",
+        "playbook_digest",
+        "tool_schema_digest",
+        "capability_digest",
+        "catalog_digest",
+    ):
+        require_digest(getattr(binding, field), field, sequence)
+    for value in (
+        binding.admitted_budget,
+        binding.max_context_bytes,
+        binding.max_turn_bytes,
+        binding.max_resume_delta_bytes,
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise InvalidEventError("Lead binding has an invalid bound", sequence=sequence or None)
 
 
 __all__ = [
     "BoardProposal",
     "CandidateProposal",
+    "LeadBinding",
     "LeadClassification",
     "LeadEngagementRecorded",
+    "LeadInitialContext",
     "LeadModel",
     "LeadOutcome",
     "LeadProposal",
+    "LeadProposalResult",
+    "LeadRecord",
     "LeadRequest",
+    "LeadResume",
     "LeadState",
     "LeadTransition",
     "MAX_APPROACH_BYTES",
     "MAX_CONTEXT_BYTES",
+    "MAX_RESUME_DELTA_BYTES",
     "MAX_TURN_BYTES",
     "MeasuredLeadTurn",
     "ProgressProposal",
     "PROPOSAL_CONTRACTS",
     "PROPOSAL_KINDS",
+    "ProposalResultStatus",
     "ResearchProposal",
     "StopProposal",
     "TargetProposal",
     "ToolProposal",
     "TurnMeasure",
+    "validate_binding",
 ]

@@ -6,11 +6,16 @@ from solver.event_store import EventStore, GenerationAuthority, GenerationDispos
 from solver.lead_contracts import (
     BoardProposal,
     CandidateProposal,
+    LeadBinding,
     LeadClassification,
+    LeadInitialContext,
+    LeadProposalResult,
     LeadRequest,
+    LeadResume,
     MAX_CONTEXT_BYTES,
     MeasuredLeadTurn,
     ProgressProposal,
+    ProposalResultStatus,
     ResearchProposal,
     StopProposal,
     TargetProposal,
@@ -50,6 +55,54 @@ def measured(approach, proposal):
     )
 
 
+def binding(generation_id, *, engagement_id="engagement-1"):
+    return LeadBinding(
+        run_id="run-1",
+        boot_id="boot-000001",
+        generation_id=generation_id,
+        lane_id="lane-1",
+        attempt_id="attempt-1",
+        work_id="challenge-1",
+        engagement_id=engagement_id,
+        owner_id="run-controller",
+        parent_engagement_id="",
+        context_digest="1" * 64,
+        evidence_digest="2" * 64,
+        prompt_bundle_digest="3" * 64,
+        playbook_digest="4" * 64,
+        tool_schema_digest="5" * 64,
+        capability_digest="6" * 64,
+        harness="native-codex",
+        requested_route="subscription",
+        requested_model="fake-model",
+        selected_model="fake-model",
+        effective_model="fake-model",
+        requested_effort="high",
+        effective_effort="high",
+        catalog_digest="7" * 64,
+        admitted_budget=900,
+        deadline="2026-09-12T00:15:00Z",
+        started_at="2026-09-12T00:00:00Z",
+    )
+
+
+def initial(generation_id, context, *, engagement_id="engagement-1"):
+    return LeadRequest(binding(generation_id, engagement_id=engagement_id), 1, LeadInitialContext(context))
+
+
+def resume(generation_id, turn_index, delta, proposal_id="", *, engagement_id="engagement-1"):
+    result = (
+        LeadProposalResult(proposal_id, ProposalResultStatus.SUCCEEDED, (f"observation-{turn_index}",))
+        if proposal_id
+        else None
+    )
+    return LeadRequest(
+        binding(generation_id, engagement_id=engagement_id),
+        turn_index,
+        LeadResume(delta, result),
+    )
+
+
 def test_fake_model_completes_one_lead_engagement_and_replays_the_same_state(tmp_path):
     redactor = Redactor({})
     fence = GenerationFence(tmp_path, "run-1", redactor, clock)
@@ -67,20 +120,10 @@ def test_fake_model_completes_one_lead_engagement_and_replays_the_same_state(tmp
         fence=fence,
     )
 
-    outcomes = tuple(
-        controller.handle(
-            LeadRequest(
-                engagement_id="engagement-1",
-                generation_id=generation.generation_id,
-                turn_index=index,
-                context=context,
-            )
-        )
-        for index, context in enumerate(
-            ("Observed an open service", "Observed nmap output", "Observed candidate derivation"),
-            start=1,
-        )
-    )
+    first = controller.handle(initial(generation.generation_id, "Observed an open service"))
+    second = controller.handle(resume(generation.generation_id, 2, "Observed nmap output", first.proposal_id))
+    third = controller.handle(resume(generation.generation_id, 3, "Observed candidate derivation"))
+    outcomes = (first, second, third)
 
     assert [outcome.classification for outcome in outcomes] == [LeadClassification.ACCEPTED] * 3
     assert isinstance(outcomes[0].proposal, ToolProposal)
@@ -93,8 +136,8 @@ def test_fake_model_completes_one_lead_engagement_and_replays_the_same_state(tmp
         event.payload["authority"]
         for event in events
         if event.event_type == "work-generation.recorded" and event.payload["record"] == "authority"
-    ] == [GenerationAuthority.AUTHORITY.value] * 3
-    assert project_lead(events, "run-1") == outcomes[2].state
+    ] == [GenerationAuthority.AUTHORITY.value] * 6
+    assert project_lead(events, "run-1", "engagement-1") == outcomes[2].state
     assert (tmp_path / "runs" / "run-1" / "canonical" / "lead-engagement.receipt.json").is_file()
 
 
@@ -104,12 +147,12 @@ def test_duplicate_is_bounded_and_changed_reuse_is_quarantined(tmp_path):
     generation = fence.acquire("challenge-1", "attempt-1")
     model = ScriptedModel(measured("inspect", ToolProposal("strings", ("artifact-1",))))
     controller = LeadController(tmp_path, "run-1", redactor, clock, model, fence=fence)
-    request = LeadRequest("engagement-1", generation.generation_id, 1, "observed bytes")
+    request = initial(generation.generation_id, "observed bytes")
 
     accepted = controller.handle(request)
     before = len(EventStore(tmp_path, run_id="run-1").events())
     duplicate = controller.handle(request)
-    conflict = controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, "changed bytes"))
+    conflict = controller.handle(initial(generation.generation_id, "changed bytes"))
     events = EventStore(tmp_path, run_id="run-1").events()
 
     assert accepted.classification is LeadClassification.ACCEPTED
@@ -119,13 +162,10 @@ def test_duplicate_is_bounded_and_changed_reuse_is_quarantined(tmp_path):
     assert len(events) == before + 2
     quarantined = events[-1]
     assert quarantined.payload["classification"] == "conflict-quarantined"
-    assert (
-        quarantined.body
-        == b'{"request":{"context":"changed bytes","engagement_id":"engagement-1","generation_id":"generation-000001","turn_index":1}}'
-    )
-    assert project_lead(events, "run-1") == accepted.state
+    assert json.loads(quarantined.body)["request"]["input"] == {"context": "changed bytes", "kind": "initial"}
+    assert project_lead(events, "run-1", "engagement-1") == accepted.state
     receipt = json.loads((tmp_path / "runs" / "run-1" / "canonical" / "lead-engagement.receipt.json").read_text())
-    assert receipt["quarantined_conflicts"][0]["evidence_digest"] == quarantined.blob_digest
+    assert receipt["engagements"][0]["quarantined_inputs"][0]["evidence_digest"] == quarantined.blob_digest
 
 
 @pytest.mark.parametrize(
@@ -155,19 +195,23 @@ def test_invalid_model_turns_are_explicit_and_cannot_emit_a_proposal(tmp_path, m
     generation = fence.acquire("challenge-1", "attempt-1")
     controller = LeadController(tmp_path, "run-1", redactor, clock, ScriptedModel(model_output), fence=fence)
 
-    outcome = controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, context))
+    outcome = controller.handle(initial(generation.generation_id, context))
 
     assert outcome.classification is expected
     assert outcome.proposal is None
-    assert outcome.state.turn_count == 1
+    assert outcome.state.turn_count == (0 if len(context.encode()) > MAX_CONTEXT_BYTES else 1)
     assert outcome.state.disposition is None
     lead_event = next(
         event
         for event in EventStore(tmp_path, run_id="run-1").events()
-        if event.event_type == "lead-engagement.recorded"
+        if event.event_type == "lead-engagement.recorded" and event.payload["record"] != "admitted"
     )
     assert lead_event.payload["classification"] == expected.value
-    assert lead_event.body == b""
+    if outcome.state.turn_count:
+        assert lead_event.body == b""
+    else:
+        assert lead_event.body
+    assert lead_event.blob_bytes <= binding(generation.generation_id).max_turn_bytes
 
 
 def test_closed_generation_classifies_late_output_without_a_lead_transition(tmp_path):
@@ -178,7 +222,7 @@ def test_closed_generation_classifies_late_output_without_a_lead_transition(tmp_
     model = ScriptedModel(measured("inspect", ToolProposal("strings")))
     controller = LeadController(tmp_path, "run-1", redactor, clock, model, fence=fence)
 
-    outcome = controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, "late observation"))
+    outcome = controller.handle(initial(generation.generation_id, "late observation"))
 
     assert outcome.classification is LeadClassification.LATE
     assert outcome.state.turn_count == 0
@@ -199,13 +243,13 @@ def test_model_output_arriving_after_generation_close_is_bounded_late_evidence(t
 
     controller = LeadController(tmp_path, "run-1", redactor, clock, late_model, fence=fence)
 
-    outcome = controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, "observed"))
+    outcome = controller.handle(initial(generation.generation_id, "observed"))
 
     assert outcome.classification is LeadClassification.LATE
     late = EventStore(tmp_path, run_id="run-1").events()[-1]
     assert late.payload["record"] == "late-event"
     evidence = json.loads(late.body)
-    assert set(evidence) == {"output_bytes", "output_digest", "request_digest"}
+    assert set(evidence) == {"lead_evidence_digest"}
     assert "flag{late}" not in late.body.decode()
 
 
@@ -221,15 +265,15 @@ def test_replay_refuses_a_lead_transition_without_its_generation_fence(tmp_path)
         ScriptedModel(measured("inspect", ToolProposal("strings"))),
         fence=fence,
     )
-    controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, "observed"))
+    controller.handle(initial(generation.generation_id, "observed"))
     unfenced = [
         event
         for event in EventStore(tmp_path, run_id="run-1").events()
         if not (event.event_type == "work-generation.recorded" and event.payload["record"] == "authority")
     ]
 
-    with pytest.raises(InvalidEventError, match="generation fence"):
-        project_lead(unfenced, "run-1")
+    with pytest.raises(InvalidEventError, match="generation authority"):
+        project_lead(unfenced, "run-1", "engagement-1")
 
 
 @pytest.mark.parametrize(
@@ -254,7 +298,7 @@ def test_every_lead_port_is_a_typed_proposal_without_effect_authority(tmp_path, 
         fence=fence,
     )
 
-    outcome = controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, "observed"))
+    outcome = controller.handle(initial(generation.generation_id, "observed"))
 
     assert outcome.classification is LeadClassification.ACCEPTED
     assert outcome.proposal == proposal
@@ -271,7 +315,7 @@ def test_unknown_vendor_usage_is_recorded_not_mistaken_for_an_unmeasured_turn(tm
     )
     controller = LeadController(tmp_path, "run-1", redactor, clock, ScriptedModel(turn), fence=fence)
 
-    outcome = controller.handle(LeadRequest("engagement-1", generation.generation_id, 1, "observed"))
+    outcome = controller.handle(initial(generation.generation_id, "observed"))
 
     assert outcome.classification is LeadClassification.ACCEPTED
     assert outcome.state.transitions[0].measure.usage_known is False
