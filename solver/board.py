@@ -610,3 +610,6 @@ def _over_the_network(fetch_bytes: int = MAX_FETCH_BYTES) -> Transport:
             return error.code, error.read(), error.headers.get("Location", "")
 
     return fetch
+
+
+network_transport = _over_the_network

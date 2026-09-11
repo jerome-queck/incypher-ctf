@@ -34,7 +34,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from solver.board import ABSENT, ANSWERED, DENIED, LOCKED, REFUSED, Board, Mana, Reply
+from solver.board import ABSENT, ANSWERED, DENIED, LOCKED, REFUSED, UNREACHABLE, Board, Mana, Reply
+from solver.board_broker import BoardBrokerClient
+from solver.board_broker_contracts import BoardOutcome
 from solver.record import NO_MODEL, Recorder
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
@@ -273,7 +275,13 @@ class Instances:
         # Steps at the same address.
         self._step_numbers = step_numbers or itertools.count(1).__next__
 
-    def deploy(self, terms: Terms, *, attempt_id: str) -> Answer:
+    def deploy(
+        self,
+        terms: Terms,
+        *,
+        attempt_id: str,
+        recovery_reader: BoardBrokerClient | None = None,
+    ) -> Answer:
         """Take a Lease on this Challenge, at the start of the Attempt that will work it.
 
         Never at Triage: Triage reads the manifest and spends no mana and starts no clock. A
@@ -290,7 +298,7 @@ class Instances:
         if reply.outcome == ANSWERED and reply.connection_info:
             return self._leased("deploy", terms, reply, attempt_id)
         if reply.outcome in (ANSWERED, DENIED):
-            return self._recover(terms, reply, attempt_id)
+            return self._recover(terms, reply, attempt_id, recovery_reader)
         if reply.outcome == LOCKED:
             return self._answer("deploy", f"{DEPLOY_COLLISION} — {reply.detail}", attempt_id, shape=DEPLOY_COLLISION)
         if reply.outcome == REFUSED:
@@ -411,11 +419,17 @@ class Instances:
             self._record("sweep", told, attempt_id, ok=not left_behind),
         )
 
-    def _recover(self, terms: Terms, reply: Reply, attempt_id: str) -> Answer:
+    def _recover(
+        self,
+        terms: Terms,
+        reply: Reply,
+        attempt_id: str,
+        recovery_reader: BoardBrokerClient | None,
+    ) -> Answer:
         """Trap 1 — a POST for a Challenge that already has an Instance answers **HTTP 200** with
         `success: false` and no `connectionInfo`. The status is not evidence a deploy happened, and
         the recovery is a read: what we are holding is the ledger's question, not the POST's."""
-        standing = self._board.read_instance(terms.challenge_id)
+        standing = self._brokered_read(recovery_reader, terms.challenge_id)
         if standing.outcome == ANSWERED and standing.connection_info:
             return self._leased("deploy", terms, standing, attempt_id, shape=DEPLOY_ALREADY_HELD)
         return self._answer(
@@ -425,6 +439,14 @@ class Instances:
             attempt_id,
             shape=DEPLOY_REFUSED_TRANSIENT,
         )
+
+    def _brokered_read(self, reader: BoardBrokerClient | None, challenge_id: int | str) -> Reply:
+        if reader is None:
+            return self._board.read_instance(challenge_id)
+        result = reader.read_instance(challenge_id)
+        if result.outcome is not BoardOutcome.ANSWERED or not isinstance(result.value, Reply):
+            return Reply(UNREACHABLE, detail=f"Board broker classified the read {result.outcome.value}")
+        return result.value
 
     def _refused(self, terms: Terms, reply: Reply, attempt_id: str) -> Answer:
         """Trap 2 — one 403 body for three situations, meaning *never* / *after a terminate* / *in a

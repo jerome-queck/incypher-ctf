@@ -30,6 +30,8 @@ from pathlib import Path
 
 from solver import codex, prompt, recon
 from solver.board import BoardFailure
+from solver.board_broker import BoardBrokerClient
+from solver.capability import CapabilityBinding
 from solver.carry import Boundary, label
 from solver.codex import ADAPTER, CLAIM, COMMAND, STOPPED, Credential, Invocation
 from solver.flag import Candidate, Flags, Outcome, Slots
@@ -211,6 +213,8 @@ class Run:
         now: Callable[[], dt.datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         attempt_executor=None,
+        board_broker_path: Path | None = None,
+        board_broker_boot_id: str = "",
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -230,6 +234,8 @@ class Run:
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self._sleep = sleep
         self._attempt_executor = attempt_executor
+        self._board_broker_path = board_broker_path
+        self._board_broker_boot_id = board_broker_boot_id
         self._boundaries: dict[int | str, Boundary] = {}
         self._pending: dict[int | str, Pending] = {}
         # Every candidate already put to the submission gate, per Challenge. Turns of one Attempt
@@ -354,7 +360,25 @@ class Run:
             # was given, and there is no Instance to record until the deploy has answered. So the
             # deploy is a Step of an Attempt whose `attempt-open` line comes after it — that line
             # describes the Attempt rather than starting it, and a reader reconciles on its id.
-            self._deploy(held)
+            reader = None
+            try:
+                if self._board_broker_path is not None:
+                    reader = BoardBrokerClient.open(
+                        self._board_broker_path,
+                        CapabilityBinding(
+                            self._recorder.run_id,
+                            self._board_broker_boot_id,
+                            held.generation_id,
+                            "lane-1",
+                            held.attempt_id,
+                            f"step-{self._steps.next_index()}",
+                        ),
+                        scope="board.instance.read",
+                    )
+                self._deploy(held, reader)
+            finally:
+                if reader is not None:
+                    reader.close()
             self._recorder.attempt_open(
                 attempt_id=held.attempt_id,
                 challenge_id=challenge.challenge_id,
@@ -673,14 +697,18 @@ class Run:
         self._steps.reached(self._steps.spent + len(found.probes))
         return found
 
-    def _deploy(self, held: _Held) -> None:
+    def _deploy(self, held: _Held, recovery_reader=None) -> None:
         """Take a Lease where this Challenge needs one, and narrow the Attempt's clock to it.
 
         The seam's own default branch answers for a Challenge that is not `dynamic_iac`, so there is
         no type test here: the rule about which types are instanced lives in one place.
         """
         terms = held.pick.challenge.terms
-        answer = self._instances.deploy(terms, attempt_id=held.attempt_id)
+        answer = self._instances.deploy(
+            terms,
+            attempt_id=held.attempt_id,
+            recovery_reader=recovery_reader,
+        )
         if answer.lease is None:
             return
         held.lease = answer.lease

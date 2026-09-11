@@ -725,6 +725,7 @@ CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorde
 def event_contract(event_type: str):
     from solver.attempt_executor_contracts import AttemptEnvelopeRecorded
     from solver.attempt_process_contracts import ATTEMPT_PROCESS_RECORDED, AttemptProcessRecorded
+    from solver.board_broker_contracts import BOARD_BROKER_RECORDED, BoardBrokerRecorded
     from solver.storage_governor_contracts import STORAGE_GOVERNOR_RECORDED, StorageGovernorRecorded
 
     contracts = {
@@ -734,6 +735,7 @@ def event_contract(event_type: str):
         CAPABILITY_CUSTODY_RECORDED: CapabilityCustodyRecorded,
         ATTEMPT_ENVELOPE_RECORDED: AttemptEnvelopeRecorded,
         ATTEMPT_PROCESS_RECORDED: AttemptProcessRecorded,
+        BOARD_BROKER_RECORDED: BoardBrokerRecorded,
         STORAGE_GOVERNOR_RECORDED: StorageGovernorRecorded,
     }
     return contracts.get(event_type)

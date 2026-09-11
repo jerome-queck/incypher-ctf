@@ -21,6 +21,8 @@ from solver.attempt_executor_pool import (
     prepare_attempt_pool,
 )
 from solver.boot import Refusal
+from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV
+from solver.bootstrap_custody import Broker
 from solver.credentials import SECRETS
 from solver.event_store import EventStore, EventStoreDamage
 from solver.event_store_contracts import (
@@ -329,6 +331,21 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
             nonlocal attempt_pool
             attempt_pool = prepare_attempt_pool()
 
+        def open_custody(boot_id: str):
+            result = custody.open(boot_id)
+            endpoint = result.endpoints.get(Broker.BOARD)
+            holdings = result.holdings.get(Broker.BOARD, ())
+            if endpoint is None or "CTFD_API_TOKEN" not in holdings:
+                result.close()
+                raise Refusal(f"{boot.MARK} Board broker custody has no usable endpoint")
+            controller_environment.clear()
+            controller_environment.update(environ)
+            for name in SECRETS:
+                controller_environment.pop(name, None)
+            controller_environment[BOARD_BROKER_SOCKET_ENV] = str(endpoint)
+            controller_environment[BOARD_BROKER_HOLDINGS_ENV] = ",".join(holdings)
+            return result
+
         supervisor = Supervisor(
             state=state,
             run_id=run_id,
@@ -342,7 +359,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
                     run_id,
                     prepare_attempt_runtime=prepare_pool,
                 ),
-                bootstrap_custody=custody.open,
+                bootstrap_custody=open_custody,
                 launch_controller=lambda boot_id: launch_boot(boot_id, controller_environment, attempt_pool),
                 reap_children=reap_children,
             ),

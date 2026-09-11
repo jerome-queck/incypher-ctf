@@ -20,7 +20,6 @@ import os
 import signal
 import sys
 from collections.abc import Mapping
-from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
@@ -30,8 +29,9 @@ from solver.attempt_executor_contracts import RuntimeBinding
 from solver.attempt_executor_pool import POOL_ENV, attach_attempt_pool
 from solver.attempt_executor_runtime import AttemptRuntime
 from solver.board import Board
+from solver.board_broker import BoardCompatibilityClient
+from solver.board_broker_contracts import BOARD_BROKER_SOCKET_ENV
 from solver.boot import Refusal
-from solver.capability_service import CapabilityService
 from solver.codex import Invocation, asking
 from solver.event_store import EventStoreDamage
 from solver.flag import Flags, Pace
@@ -107,17 +107,14 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
         raise Refusal(f"{boot.MARK} canonical state verification refused this Run — {damage.classification}") from None
     except (OSError, ValueError) as unusable:
         raise Refusal(f"{boot.MARK} {run_state} is not usable as this Run's state — {unusable}") from None
-    capability_service = nullcontext()
-    if boot_id := environ.get("SUPERVISOR_BOOT_ID", ""):
-        capability_service = CapabilityService(
-            state=run_state,
-            run_id=held.run_id,
-            boot_id=boot_id,
-            redactor=Redactor.for_declared_secrets(environ),
-            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
-        )
-    with capability_service:
-        return _run_admitted(environ, run_state=run_state, held=held, rules=rules)
+    return _run_admitted(
+        environ,
+        run_state=run_state,
+        held=held,
+        rules=rules,
+        board_broker_path=Path(environ[BOARD_BROKER_SOCKET_ENV]) if environ.get(BOARD_BROKER_SOCKET_ENV) else None,
+        boot_id=environ.get("SUPERVISOR_BOOT_ID", ""),
+    )
 
 
 def _run_admitted(
@@ -126,15 +123,20 @@ def _run_admitted(
     run_state: Path,
     held: boot.Setup,
     rules: profile.Rules,
+    board_broker_path: Path | None = None,
+    boot_id: str = "",
 ) -> Ending:
     """Keep capability IPC live beside every admitted v1 Board and inference call."""
 
-    board = Board(held.url, held.token)
+    board = BoardCompatibilityClient(board_broker_path) if board_broker_path else Board(held.url, held.token)
     # The same Board addressed by nobody. Whether an unauthenticated read is answered is a profile
     # field, and asking it needs a second address rather than a flag — the token is applied by the
     # seam and not by its caller.
     held.must_hold(rules.requires)
-    discovered = profile.discovered(board, Board(held.url, ""), rules)
+    public_board = (
+        BoardCompatibilityClient(board_broker_path, authenticated=False) if board_broker_path else Board(held.url, "")
+    )
+    discovered = profile.discovered(board, public_board, rules)
 
     now = dt.datetime.now(dt.timezone.utc)
     try:
@@ -224,6 +226,8 @@ def _run_admitted(
         invocation=Invocation(reasoning_effort=dials.reasoning_effort, web_search=rules.web_search),
         work_root=run_state / ATTEMPT_WORKDIRS,
         attempt_executor=attempt_executor,
+        board_broker_path=board_broker_path,
+        board_broker_boot_id=boot_id,
     )
     _on_signal(run)
     try:

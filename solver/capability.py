@@ -33,7 +33,8 @@ REFUSAL = "capability refused"
 class CapabilityRefused(PermissionError):
     """One non-oracular refusal for every handle and caller failure."""
 
-    def __init__(self) -> None:
+    def __init__(self, reason: str = "capability-refused") -> None:
+        self.reason = reason
         super().__init__(REFUSAL)
 
 
@@ -160,7 +161,7 @@ class CapabilityAuthority:
             if not all(binding.document().values()) or not scope:
                 raise ValueError("capability binding and scope must be complete")
             if not self._is_current(binding.generation_id):
-                raise CapabilityRefused()
+                raise CapabilityRefused("stale-generation")
             while True:
                 handle = base64.urlsafe_b64encode(self._token_bytes(32)).rstrip(b"=").decode("ascii")
                 if handle and handle not in self._issued:
@@ -189,7 +190,7 @@ class CapabilityAuthority:
             issued = self._issued.get(handle)
             if issued is None:
                 self._record_denied(_handle_digest(handle), peer, "unknown-handle")
-                raise CapabilityRefused()
+                raise CapabilityRefused("unknown-handle")
             reason = ""
             if issued.revoked:
                 reason = "revoked"
@@ -201,7 +202,7 @@ class CapabilityAuthority:
                 reason = "stale-generation"
             if reason:
                 self._record(CapabilityRecord.DENIED, issued, peer, reason=reason)
-                raise CapabilityRefused()
+                raise CapabilityRefused(reason)
             self._record(CapabilityRecord.AUTHORIZED, issued, peer)
             return CapabilityGrant(issued.binding, issued.scope)
 
@@ -211,7 +212,7 @@ class CapabilityAuthority:
         with self._lock:
             issued = self._issued.get(handle)
             if issued is None or not reason:
-                raise CapabilityRefused()
+                raise CapabilityRefused("unknown-handle")
             if issued.revoked:
                 return
             issued.revoked = True

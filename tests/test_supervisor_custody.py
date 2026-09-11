@@ -24,6 +24,7 @@ def test_supervisor_transfers_and_clears_inherited_secrets_then_probes_a_clean_e
         "PATH": os.environ["PATH"],
         "HOME": str(tmp_path / "home"),
         "LANG": "C.UTF-8",
+        "CTFD_URL": "https://board.example",
         "CTFD_API_TOKEN": "board-token",
         "TEAM_KEY": "team-key",
     }
@@ -48,29 +49,43 @@ def test_supervisor_transfers_and_clears_inherited_secrets_then_probes_a_clean_e
     try:
         assert set(result.brokers) == {Broker.BOARD}
         assert result.receipts[Broker.BOARD].secret_names == ("CTFD_API_TOKEN", "TEAM_KEY")
-        assert environment == result.executor_environment
+        assert result.endpoints[Broker.BOARD].is_socket()
+        assert result.holdings[Broker.BOARD] == ("CTFD_API_TOKEN", "TEAM_KEY")
+        assert environment["CTFD_URL"] == "https://board.example"
+        assert "CTFD_API_TOKEN" not in environment
+        assert "TEAM_KEY" not in environment
         assert observed["environment"] == result.executor_environment
         records = [
-            event.payload["record"]
+            event.payload
             for event in EventStore(tmp_path, run_id="run-1").events()
             if event.event_type == "capability-custody.recorded"
         ]
-        assert records == [
+        assert [record["record"] for record in records] == [
             "transfer-accepted",
             "source-cleared",
             "source-cleared",
+            "denied",
+            "probe-recorded",
             "probe-recorded",
             "probe-recorded",
             "probe-recorded",
             "probe-recorded",
             "probe-recorded",
         ]
+        socket_probe = next(record for record in records if record["probe_kind"] == "socket")
+        assert socket_probe["probe_result"] == "refused"
+        assert socket_probe["evidence_digest"]
     finally:
         result.close()
 
 
 def test_nonclear_executor_probe_refuses_and_closes_broker(tmp_path):
-    environment = {"PATH": os.environ["PATH"], "TEAM_KEY": "team-key"}
+    environment = {
+        "PATH": os.environ["PATH"],
+        "CTFD_URL": "https://board.example",
+        "CTFD_API_TOKEN": "board-token",
+        "TEAM_KEY": "team-key",
+    }
 
     def probe(secrets, **_options):
         return _probe_result(secrets, found=True)
@@ -87,4 +102,28 @@ def test_nonclear_executor_probe_refuses_and_closes_broker(tmp_path):
     with pytest.raises(Refusal, match="did not prove every surface clear"):
         custody.open("boot-000001")
 
-    assert environment == {"PATH": os.environ["PATH"]}
+    assert environment == {"PATH": os.environ["PATH"], "CTFD_URL": "https://board.example"}
+
+
+def test_answered_hostile_socket_probe_refuses_boot(tmp_path, monkeypatch):
+    environment = {
+        "PATH": os.environ["PATH"],
+        "CTFD_URL": "https://board.example",
+        "CTFD_API_TOKEN": "board-token",
+        "TEAM_KEY": "team-key",
+    }
+    monkeypatch.setattr(
+        "solver.supervisor_custody.denied_probe",
+        lambda *_args: b'{"result":{"outcome":"answered","value":"team-key"}}',
+    )
+    custody = SupervisorCustody(
+        state=tmp_path,
+        run_id="run-1",
+        environment=environment,
+        redactor=Redactor({"TEAM_KEY": "team-key"}),
+        timestamp=lambda: "2026-09-11T00:00:00Z",
+        probe=lambda secrets, **_options: _probe_result(secrets),
+    )
+
+    with pytest.raises(Refusal, match="socket probe did not prove refusal"):
+        custody.open("boot-000001")

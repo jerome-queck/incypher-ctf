@@ -22,7 +22,8 @@ from solver.local_ipc import receive_line
 class BrokerVaultProcess:
     """A sanitized child that acknowledges and exclusively retains one owner's bytes."""
 
-    def __init__(self, process: subprocess.Popen[bytes], channel: socket.socket, runtime: Path) -> None:
+    def __init__(self, owner: Broker, process: subprocess.Popen[bytes], channel: socket.socket, runtime: Path) -> None:
+        self.owner = Broker(owner)
         self._process = process
         self._channel = channel
         self._runtime = runtime
@@ -42,13 +43,35 @@ class BrokerVaultProcess:
             raise ValueError("a broker transfer needs named nonempty material")
         runtime = Path(tempfile.mkdtemp(prefix=f"incypher-{owner.value}-broker-", dir="/tmp"))
         channel, process = _spawn_owner(owner, runtime)
-        broker = cls(process, channel, runtime)
+        broker = cls(owner, process, channel, runtime)
         try:
             receipt = _transfer(owner, secrets, channel, process.pid)
             return broker, receipt
         except Exception:
             broker.close()
             raise
+
+    @property
+    def service_path(self) -> Path:
+        if self.owner is not Broker.BOARD:
+            raise ValueError("only the Board owner exposes a Board service")
+        return self._runtime / "board.sock"
+
+    def configure_board(self, *, state: Path, run_id: str, boot_id: str, url: str) -> Path:
+        if self.owner is not Broker.BOARD:
+            raise ValueError("only the Board owner accepts Board configuration")
+        request = {
+            "command": "configure-board",
+            "state": str(Path(state)),
+            "run_id": run_id,
+            "boot_id": boot_id,
+            "url": url,
+        }
+        self._channel.sendall(canonical_bytes(request) + b"\n")
+        response = json.loads(receive_line(self._channel, failure="Board owner did not configure its service"))
+        if response != {"path": str(self.service_path), "status": "ready"}:
+            raise RuntimeError("Board owner returned an invalid service endpoint")
+        return self.service_path
 
     def close(self) -> None:
         if self._process.poll() is not None:
@@ -71,6 +94,7 @@ class BrokerVaultProcess:
         return self._process.poll()
 
     def _cleanup_runtime(self) -> None:
+        (self._runtime / "board.sock").unlink(missing_ok=True)
         (self._runtime / "custody.sock").unlink(missing_ok=True)
         try:
             self._runtime.rmdir()
