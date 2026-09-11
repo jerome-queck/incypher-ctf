@@ -106,7 +106,11 @@ print('attempt-deny-ok')
         ),
         (
             "network",
-            (python, "-c", "import socket; s=socket.socket(); print(s.connect_ex(('1.1.1.1',443)))"),
+            (
+                python,
+                "-c",
+                "import socket,time; s=socket.socket(); print(s.connect_ex(('1.1.1.1',443))); time.sleep(5)",
+            ),
             _spec(),
             ResourceOutcome.NETWORK,
         ),

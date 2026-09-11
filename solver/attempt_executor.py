@@ -22,7 +22,8 @@ from solver.attempt_executor_contracts import (
     RuntimeReservation,
 )
 from solver.event_store import EventStore
-from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED
+from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED, EMPTY_BLOB_DIGEST
+from solver.event_store_storage import canonical_bytes
 from solver.isolation import STRICT_PROFILE_DIGEST
 from solver.isolation_receipt import verify_receipt as verify_isolation_receipt
 from solver.work_generation import GenerationAuthority, GenerationFence
@@ -46,6 +47,10 @@ class RuntimeAdapter(Protocol):
 
 class ExecutorBusy(RuntimeError):
     """Another process owns reconciliation and launch for this Run."""
+
+
+class LateAttemptResult(RuntimeError):
+    """A cleaned child result arrived after its Work generation closed."""
 
 
 class AttemptHandle:
@@ -138,10 +143,13 @@ class AttemptExecutor:
 
     def _reconcile(self) -> None:
         states = _envelope_states(self._store.events())
-        unresolved = tuple(state for state in states.values() if state["record"] != "result")
+        unresolved = tuple(state for state in states.values() if state["record"] not in {"result", "discarded"})
         observations = self._runtime.reconcile(unresolved)
         for state, observation in zip(unresolved, observations, strict=True):
-            self._record_result(state, observation)
+            try:
+                self._record_result(state, observation)
+            except LateAttemptResult:
+                pass
 
     def start(self, request: AttemptRequest) -> AttemptHandle:
         with self._canonical_lock:
@@ -254,19 +262,50 @@ class AttemptExecutor:
             workspace=self._state,
             envelope=_spec_from_document(state["declared"]),
         )
-        self._append(
-            EnvelopeRecord.RESULT,
-            event_id=f"{envelope_id}:result",
-            envelope_id=envelope_id,
-            request=request,
-            cgroup_path=observation.cgroup_path,
-            executor_uid=observation.executor_uid,
-            outcome=observation.outcome,
-            exit_code=observation.exit_code,
-            cleanup_complete=observation.cleanup_complete,
-            declared=state["declared"],
-            observed=observation.observed,
+        evidence = canonical_bytes(
+            {
+                "envelope_id": envelope_id,
+                "outcome": observation.outcome.value,
+                "cleanup_complete": observation.cleanup_complete,
+            }
         )
+
+        def commit_result() -> None:
+            self._append(
+                EnvelopeRecord.RESULT,
+                event_id=f"{envelope_id}:result",
+                envelope_id=envelope_id,
+                request=request,
+                cgroup_path=observation.cgroup_path,
+                executor_uid=observation.executor_uid,
+                outcome=observation.outcome,
+                exit_code=observation.exit_code,
+                cleanup_complete=observation.cleanup_complete,
+                declared=state["declared"],
+                observed=observation.observed,
+            )
+
+        decision, _ = self._generations.authorize_and_commit(
+            request.generation_id,
+            GenerationAuthority.TOOL,
+            commit_result,
+            evidence,
+        )
+        if not decision.accepted:
+            self._append(
+                EnvelopeRecord.DISCARDED,
+                event_id=f"{envelope_id}:discarded",
+                envelope_id=envelope_id,
+                request=request,
+                cgroup_path=observation.cgroup_path,
+                executor_uid=observation.executor_uid,
+                cleanup_complete=observation.cleanup_complete,
+                declared=state["declared"],
+                observed=observation.observed,
+            )
+            raise LateAttemptResult(
+                f"Attempt result belongs to {decision.classification.value} {request.generation_id!r}"
+            )
         from solver.attempt_resource_receipt import write_receipt
 
         write_receipt(self._state, self._run_id, self._isolation_receipt)
@@ -302,28 +341,27 @@ class AttemptExecutor:
         declared=None,
         observed=None,
     ) -> None:
-        self._store.append(
-            AttemptEnvelopeRecorded(
-                event_id=event_id,
-                record=record,
-                owner_epoch=self._owner_epoch,
-                envelope_id=envelope_id,
-                generation_id=request.generation_id if request else "",
-                attempt_id=request.attempt_id if request else "",
-                step_id=request.step_id if request else "",
-                profile_digest=STRICT_PROFILE_DIGEST if request else "",
-                binding=self._binding if request else None,
-                cgroup_path=cgroup_path,
-                executor_uid=executor_uid,
-                outcome=outcome,
-                exit_code=exit_code,
-                cleanup_complete=cleanup_complete,
-                declared=declared,
-                observed=observed,
-                ts=self._timestamp(),
-            ),
-            body=b"",
+        event = AttemptEnvelopeRecorded(
+            event_id=event_id,
+            record=record,
+            owner_epoch=self._owner_epoch,
+            envelope_id=envelope_id,
+            generation_id=request.generation_id if request else "",
+            attempt_id=request.attempt_id if request else "",
+            step_id=request.step_id if request else "",
+            profile_digest=STRICT_PROFILE_DIGEST if request else "",
+            binding=self._binding if request else None,
+            cgroup_path=cgroup_path,
+            executor_uid=executor_uid,
+            outcome=outcome,
+            exit_code=exit_code,
+            cleanup_complete=cleanup_complete,
+            declared=declared,
+            observed=observed,
+            ts=self._timestamp(),
         )
+        reservation = self._store.reserve(event, blob_digest=EMPTY_BLOB_DIGEST, blob_bytes=0)
+        self._store.commit(reservation, event, body=b"")
 
 
 def _envelope_states(events) -> dict[str, dict[str, object]]:
@@ -354,6 +392,7 @@ __all__ = [
     "AttemptResult",
     "EnvelopeSpec",
     "ExecutorBusy",
+    "LateAttemptResult",
     "NetworkPolicy",
     "ResourceOutcome",
     "RuntimeBinding",

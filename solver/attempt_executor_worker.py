@@ -79,7 +79,11 @@ def _gate(connection: socket.socket, nonce: str) -> None:
         os._exit(125)
 
 
-def _capture(process: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
+def _trace_bytes(trace: int) -> bytes:
+    return os.pread(trace, MAX_FRAME, 0)
+
+
+def _capture(process: subprocess.Popen[bytes], trace: int, connection: socket.socket) -> tuple[bytes, bool, bytes]:
     assert process.stdout is not None
     descriptor = process.stdout.fileno()
     os.set_blocking(descriptor, False)
@@ -87,6 +91,7 @@ def _capture(process: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
     selector.register(descriptor, selectors.EVENT_READ)
     output = bytearray()
     truncated = False
+    network_reported = False
     while process.poll() is None:
         for _key, _events in selector.select(0.05):
             chunk = os.read(descriptor, 65536)
@@ -96,6 +101,18 @@ def _capture(process: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
                 truncated = truncated or len(chunk) > room
             elif chunk:
                 truncated = True
+        traced = _trace_bytes(trace)
+        if not network_reported and any(marker.encode() in traced for marker in NETWORK_MARKERS):
+            connection.send(
+                encode_frame(
+                    {
+                        "type": "breach",
+                        "network_breach": True,
+                        "network_trace_bytes": len(traced),
+                    }
+                )
+            )
+            network_reported = True
     while True:
         try:
             chunk = os.read(descriptor, 65536)
@@ -111,7 +128,7 @@ def _capture(process: subprocess.Popen[bytes]) -> tuple[bytes, bool]:
             truncated = True
     selector.close()
     process.stdout.close()
-    return bytes(output), truncated
+    return bytes(output), truncated, _trace_bytes(trace)
 
 
 def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, object]:
@@ -136,10 +153,9 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
             pass_fds=(connection.fileno(), trace),
             preexec_fn=before_exec,
         )
-        output, truncated = _capture(process)
+        output, truncated, traced_bytes = _capture(process, trace, connection)
         process.wait()
-        os.lseek(trace, 0, os.SEEK_SET)
-        traced = os.read(trace, MAX_FRAME).decode("utf-8", errors="replace")
+        traced = traced_bytes.decode("utf-8", errors="replace")
         network_breach = any(marker in traced for marker in NETWORK_MARKERS)
         return {
             "type": "result",

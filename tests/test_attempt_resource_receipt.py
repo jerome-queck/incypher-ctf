@@ -9,11 +9,13 @@ import pytest
 
 from solver.attempt_executor import AttemptExecutor, RuntimeBinding
 from solver.attempt_executor_contracts import ResourceOutcome, RuntimeObservation
-from solver.attempt_resource_receipt import manifest_receipt, verify_receipt, write_receipt
+from solver.attempt_resource_receipt import link_manifest, manifest_receipt, verify_receipt, write_receipt
 from solver.event_store import InvalidReceiptError
+from solver.manifest import generate_manifest
 from solver.redaction import Redactor
 from solver.work_generation import GenerationFence
 from test_attempt_executor import IMAGE_ID, OutcomeRuntime, isolation_receipt, request
+from test_manifest import release_candidate_profile
 
 
 class QualifiedRuntime(OutcomeRuntime):
@@ -90,6 +92,15 @@ def test_receipt_reconstructs_all_breaches_deny_probes_and_exact_candidate_bindi
     }
     assert all(row["cleanup_complete"] for row in document["envelopes"])
     assert manifest_receipt(receipt)["ref"] == "receipt:attempt-resource-envelope"
+    draft = generate_manifest(
+        image_digest=IMAGE_ID,
+        release_candidate_profile=release_candidate_profile(),
+    )
+    linked = link_manifest(draft, receipt)
+    isolation_row = next(row for row in linked["requirements"] if row["row_id"] == "core.strict-isolation")
+    assert isolation_row["status"] == "implemented"
+    assert isolation_row["receipt_ref"] == "receipt:attempt-resource-envelope"
+    assert manifest_receipt(receipt) in linked["receipts"]
 
 
 def test_receipt_tampering_and_partial_or_stale_evidence_cannot_reach_the_manifest(tmp_path: Path) -> None:
@@ -102,3 +113,14 @@ def test_receipt_tampering_and_partial_or_stale_evidence_cannot_reach_the_manife
         verify_receipt(receipt, require_qualified=True)
     with pytest.raises(InvalidReceiptError):
         manifest_receipt(receipt)
+
+
+def test_receipt_cannot_link_to_a_different_candidate_image(tmp_path: Path) -> None:
+    receipt = qualified_receipt(tmp_path)
+    draft = generate_manifest(
+        image_digest="sha256:" + "f" * 64,
+        release_candidate_profile=release_candidate_profile(),
+    )
+
+    with pytest.raises(InvalidReceiptError, match="different candidate image"):
+        link_manifest(draft, receipt)

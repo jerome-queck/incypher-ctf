@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,14 @@ IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 CommandRunner = Callable[..., Any]
 
 
+@dataclass(frozen=True)
+class ImageBinding:
+    image_id: str
+    manifest_digest: str
+    config_digest: str
+    platform: str
+
+
 def _subprocess_run(command: list[str], **kwargs: Any) -> Any:
     return subprocess.run(command, **kwargs)
 
@@ -32,7 +41,7 @@ def container_command(
     env_file: Path | None,
     state: Path | None,
     preflight_only: bool,
-    binding: tuple[str, str, str] | None = None,
+    binding: ImageBinding | None = None,
 ) -> list[str]:
     """Return the one Docker command allowed to start the strict Solver image."""
     command = ["docker", "run"]
@@ -71,15 +80,14 @@ def container_command(
         ]
     )
     if binding is not None:
-        manifest_digest, config_digest, platform = binding
         command.extend(
             [
                 "--env",
-                f"INCYPHER_IMAGE_MANIFEST={manifest_digest}",
+                f"INCYPHER_IMAGE_MANIFEST={binding.manifest_digest}",
                 "--env",
-                f"INCYPHER_IMAGE_CONFIG={config_digest}",
+                f"INCYPHER_IMAGE_CONFIG={binding.config_digest}",
                 "--env",
-                f"INCYPHER_IMAGE_PLATFORM={platform}",
+                f"INCYPHER_IMAGE_PLATFORM={binding.platform}",
             ]
         )
 
@@ -120,20 +128,17 @@ def tool_probe_command(
 
 
 def attempt_resource_probe_command(
-    image_id: str,
-    manifest_digest: str,
-    config_digest: str,
-    platform: str,
+    binding: ImageBinding,
     state: Path,
 ) -> list[str]:
     """Run the semantic Resource fixtures in the same exact strict image."""
 
     command = container_command(
-        image_id,
+        binding.image_id,
         env_file=None,
         state=None,
         preflight_only=True,
-        binding=(manifest_digest, config_digest, platform),
+        binding=binding,
     )
     command[-5:] = [
         "--mount",
@@ -142,7 +147,7 @@ def attempt_resource_probe_command(
         "INCYPHER_DENY_PROBE_SECRET=qualification-secret",
         "--entrypoint",
         "python3",
-        image_id,
+        binding.image_id,
         "-m",
         "solver.attempt_resource_probe",
     ]
@@ -161,7 +166,7 @@ def _checked(command: list[str], runner: CommandRunner) -> Any:
     return result
 
 
-def build_image(runner: CommandRunner) -> tuple[str, str, str, str]:
+def build_image(runner: CommandRunner) -> ImageBinding:
     with tempfile.TemporaryDirectory(prefix="strict-image-metadata-") as temporary:
         metadata_path = Path(temporary) / "metadata.json"
         _checked(
@@ -203,7 +208,7 @@ def build_image(runner: CommandRunner) -> tuple[str, str, str, str]:
         or inspected[1] not in {"linux/arm64", "linux/amd64"}
     ):
         raise RuntimeError("BuildKit did not bind one loaded OCI image")
-    return inspected[0], manifest, config, inspected[1]
+    return ImageBinding(inspected[0], manifest, config, inspected[1])
 
 
 def _validate_path(label: str, path: Path, home: Path) -> None:
@@ -231,7 +236,7 @@ def _launch(
     if verified != 0:
         return verified
 
-    image_id, manifest_digest, config_digest, platform = build_image(runner)
+    binding = build_image(runner)
 
     try:
         _checked(
@@ -243,17 +248,17 @@ def _launch(
                 CGROUP_PARENT,
                 "--entrypoint",
                 "/bin/true",
-                image_id,
+                binding.image_id,
             ],
             runner,
         )
         _checked(
             container_command(
-                image_id,
+                binding.image_id,
                 env_file=env_file,
                 state=state,
                 preflight_only=preflight_only,
-                binding=(manifest_digest, config_digest, platform),
+                binding=binding,
             ),
             runner,
         )

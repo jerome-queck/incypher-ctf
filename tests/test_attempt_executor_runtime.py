@@ -4,7 +4,10 @@ import base64
 import json
 import socket
 import threading
+import time
 from pathlib import Path
+
+import pytest
 
 from solver.attempt_executor_contracts import AttemptRequest, EnvelopeSpec, NetworkPolicy, ResourceOutcome
 from solver.attempt_executor_pool import AttemptPool, AttemptSlot, _fixed_worker_command
@@ -116,6 +119,33 @@ def test_cpu_usage_is_measured_not_inferred_from_throttling(tmp_path: Path) -> N
 
     assert result.outcome is ResourceOutcome.CPU
     assert result.observed["cpu_nr_throttled"] == 0
+    parent.close()
+    worker.close()
+
+
+def test_live_network_breach_terminates_and_drains_the_worker_result(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, cgroup = _runtime(tmp_path, parent)
+    incoming = type("I", (), {"request": _request(tmp_path)})()
+    runtime.prepare("envelope-1", incoming)
+    _initial_counters(cgroup)
+
+    def reply() -> None:
+        worker.recv(1_000_000)
+        worker.recv(1_000_000)
+        worker.send(json.dumps({"type": "breach", "network_breach": True, "network_trace_bytes": 24}).encode())
+        worker.send(json.dumps({"type": "result", "exit_code": -9, "output": ""}).encode())
+
+    thread = threading.Thread(target=reply)
+    started = time.monotonic()
+    thread.start()
+    result = runtime.launch("envelope-1", incoming)
+    thread.join()
+
+    assert result.outcome is ResourceOutcome.NETWORK
+    assert time.monotonic() - started < incoming.request.envelope.wall_seconds
+    with pytest.raises(BlockingIOError):
+        parent.recv(1_000_000)
     parent.close()
     worker.close()
 

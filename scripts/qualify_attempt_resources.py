@@ -25,7 +25,7 @@ def qualify(state: Path) -> Path:
     if state.exists():
         raise ValueError(f"qualification state already exists: {state}")
     state.mkdir(parents=True)
-    image_id, manifest, config, platform = strict_runtime.build_image(subprocess.run)
+    binding = strict_runtime.build_image(subprocess.run)
     try:
         subprocess.run(
             [
@@ -36,18 +36,12 @@ def qualify(state: Path) -> Path:
                 strict_runtime.CGROUP_PARENT,
                 "--entrypoint",
                 "/bin/true",
-                image_id,
+                binding.image_id,
             ],
             check=True,
         )
         subprocess.run(
-            strict_runtime.attempt_resource_probe_command(
-                image_id,
-                manifest,
-                config,
-                platform,
-                state,
-            ),
+            strict_runtime.attempt_resource_probe_command(binding, state),
             check=True,
         )
     except Exception:

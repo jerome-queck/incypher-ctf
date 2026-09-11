@@ -14,6 +14,7 @@ import struct
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,17 @@ MAX_POLL_INTERVAL = 0.025
 
 class RuntimeUnavailable(RuntimeError):
     """No child started because the fixed runtime could not reserve its boundary."""
+
+
+@dataclass(frozen=True)
+class ResourceSample:
+    counters: Mapping[str, int]
+    filesystem_bytes: int
+    unsafe_workspace: bool
+    cpu: bool
+    memory: bool
+    pids: bool
+    filesystem: bool
 
 
 class AttemptRuntime:
@@ -198,93 +210,138 @@ class AttemptRuntime:
         slot.connection.setblocking(False)
         while True:
             now = self.clock()
-            snapshot = self._cgroup_counters(cgroup)
+            sample = self._sample(request, slot, cgroup, baseline, baseline_bytes)
             with self._cancel_lock:
                 cancelled = envelope_id in self._cancelled
-            cpu = snapshot["cpu_usage_usec"] - baseline["cpu_usage_usec"] >= envelope.cpu_seconds * 1_000_000
-            memory = snapshot["oom"] > baseline["oom"] or snapshot["oom_kill"] > baseline["oom_kill"]
-            pids = snapshot["pids_max"] > baseline["pids_max"]
-            filesystem_bytes, unsafe = _workspace_usage(slot.work_path)
-            filesystem = unsafe or filesystem_bytes >= baseline_bytes + envelope.filesystem_bytes
-            wall = now - started >= envelope.wall_seconds
             response = _recv_nonblocking(slot.connection)
             network = bool(response and response.get("network_breach") is True)
             if response is not None:
-                snapshot = self._cgroup_counters(cgroup)
-                cpu = snapshot["cpu_usage_usec"] - baseline["cpu_usage_usec"] >= envelope.cpu_seconds * 1_000_000
-                memory = snapshot["oom"] > baseline["oom"] or snapshot["oom_kill"] > baseline["oom_kill"]
-                pids = snapshot["pids_max"] > baseline["pids_max"]
-                filesystem_bytes, unsafe = _workspace_usage(slot.work_path)
-                filesystem = unsafe or filesystem_bytes >= baseline_bytes + envelope.filesystem_bytes
-            cause = _first_cause(cancelled, cpu, memory, pids, filesystem, network, wall)
+                sample = self._sample(request, slot, cgroup, baseline, baseline_bytes)
+            cause = _first_cause(
+                cancelled,
+                sample.cpu,
+                sample.memory,
+                sample.pids,
+                sample.filesystem,
+                network,
+                now - started >= envelope.wall_seconds,
+            )
             if cause is not None or response is not None:
-                cleanup = self._cleanup(cgroup, envelope.cleanup_seconds)
-                worker_acknowledged = True
-                if cause is not None and response is None:
-                    response = _await_worker_result(slot.connection, envelope.cleanup_seconds)
-                    worker_acknowledged = response is not None
-                    if not worker_acknowledged:
-                        slot.healthy = False
-                elapsed = max(0.0, self.clock() - started)
-                observed = self._observed(
-                    envelope,
+                return self._complete_monitor(
+                    request,
+                    slot,
+                    cgroup,
                     baseline,
-                    snapshot,
-                    cleanup,
-                    elapsed=elapsed,
-                    filesystem_bytes=filesystem_bytes,
-                    baseline_bytes=baseline_bytes,
-                    network=network,
-                    slot=slot,
-                    response=response,
+                    baseline_bytes,
+                    started,
+                    sample,
+                    network,
+                    cause,
+                    response,
                 )
-                observed["worker_acknowledged_cleanup"] = worker_acknowledged
-                if cause is not None:
-                    return RuntimeObservation(
-                        cause,
-                        None,
-                        _output(response),
-                        str(cgroup),
-                        slot.uid,
-                        observed,
-                        bool(cleanup["complete"]) and worker_acknowledged,
-                    )
-                assert response is not None
-                if response.get("type") == "error":
-                    observed["launch_failure"] = str(response.get("error", "worker-error"))[:512]
-                    return RuntimeObservation(
-                        ResourceOutcome.LAUNCH_FAILED,
-                        None,
-                        b"",
-                        str(cgroup),
-                        slot.uid,
-                        observed,
-                        bool(cleanup["complete"]),
-                    )
-                if cleanup["complete"] and not unsafe:
-                    try:
-                        _sync_workspace(slot.work_path, request.workspace, self.workspace_limit)
-                    except (OSError, ValueError):
-                        observed["workspace_sync_failed"] = True
-                        return RuntimeObservation(
-                            ResourceOutcome.FILESYSTEM,
-                            None,
-                            _output(response),
-                            str(cgroup),
-                            slot.uid,
-                            observed,
-                            bool(cleanup["complete"]),
-                        )
+            self.sleep(min(MAX_POLL_INTERVAL, max(0.0, envelope.wall_seconds - (now - started))))
+
+    def _sample(
+        self,
+        request: AttemptRequest,
+        slot: AttemptSlot,
+        cgroup: Path,
+        baseline: Mapping[str, int],
+        baseline_bytes: int,
+    ) -> ResourceSample:
+        snapshot = self._cgroup_counters(cgroup)
+        filesystem_bytes, unsafe = _workspace_usage(slot.work_path)
+        return ResourceSample(
+            counters=snapshot,
+            filesystem_bytes=filesystem_bytes,
+            unsafe_workspace=unsafe,
+            cpu=snapshot["cpu_usage_usec"] - baseline["cpu_usage_usec"] >= request.envelope.cpu_seconds * 1_000_000,
+            memory=snapshot["oom"] > baseline["oom"] or snapshot["oom_kill"] > baseline["oom_kill"],
+            pids=snapshot["pids_max"] > baseline["pids_max"],
+            filesystem=unsafe or filesystem_bytes >= baseline_bytes + request.envelope.filesystem_bytes,
+        )
+
+    def _complete_monitor(
+        self,
+        request: AttemptRequest,
+        slot: AttemptSlot,
+        cgroup: Path,
+        baseline: Mapping[str, int],
+        baseline_bytes: int,
+        started: float,
+        sample: ResourceSample,
+        network: bool,
+        cause: ResourceOutcome | None,
+        response: dict[str, object] | None,
+    ) -> RuntimeObservation:
+        envelope = request.envelope
+        cleanup = self._cleanup(cgroup, envelope.cleanup_seconds)
+        worker_acknowledged = True
+        if cause is not None and (response is None or response.get("type") not in {"result", "error"}):
+            terminal = _await_worker_result(slot.connection, envelope.cleanup_seconds)
+            worker_acknowledged = terminal is not None
+            if terminal is not None:
+                response = {**(response or {}), **terminal}
+            else:
+                slot.healthy = False
+        observed = self._observed(
+            envelope,
+            baseline,
+            sample.counters,
+            cleanup,
+            elapsed=max(0.0, self.clock() - started),
+            filesystem_bytes=sample.filesystem_bytes,
+            baseline_bytes=baseline_bytes,
+            network=network,
+            slot=slot,
+            response=response,
+        )
+        observed["worker_acknowledged_cleanup"] = worker_acknowledged
+        if cause is not None:
+            return RuntimeObservation(
+                cause,
+                None,
+                _output(response),
+                str(cgroup),
+                slot.uid,
+                observed,
+                bool(cleanup["complete"]) and worker_acknowledged,
+            )
+        assert response is not None
+        if response.get("type") == "error":
+            observed["launch_failure"] = str(response.get("error", "worker-error"))[:512]
+            return RuntimeObservation(
+                ResourceOutcome.LAUNCH_FAILED,
+                None,
+                b"",
+                str(cgroup),
+                slot.uid,
+                observed,
+                bool(cleanup["complete"]),
+            )
+        if cleanup["complete"] and not sample.unsafe_workspace:
+            try:
+                _sync_workspace(slot.work_path, request.workspace, self.workspace_limit)
+            except (OSError, ValueError):
+                observed["workspace_sync_failed"] = True
                 return RuntimeObservation(
-                    ResourceOutcome.EXITED,
-                    _int_or_none(response.get("exit_code")),
+                    ResourceOutcome.FILESYSTEM,
+                    None,
                     _output(response),
                     str(cgroup),
                     slot.uid,
                     observed,
                     bool(cleanup["complete"]),
                 )
-            self.sleep(min(MAX_POLL_INTERVAL, max(0.0, envelope.wall_seconds - (now - started))))
+        return RuntimeObservation(
+            ResourceOutcome.EXITED,
+            _int_or_none(response.get("exit_code")),
+            _output(response),
+            str(cgroup),
+            slot.uid,
+            observed,
+            bool(cleanup["complete"]),
+        )
 
     def _observed(
         self,

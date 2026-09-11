@@ -33,6 +33,7 @@ class EnvelopeRecord(str, enum.Enum):
     RESERVED = "reserved"
     LAUNCHED = "launched"
     RESULT = "result"
+    DISCARDED = "discarded"
 
 
 @dataclass(frozen=True)

@@ -76,6 +76,19 @@ def manifest_receipt(path: Path) -> dict[str, str]:
     }
 
 
+def link_manifest(manifest: Mapping[str, object], path: Path) -> Mapping[str, object]:
+    """Attach this qualified receipt to the strict-isolation candidate row."""
+
+    from solver.manifest import attach_requirement_receipt
+
+    verified = verify_receipt(path, require_qualified=True)
+    receipt = json.loads(verified.read_bytes())
+    candidate = manifest.get("candidate")
+    if not isinstance(candidate, Mapping) or candidate.get("image_digest") != receipt["binding"]["image_id"]:
+        raise InvalidReceiptError("Attempt Resource receipt belongs to a different candidate image")
+    return attach_requirement_receipt(manifest, MANIFEST_ROW_ID, manifest_receipt(path))
+
+
 def _reconstruct(state: Path, run_id: str, isolation_receipt: Path) -> dict[str, Any]:
     verified_isolation = verify_isolation_receipt(isolation_receipt)
     isolation = json.loads(verified_isolation.read_bytes())
@@ -91,7 +104,11 @@ def _reconstruct(state: Path, run_id: str, isolation_receipt: Path) -> dict[str,
         envelope_id = event.payload["envelope_id"]
         if envelope_id:
             grouped.setdefault(envelope_id, []).append(event)
-    envelopes = [_completed(grouped[envelope_id], isolation) for envelope_id in sorted(grouped)]
+    envelopes = [
+        _completed(grouped[envelope_id], isolation)
+        for envelope_id in sorted(grouped)
+        if grouped[envelope_id][-1].payload["record"] == EnvelopeRecord.RESULT.value
+    ]
     binding = _one_binding(envelopes, isolation)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -190,4 +207,4 @@ def _require_qualified(document: Mapping[str, Any]) -> None:
             raise InvalidReceiptError("Attempt Resource receipt has incomplete isolation or cleanup proof")
 
 
-__all__ = ["manifest_receipt", "verify_receipt", "write_receipt"]
+__all__ = ["link_manifest", "manifest_receipt", "verify_receipt", "write_receipt"]

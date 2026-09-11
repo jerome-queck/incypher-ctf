@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -16,7 +17,9 @@ from solver.attempt_executor import (
     RuntimeObservation,
     RuntimeReservation,
     ResourceOutcome,
+    LateAttemptResult,
 )
+from solver.event_store import GenerationDisposition
 from solver.event_store import EventStore
 from solver.isolation import (
     STRICT_CONTROLS,
@@ -140,6 +143,23 @@ class CancellableRuntime(ImmediateRuntime):
         self.stopped.set()
 
 
+class DeferredRuntime(ImmediateRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def launch(self, envelope_id, incoming):
+        self.started.set()
+        assert self.release.wait(2)
+        return RuntimeObservation.exited(
+            exit_code=0,
+            output=b"late hostile output",
+            cgroup_path=f"/run/cgroup-parent/container/executors/{envelope_id}",
+            executor_uid=20000,
+        )
+
+
 class CrashRuntime(ImmediateRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -220,6 +240,18 @@ def test_active_generation_and_verified_isolation_are_reserved_before_launch(tmp
         if event.event_type == "work-generation.recorded" and event.payload["record"] == "authority"
     ]
     assert authority[-1]["authority"] == "tool"
+    result_event = next(
+        event
+        for event in EventStore(state, run_id="run-1").events()
+        if event.event_type == "attempt-envelope.recorded" and event.payload["record"] == "result"
+    )
+    reservation_rows = [
+        json.loads(line) for line in EventStore(state, run_id="run-1").reservations_path.read_text().splitlines()
+    ]
+    assert [row["status"] for row in reservation_rows if row["sequence"] == result_event.sequence] == [
+        "reserved",
+        "committed",
+    ]
     assert runtime.events == [
         ("reconcile", ()),
         ("prepare", "envelope-000001"),
@@ -284,6 +316,37 @@ def test_cancellation_is_idempotent_and_cannot_be_reported_as_a_normal_exit(tmp_
 
     assert result.outcome is ResourceOutcome.CANCELLED
     assert runtime.cancel_count == 1
+
+
+def test_result_is_rejected_when_its_generation_closed_during_execution(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    fence = GenerationFence(state, "run-1", Redactor({}), timestamp=lambda: "2026-09-11T00:00:00Z")
+    generation = fence.acquire("challenge-1", "attempt-1")
+    runtime = DeferredRuntime()
+    executor = AttemptExecutor(
+        state=state,
+        run_id="run-1",
+        isolation_receipt=isolation_receipt(state),
+        binding=RuntimeBinding(IMAGE_ID, "sha256:" + "b" * 64, "sha256:" + "c" * 64, "linux/arm64"),
+        generation_fence=fence,
+        runtime=runtime,
+        timestamp=lambda: "2026-09-11T00:00:00Z",
+    )
+    handle = executor.start(request(tmp_path, generation.generation_id))
+    assert runtime.started.wait(2)
+    fence.close(generation.generation_id, GenerationDisposition.COMPLETE)
+    runtime.release.set()
+
+    with pytest.raises(LateAttemptResult):
+        handle.result()
+
+    records = [
+        event.payload["record"]
+        for event in EventStore(state, run_id="run-1").events()
+        if event.event_type == "attempt-envelope.recorded"
+    ]
+    assert records[-1] == "discarded"
+    assert "result" not in records
 
 
 def test_successor_reconciles_a_launched_unrecorded_envelope_before_replacement(tmp_path: Path) -> None:

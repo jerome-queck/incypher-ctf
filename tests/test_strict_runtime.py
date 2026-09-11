@@ -15,6 +15,10 @@ MANIFEST = IMAGE_ID
 CONFIG = "sha256:" + "c" * 64
 
 
+def image_binding() -> strict_runtime.ImageBinding:
+    return strict_runtime.ImageBinding(IMAGE_ID, MANIFEST, CONFIG, "linux/arm64")
+
+
 def test_container_command_has_the_fixed_strict_profile() -> None:
     command = strict_runtime.container_command(
         IMAGE_ID,
@@ -98,10 +102,7 @@ def test_tool_probe_uses_the_same_strict_profile_and_binds_the_distributable_ima
 
 def test_attempt_resource_probe_mounts_only_its_disposable_state(tmp_path: Path) -> None:
     command = strict_runtime.attempt_resource_probe_command(
-        IMAGE_ID,
-        MANIFEST,
-        CONFIG,
-        "linux/arm64",
+        image_binding(),
         tmp_path,
     )
 
@@ -188,7 +189,7 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         env_file=env_file,
         state=state,
         preflight_only=False,
-        binding=(MANIFEST, CONFIG, "linux/arm64"),
+        binding=image_binding(),
     )
     assert runner.commands[4] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
     assert all(IMAGE_ID in command for command in (runner.commands[3],))
@@ -206,7 +207,7 @@ def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
         env_file=None,
         state=None,
         preflight_only=True,
-        binding=(MANIFEST, CONFIG, "linux/arm64"),
+        binding=image_binding(),
     )
 
 
@@ -221,7 +222,7 @@ def test_a_failed_strict_run_still_removes_only_the_owned_cgroup(
                 env_file=None,
                 state=None,
                 preflight_only=True,
-                binding=(MANIFEST, CONFIG, "linux/arm64"),
+                binding=image_binding(),
             )
         )
     )
