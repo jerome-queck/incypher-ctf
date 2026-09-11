@@ -109,7 +109,7 @@ def test_receipt_embeds_the_controlled_pre_authority_proof_and_tampering_fails(t
     proof = result.receipt["pre_authority_refusal"]
 
     assert proof == {
-        "entry_point": "solver.__main__.main",
+        "entry_point": "solver.supervisor.main",
         "external_clients_constructed": 0,
         "refusal_exit_code": 2,
     }

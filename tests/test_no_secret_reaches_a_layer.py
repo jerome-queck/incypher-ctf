@@ -90,10 +90,9 @@ def test_the_image_looks_for_its_profiles_where_the_dockerfile_puts_them():
     assert str(profile.BOARDS) == f"{workdir}/{copied.split()[-1].rstrip('/')}"
 
 
-def test_pid_one_is_the_solver_itself_with_no_supervisor_in_front_of_it():
-    """v1's gate has to tell a clean exit from a restart loop, and anything between the process and
-    the container blurs exactly that. Exec form, so no shell sits in front of it either."""
+def test_pid_one_is_the_supervisor_in_exec_form():
+    """The Supervisor owns signals and the Run-controller child with no shell between it and Docker."""
     entrypoints = [line for line in instructions() if line.startswith("ENTRYPOINT")]
 
-    assert entrypoints == ['ENTRYPOINT ["python3", "-m", "solver"]']
+    assert entrypoints == ['ENTRYPOINT ["python3", "-m", "solver.supervisor"]']
     assert not [line for line in instructions() if line.startswith("CMD")]

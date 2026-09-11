@@ -306,8 +306,6 @@ WORKDIR /opt/solver
 COPY solver/ solver/
 COPY docs/competitions/*.board.json boards/
 
-# PID 1 is the Solver process — no supervisor, and exec form so no shell sits in front of it.
-# v1's gate has to tell a clean exit from a restart loop, and anything between them blurs exactly
-# that. It runs as root: the container boundary is the isolation a non-root user would buy, and
-# CTF tooling that needs a privilege at 14:00 has nobody to ask for one.
-ENTRYPOINT ["python3", "-m", "solver"]
+# PID 1 is the Supervisor in exec form, with no shell between it and Docker. It owns one
+# Run-controller Boot and forwards TERM/INT to that Boot's process group before bounded teardown.
+ENTRYPOINT ["python3", "-m", "solver.supervisor"]
