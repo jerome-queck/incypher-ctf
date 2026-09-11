@@ -131,6 +131,34 @@ def attach_requirement_receipt(
     )
 
 
+def attach_capsule_receipt(
+    manifest: Mapping[str, object],
+    row_id: str,
+    receipt: ManifestReceipt,
+    capsule_content_ref: str,
+) -> ReleaseCandidateManifestDraft:
+    """Link one receipt to its stable capsule content without claiming proof."""
+
+    if not capsule_content_ref.startswith("capsule-content:") or len(capsule_content_ref) != 80:
+        _fail("capsule content reference must be capsule-content plus lowercase SHA-256")
+    digest = capsule_content_ref.removeprefix("capsule-content:")
+    if any(character not in "0123456789abcdef" for character in digest):
+        _fail("capsule content reference must be capsule-content plus lowercase SHA-256")
+    linked = attach_requirement_receipt(manifest, row_id, receipt)
+    requirements = _copy_json(linked["requirements"])
+    row = next(item for item in requirements if item["row_id"] == row_id)
+    existing_capsules = [ref for ref in row["evidence_refs"] if ref.startswith("capsule-content:")]
+    if existing_capsules and existing_capsules != [capsule_content_ref]:
+        _fail(f"{row_id} already links different capsule content")
+    row["evidence_refs"] = sorted(set((*row["evidence_refs"], capsule_content_ref)))
+    return generate_manifest(
+        image_digest=linked["candidate"]["image_digest"],
+        release_candidate_profile=linked["selected_profile"],
+        requirements=requirements,
+        receipts=linked["receipts"],
+    )
+
+
 def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
     """Encode a JSON manifest with one deterministic representation."""
 
@@ -174,6 +202,7 @@ __all__ = [
     "RequirementRow",
     "SCHEMA_VERSION",
     "attach_requirement_receipt",
+    "attach_capsule_receipt",
     "canonical_manifest_bytes",
     "generate_manifest",
     "manifest_digest",
