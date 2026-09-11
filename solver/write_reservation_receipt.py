@@ -27,7 +27,6 @@ def _receipt_document(
     profile_digest: str,
     reservation: WriteReservation,
     trace: list[dict[str, Any]],
-    extent_remaining: int,
 ) -> dict[str, Any]:
     proof = load_controlled_proof()
     return {
@@ -41,7 +40,7 @@ def _receipt_document(
         "object_slots": list(reservation.object_slots),
         "state": reservation.state.value,
         "trace": trace,
-        "extent_remaining": extent_remaining,
+        "grant_remaining_bytes": reservation.grant_remaining_bytes,
         "controlled_proof_digest": digest_bytes(canonical_bytes(proof)),
         "crash_point_outcomes": proof["crash_point_outcomes"],
         "fault_injection_result": proof["fault_injection_result"],
@@ -55,7 +54,6 @@ def receipt_document(authority: WriteAuthority, reservation: WriteReservation) -
         authority.profile_digest,
         reservation,
         authority.trace(reservation.key),
-        authority.extent_path(reservation.pool).stat().st_size,
     )
 
 
@@ -105,7 +103,6 @@ def manifest_receipt(path: Path) -> dict[str, str]:
         digest(profile.as_dict()),
         snapshot.reservation,
         list(snapshot.trace),
-        snapshot.extent_remaining,
     )
     if document != expected:
         raise ValueError("write-reservation receipt differs from durable authority")

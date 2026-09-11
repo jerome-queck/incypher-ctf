@@ -35,7 +35,6 @@ _HELD_WRITERS: set[Path] = set()
 class AuthoritySnapshot:
     reservation: WriteReservation
     trace: tuple[dict[str, Any], ...]
-    extent_remaining: int
 
 
 class AuthorityStorage:
@@ -99,7 +98,6 @@ class AuthorityStorage:
             return AuthoritySnapshot(
                 reservation=reservation,
                 trace=trace,
-                extent_remaining=self.extent_path(reservation.pool).stat().st_size,
             )
 
     def append_locked(self, reservation: WriteReservation) -> None:
@@ -120,6 +118,7 @@ class AuthorityStorage:
             "observation": dict(reservation.observation) if reservation.observation is not None else None,
             "boot_id": reservation.boot_id,
             "retain_objects": reservation.retain_objects,
+            "grant_remaining_bytes": reservation.grant_remaining_bytes,
         }
         encoded = canonical_bytes(row) + b"\n"
         if len(encoded) > LEDGER_RECORD_BYTES:
@@ -168,6 +167,7 @@ class AuthorityStorage:
                 observation=dict(row["observation"]) if row["observation"] is not None else None,
                 boot_id=str(row["boot_id"]),
                 retain_objects=bool(row.get("retain_objects", False)),
+                grant_remaining_bytes=int(row.get("grant_remaining_bytes", 0)),
             )
         return latest
 
@@ -199,9 +199,11 @@ class AuthorityStorage:
                 break
         return tuple(available)
 
-    def release_object_slots_locked(self, reservation: WriteReservation) -> None:
+    def release_object_slots_locked(self, reservation: WriteReservation) -> bool:
+        released = True
         for name in reservation.object_slots:
-            self._clear_slot(self._slots_dir(reservation.pool) / name)
+            released = self._clear_slot(self._slots_dir(reservation.pool) / name) and released
+        return released
 
     def write_object(self, reservation: WriteReservation, body: bytes) -> Path:
         if not reservation.retain_objects or not reservation.object_slots:

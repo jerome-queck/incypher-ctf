@@ -128,6 +128,7 @@ def test_crash_boundaries_never_repeat_an_effect(tmp_path, crash_point):
             lambda: calls.append("wire") or {"outcome": "unread"},
             encode=lambda verdict: verdict,
             decode=lambda verdict: verdict,
+            retain_receipt=True,
         )
 
     authority.close()
@@ -145,10 +146,15 @@ def test_crash_boundaries_never_repeat_an_effect(tmp_path, crash_point):
             lambda: calls.append("duplicate") or {"outcome": "incorrect"},
             encode=lambda verdict: verdict,
             decode=lambda verdict: verdict,
+            retain_receipt=True,
         )
     assert calls == ([] if crash_point == "after_reserve" else ["wire"])
     expected = ReservationState.ABORTED if crash_point == "after_reserve" else ReservationState.POSSIBLY_SENT
     assert restarted.current("submit:42:one").state is expected
+    if crash_point == "after_effect":
+        recovered = restarted.current("submit:42:one")
+        assert recovered.retain_objects is True
+        assert json.loads(restarted.object_path(recovered).read_text())["state"] == "possibly-sent"
 
 
 def test_exhaustion_refuses_before_the_effect_and_terminal_pool_is_not_borrowed(tmp_path):
@@ -286,6 +292,31 @@ def test_required_receipt_uses_the_effects_precreated_object_and_spent_extent(tm
         authority.reserve("submit:42:two", identity("sha256:two"), NEED)
 
 
+def test_later_retained_grants_do_not_change_an_earlier_receipts_capacity_fact(tmp_path):
+    profile = WriteProfile(
+        ordinary=Capacity(0, 0, 0),
+        shared=Capacity(8_192, 2, 6),
+        terminal=Capacity(0, 0, 0),
+    )
+    authority = WriteAuthority(tmp_path, profile)
+
+    for index in range(2):
+        ReservedEffect(authority).execute(
+            f"submit:42:{index}",
+            identity(f"sha256:{index}"),
+            NEED,
+            lambda: {"outcome": "incorrect"},
+            encode=lambda verdict: verdict,
+            decode=lambda verdict: verdict,
+            retain_receipt=True,
+        )
+
+    first = authority.current("submit:42:0")
+    first_receipt = authority.object_path(first)
+    assert json.loads(first_receipt.read_text())["grant_remaining_bytes"] == 4_096
+    assert authority.verify_receipt(first_receipt)["state"] == "committed"
+
+
 def _controlled_proof_observation(root):
     crash_outcomes = {}
     for crash_point in ("before_reserve", "after_reserve", "after_effect"):
@@ -305,14 +336,21 @@ def _controlled_proof_observation(root):
                 lambda: calls.append("wire") or {"outcome": "unread"},
                 encode=lambda verdict: verdict,
                 decode=lambda verdict: verdict,
+                retain_receipt=True,
             )
         authority.close()
         restarted = WriteAuthority(crash_root, PROFILE)
         current = restarted.current("submit:42:one")
+        receipt_state = (
+            json.loads(restarted.object_path(current).read_text())["state"]
+            if current is not None and current.retain_objects
+            else "absent"
+        )
         restarted.close()
         crash_outcomes[crash_point] = {
             "durable_state": current.state.value if current is not None else "absent",
             "effect_count": len(calls),
+            "receipt_state": receipt_state,
         }
 
     physical_root = root / "physical"
@@ -400,7 +438,7 @@ def test_controlled_proof_matches_independently_executed_boundaries(tmp_path):
 
 def test_receipt_binds_profile_identity_capacity_and_durable_trace(tmp_path):
     authority = WriteAuthority(tmp_path, PROFILE)
-    reservation = authority.reserve("submit:42:one", identity(), NEED)
+    reservation = authority.reserve("submit:42:one", identity(), NEED, retain_objects=True)
     authority.start(reservation)
     authority.commit(
         reservation,

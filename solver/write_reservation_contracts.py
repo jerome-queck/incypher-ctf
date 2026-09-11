@@ -103,6 +103,7 @@ class WriteReservation:
     observation: Mapping[str, Any] | None = None
     boot_id: str = ""
     retain_objects: bool = False
+    grant_remaining_bytes: int = 0
 
     def transitioned(
         self,
