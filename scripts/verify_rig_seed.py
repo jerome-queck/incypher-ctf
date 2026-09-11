@@ -19,6 +19,25 @@ SANITIZATION = {
     "host_paths_excluded": True,
     "secrets_excluded": True,
 }
+RECEIPT_FIELDS = {
+    "schema",
+    "fixture_id",
+    "started_at",
+    "finished_at",
+    "candidate_digest",
+    "candidate_profile",
+    "image_digests",
+    "infrastructure_valid",
+    "infrastructure_failure",
+    "solver_outcome",
+    "solver_exit_code",
+    "solver_surface",
+    "control_plane_reachable",
+    "sanitization",
+}
+PROFILE_FIELDS = {"board_url", "target_url", "run_id", "run_seconds", "state_storage"}
+HOST_PATH = re.compile(r"(?:^|[\s\"'])(?:/Users/|/home/|/var/folders/|[A-Za-z]:\\)")
+FORBIDDEN_TEXT = ("-----begin private key-----", "signing-key", ".rig-private", "oracle")
 
 
 def verify_lock(lock_path: Path) -> int:
@@ -85,8 +104,9 @@ def _verify_receipt(
     expected: dict[str, object],
     lock: dict[str, object],
 ) -> None:
-    if receipt["schema"] != "rig-seed/v1":
-        raise ValueError("receipt schema is invalid")
+    if set(receipt) != RECEIPT_FIELDS or receipt.get("schema") != "rig-seed/v1":
+        raise ValueError("receipt schema or fields are invalid")
+    _verify_sanitized_content(receipt)
     if receipt["candidate_digest"] != lock["candidate_digest"]:
         raise ValueError("receipt candidate digest does not match the lock")
     if receipt["image_digests"] != lock["image_digests"]:
@@ -97,14 +117,69 @@ def _verify_receipt(
         raise ValueError("receipt reports reachable control authority")
     if receipt["sanitization"] != SANITIZATION:
         raise ValueError("receipt sanitization is incomplete")
+    profile = receipt["candidate_profile"]
+    if not isinstance(profile, dict) or set(profile) != PROFILE_FIELDS:
+        raise ValueError("receipt candidate profile fields are invalid")
+    if profile["board_url"] != "http://board:8080" or profile["target_url"] != "http://target:8080":
+        raise ValueError("receipt candidate profile surface is invalid")
+    if type(profile["run_seconds"]) is not int or profile["run_seconds"] != 1:
+        raise ValueError("receipt candidate profile duration is invalid")
+    if profile["state_storage"] != "isolated_tmpfs":
+        raise ValueError("receipt candidate profile bounds are invalid")
+    if str(uuid.UUID(profile["run_id"])) != profile["run_id"]:
+        raise ValueError("receipt candidate profile run ID is invalid")
     if any(receipt[field] != value for field, value in expected.items()):
         raise ValueError("receipt outcome does not match its declared proof")
+    _verify_result(receipt)
     if str(uuid.UUID(receipt["fixture_id"])) != receipt["fixture_id"]:
         raise ValueError("fixture identity is not an opaque canonical UUID")
     started_at = _timestamp(receipt["started_at"])
     finished_at = _timestamp(receipt["finished_at"])
     if finished_at < started_at:
         raise ValueError("receipt timestamps are reversed")
+
+
+def _verify_result(receipt: dict[str, object]) -> None:
+    valid = receipt["infrastructure_valid"]
+    failure = receipt["infrastructure_failure"]
+    outcome = receipt["solver_outcome"]
+    exit_code = receipt["solver_exit_code"]
+    if not isinstance(valid, bool):
+        raise ValueError("receipt infrastructure validity is invalid")
+    if failure not in {None, "target_unavailable", "candidate_launch_failed"}:
+        raise ValueError("receipt infrastructure failure is invalid")
+    if valid != (failure is None):
+        raise ValueError("receipt infrastructure result is inconsistent")
+    if outcome == "not_observed":
+        if valid or exit_code is not None:
+            raise ValueError("receipt unobserved Solver result is inconsistent")
+        return
+    if outcome not in {"succeeded", "failed"}:
+        raise ValueError("receipt Solver outcome is invalid")
+    if not valid or type(exit_code) is not int or not 0 <= exit_code <= 255:
+        raise ValueError("receipt observed Solver result is inconsistent")
+    if (outcome == "succeeded") != (exit_code == 0):
+        raise ValueError("receipt Solver outcome disagrees with its exit code")
+
+
+def _verify_sanitized_content(value: object, *, field: str = "") -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError("receipt contains a non-text field")
+            lowered = key.lower()
+            if field != "sanitization" and any(term in lowered for term in ("oracle", "secret", "private_key")):
+                raise ValueError("receipt contains a forbidden field")
+            _verify_sanitized_content(nested, field=key)
+        return
+    if isinstance(value, list):
+        for nested in value:
+            _verify_sanitized_content(nested, field=field)
+        return
+    if isinstance(value, str):
+        lowered = value.lower()
+        if HOST_PATH.search(value) or any(term in lowered for term in FORBIDDEN_TEXT):
+            raise ValueError("receipt contains forbidden or host-private content")
 
 
 def _verify_signature(receipt_path: Path, public_key_path: Path, signature: bytes) -> None:

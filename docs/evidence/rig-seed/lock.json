@@ -1,23 +1,24 @@
 {
   "candidate_digest": "sha256:0f39d11f45b144d00b530846f9a6df5a71c3c1150c02df0029b292f27f49ecf6",
   "image_digests": {
-    "board": "sha256:0e046f492646e08ed682b8caad5d7fec5fc8e7a6e91ca7f93b62b68747d5e31f",
-    "target": "sha256:0e046f492646e08ed682b8caad5d7fec5fc8e7a6e91ca7f93b62b68747d5e31f"
+    "board": "sha256:06d2599278ddb3c8dc251c6a7897574ee8edc8c91044a7655e4a81ed00882fd4",
+    "target": "sha256:06d2599278ddb3c8dc251c6a7897574ee8edc8c91044a7655e4a81ed00882fd4"
   },
   "proofs": [
     {
       "expected": {
         "infrastructure_failure": null,
         "infrastructure_valid": true,
+        "solver_exit_code": 2,
         "solver_outcome": "failed"
       },
       "name": "solver-failure",
       "public_key": "solver-failure.public.pem",
       "receipt": "solver-failure.receipt.json",
       "sha256": {
-        "public_key": "adf908694398628e6e4dc8918b8ccb24bb8c36102e358e6103ff8cea8a03d6a8",
-        "receipt": "8d5be76ef2192f39930aec28c2d8e779dcf24d90c3d3601e4036a5a9636ce7c9",
-        "signature": "aacac5c155201d4b71c22f69fe3df2a7f4eb06c5f50e4205c731512927d7d119"
+        "public_key": "902a1915c7a8245e81abdb7321b5c3aea15204d94eedc4a4c21d411f90448c86",
+        "receipt": "5f2de7ca2ed595c3d8cd93a1583be3db4f625d190e3949e0cad18d0182ee6157",
+        "signature": "fce28a8845ac138350a1ad45e727756a19c498afc4f83e9456b5b18dcff2a949"
       },
       "signature": "solver-failure.receipt.sig.b64"
     },
@@ -25,20 +26,21 @@
       "expected": {
         "infrastructure_failure": "target_unavailable",
         "infrastructure_valid": false,
+        "solver_exit_code": null,
         "solver_outcome": "not_observed"
       },
       "name": "rig-failure",
       "public_key": "rig-failure.public.pem",
       "receipt": "rig-failure.receipt.json",
       "sha256": {
-        "public_key": "6ef345ef65b6829c445662ab8f377217444d6f0180d5cb7fc9011d2459ba1346",
-        "receipt": "2e401d7ac0467a6fadbe9644a57171aa8682faaf829aa61609d9a063481d3f68",
-        "signature": "1c3d32619a65c425a93d09cbf0d3a79743429aa5fcbe230f7ba8d39d08b41d98"
+        "public_key": "251701893815f42fac7ec3a5fc320039a2c7ff7be9862cfc24e5960f7fd22e93",
+        "receipt": "1f99af4d705a68b868985395572e4905cb36d63d6fce913104164fb3b8480bf4",
+        "signature": "cc744db15b73de76a5061d444cb34226191a4489e425c049680c8ac3086b3d6d"
       },
       "signature": "rig-failure.receipt.sig.b64"
     }
   ],
   "repository": "https://github.com/jerome-queck/incypher-practice-rig",
-  "rig_commit": "65e0820fac758a9a2c66470aa4263f07bfd2d82e",
+  "rig_commit": "a6007eaa6849ad183ac74b02c275dd09c8b18d8a",
   "schema": "rig-seed-lock/v1"
 }
