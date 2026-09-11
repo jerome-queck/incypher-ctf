@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from solver import supervisor as supervisor_module
+from solver.bootstrap_custody import Broker
 from solver.event_store import EventStore, LifecycleRecorded
 from solver.event_store_contracts import BootOpened, RunOpened, TerminalDisposition
 from solver.manifest import generate_manifest
@@ -385,13 +386,17 @@ def test_a_signal_latched_during_launch_is_recorded_and_forwarded(tmp_path):
 def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tmp_path, monkeypatch, capsys):
     trace = []
 
+    class ConfiguredCustody(EmptyCustody):
+        endpoints = {Broker.BOARD: tmp_path / "board.sock"}
+        holdings = {Broker.BOARD: ("CTFD_API_TOKEN", "TEAM_KEY")}
+
     class FakeCustody:
         def __init__(self, **_options) -> None:
             pass
 
-        def open(self, boot_id: str) -> EmptyCustody:
+        def open(self, boot_id: str) -> ConfiguredCustody:
             trace.append(f"credential-custody:{boot_id}")
-            return EmptyCustody()
+            return ConfiguredCustody()
 
     monkeypatch.setattr(
         supervisor_module,
@@ -408,15 +413,29 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
         "preflight_isolation",
         lambda *_args, **_kwargs: trace.append("strict-isolation"),
     )
-    monkeypatch.setattr(
-        supervisor_module,
-        "launch_boot",
-        lambda boot_id, _environ, _pool: trace.append(f"run-controller:{boot_id}") or ExitedBoot(0),
-    )
+
+    def launch(boot_id, environment, _pool):
+        assert "CTFD_API_TOKEN" not in environment
+        assert "TEAM_KEY" not in environment
+        assert environment["INCYPHER_BOARD_BROKER_SOCKET"] == str(tmp_path / "board.sock")
+        assert environment["INCYPHER_BOARD_BROKER_HOLDINGS"] == "CTFD_API_TOKEN,TEAM_KEY"
+        trace.append(f"run-controller:{boot_id}")
+        return ExitedBoot(0)
+
+    monkeypatch.setattr(supervisor_module, "launch_boot", launch)
     monkeypatch.setattr(supervisor_module, "reap_children", lambda: 0)
     monkeypatch.setattr(supervisor_module, "SupervisorCustody", FakeCustody)
 
-    exit_code = supervisor_module.main({"RUN_ID": "run-main"}, state=tmp_path, stay_quiescent=False)
+    exit_code = supervisor_module.main(
+        {
+            "RUN_ID": "run-main",
+            "CTFD_URL": "https://board.example",
+            "CTFD_API_TOKEN": "board-token",
+            "TEAM_KEY": "team-key",
+        },
+        state=tmp_path,
+        stay_quiescent=False,
+    )
 
     assert exit_code == 0
     assert trace == [

@@ -16,7 +16,8 @@ import json
 import pytest
 from solver import board as board_module
 from solver import instance as instance_module
-from solver.board import Board
+from solver.board import Board, Reply
+from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome
 from solver.instance import (
     CHALL_MANAGER_DOWN_AT_SUBMIT,
     DEPLOY_ALREADY_HELD,
@@ -221,6 +222,28 @@ def test_a_two_hundred_that_did_not_deploy_is_recovered_by_reading_rather_than_r
 
     assert answer.shape == DEPLOY_ALREADY_HELD
     assert answer.lease.connection_info == "nc 10.0.0.1 1337"
+
+
+def test_deploy_recovery_uses_the_generation_scoped_broker_read(recorder):
+    wire = Wire(**{f"POST {INSTANCE}": [(200, MANA_EXHAUSTED, "")]})
+
+    class BrokerRead:
+        def read_instance(self, challenge_id):
+            assert challenge_id == 42
+            return BoardBrokerResult(
+                BoardOperation.INSTANCE_READ,
+                BoardOutcome.ANSWERED,
+                Reply("answered", "nc 10.0.0.1 1337", NOON + dt.timedelta(minutes=20)),
+            )
+
+    answer = instances_of(wire, recorder).deploy(
+        Terms.of(INSTANCED),
+        attempt_id="a1",
+        recovery_reader=BrokerRead(),
+    )
+
+    assert answer.shape == DEPLOY_ALREADY_HELD
+    assert wire.times_asked(f"GET {INSTANCE}") == 0
 
 
 def test_a_two_hundred_that_did_not_deploy_and_holds_nothing_is_transient(recorder):

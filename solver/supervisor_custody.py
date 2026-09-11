@@ -7,6 +7,7 @@ from pathlib import Path
 
 from solver import boot
 from solver.boot import Refusal
+from solver.board_broker import denied_probe
 from solver.bootstrap_custody import BootstrapCustody, BootstrapResult, Broker, SecretSource
 from solver.capability_evidence import CapabilityEvidence
 from solver.credentials import SECRETS
@@ -56,14 +57,31 @@ class SupervisorCustody:
         result: BootstrapResult | None = None
         try:
             result = custody.transfer(sources, self._environment)
+            board = result.brokers.get(Broker.BOARD)
+            if board is not None:
+                result.endpoints[Broker.BOARD] = board.configure_board(
+                    state=self._state,
+                    run_id=self._run_id,
+                    boot_id=boot_id,
+                    url=self._environment.get("CTFD_URL", ""),
+                )
             probe_result = self._probe_executor(result, fixtures)
-            CapabilityEvidence(
+            evidence = CapabilityEvidence(
                 self._state,
                 self._run_id,
                 boot_id,
                 self._redactor,
                 self._timestamp,
-            ).record_executor_probe(probe_result)
+            )
+            socket_refused = True
+            if board is not None:
+                probe_response = denied_probe(
+                    result.endpoints[Broker.BOARD], b"\0".join(bytes(item) for item in fixtures)
+                )
+                socket_refused = evidence.record_socket_probe(probe_response, tuple(bytes(item) for item in fixtures))
+            evidence.record_executor_probe(probe_result)
+            if not socket_refused:
+                raise Refusal(f"{boot.MARK} Board broker socket probe did not prove refusal")
             if not probe_result.memory_complete or not all(clear for _kind, clear in probe_result.checks):
                 raise Refusal(f"{boot.MARK} executor secret probe did not prove every surface clear")
             return result

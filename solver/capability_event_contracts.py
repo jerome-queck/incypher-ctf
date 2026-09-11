@@ -81,6 +81,25 @@ class ExecutorProbe:
 
 
 @dataclass(frozen=True)
+class SocketProbe:
+    run_id: str
+    boot_id: str
+    evidence_digest: str
+    probe_result: str = "refused"
+    record: CapabilityRecord = CapabilityRecord.PROBE_RECORDED
+
+    def fields(self) -> Mapping[str, object]:
+        return {
+            "run_id": self.run_id,
+            "boot_id": self.boot_id,
+            "probe_kind": "socket",
+            "probe_result": self.probe_result,
+            "evidence_digest": self.evidence_digest,
+            "decision": "recorded",
+        }
+
+
+@dataclass(frozen=True)
 class HandleDecision:
     record: CapabilityRecord
     handle_digest: str
@@ -185,8 +204,8 @@ def _validate_probe(payload: Mapping[str, Any], sequence: int) -> None:
     if (
         not payload["run_id"]
         or not payload["boot_id"]
-        or payload["probe_kind"] not in {"memory", "environment", "argv", "file", "event"}
-        or payload["probe_result"] not in {"clear", "found", "incomplete"}
+        or payload["probe_kind"] not in {"memory", "environment", "argv", "file", "event", "socket"}
+        or payload["probe_result"] not in {"clear", "found", "incomplete", "refused"}
         or payload["decision"] != "recorded"
     ):
         raise InvalidEventError("Capability executor probe evidence is incomplete", sequence=sequence)
@@ -229,5 +248,6 @@ __all__ = [
     "ExecutorProbe",
     "HandleDecision",
     "PeerAuthenticationFailure",
+    "SocketProbe",
     "validate_capability_fact",
 ]

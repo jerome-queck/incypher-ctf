@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from solver.broker_contracts import Broker, BrokerReceipt, transfer_digest
@@ -120,6 +120,11 @@ class BootstrapResult:
     executor_environment: dict[str, str]
     brokers: dict[Broker, BrokerVaultProcess]
     receipts: dict[Broker, BrokerReceipt]
+    endpoints: dict[Broker, Path] = field(default_factory=dict)
+
+    @property
+    def holdings(self) -> dict[Broker, tuple[str, ...]]:
+        return {owner: receipt.secret_names for owner, receipt in self.receipts.items()}
 
     def close(self) -> None:
         first_error = None

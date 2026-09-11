@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from solver.capability_event_contracts import EnvironmentCutover, ExecutorProbe
+from solver.capability_event_contracts import EnvironmentCutover, ExecutorProbe, SocketProbe
 from solver.event_store import CAPABILITY_CUSTODY_RECORDED, CapabilityCustodyRecorded, EventStore
 from solver.event_store_storage import canonical_bytes
 from solver.env_cutover import EnvCutoverResult
@@ -67,6 +67,37 @@ class CapabilityEvidence:
                 ),
                 body=b"",
             )
+
+    def record_socket_probe(self, response: bytes, fixtures: tuple[bytes, ...]) -> bool:
+        """Bind one actual denied broker response to the live bootstrap fixtures."""
+
+        import json
+
+        try:
+            document = json.loads(response)
+            outcome = document["result"]["outcome"]
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError("socket probe did not return a typed Board refusal") from error
+        leaked = any(fixture in response or fixture.hex().encode() in response for fixture in fixtures)
+        refused = outcome == "capability-refused"
+        basis = {
+            "response_digest": hashlib.sha256(response).hexdigest(),
+            "fixture_digests": sorted(hashlib.sha256(fixture).hexdigest() for fixture in fixtures),
+        }
+        self._store.append(
+            CapabilityCustodyRecorded(
+                event_id=self._event_id(),
+                fact=SocketProbe(
+                    run_id=self._run_id,
+                    boot_id=self._boot_id,
+                    evidence_digest=hashlib.sha256(canonical_bytes(basis)).hexdigest(),
+                    probe_result="refused" if refused and not leaked else "found",
+                ),
+                ts=self._timestamp(),
+            ),
+            body=b"",
+        )
+        return refused and not leaked
 
     def _event_id(self) -> str:
         events = self._store.events()

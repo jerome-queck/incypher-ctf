@@ -11,7 +11,8 @@ import json
 import re
 from dataclasses import replace
 
-from solver.board import Board
+from solver.board import Board, Reply
+from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome
 from solver.codex import Credential, Child
 from solver.flag import Flags, Pace, ReplayLimits
 from solver.instance import Instances
@@ -232,7 +233,18 @@ class Agent:
 
 
 def solver(
-    tmp_path, wire, agent, clock, *, lasting=3600.0, dials=DIALS, cycle_seconds=300.0, event=RULES.event, work_root=None
+    tmp_path,
+    wire,
+    agent,
+    clock,
+    *,
+    lasting=3600.0,
+    dials=DIALS,
+    cycle_seconds=300.0,
+    event=RULES.event,
+    work_root=None,
+    board_broker_path=None,
+    board_broker_boot_id="",
 ):
     """Everything `solver/__main__.py` composes, with the clock and the child under the test's hand.
 
@@ -276,6 +288,8 @@ def solver(
         idle_seconds=30.0,
         now=clock,
         sleep=lambda seconds: clock.tick(seconds),
+        board_broker_path=board_broker_path,
+        board_broker_boot_id=board_broker_boot_id,
     )
     return run, recorder
 
@@ -338,6 +352,73 @@ def test_a_run_that_crashes_still_ends_and_still_says_so(tmp_path):
 
 
 # ---------------------------------------------------------------- working Attempts
+
+
+def test_instance_recovery_opens_the_production_broker_client_with_full_binding(tmp_path, monkeypatch):
+    clock = Clock()
+
+    class RecoveringWire(Wire):
+        def __init__(self):
+            super().__init__(count=1, mana={"used": 0, "total": 4})
+            self.listed[0]["type"] = "dynamic_iac"
+
+        def transport(self, request):
+            path = request.full_url[len(BOARD) :]
+            if path == "/plugins/ctfd-chall-manager/instances":
+                return (
+                    200,
+                    b"<table><thead><tr><th>Challenge</th><th>Until</th></tr></thead><tbody></tbody></table>",
+                    "",
+                )
+            if path == "/api/v1/plugins/ctfd-chall-manager/instance":
+                return self._answer({"message": "already held"})[:2] + ("",)
+            return super().transport(request)
+
+    wire = RecoveringWire()
+    observed = {}
+
+    class Reader:
+        def read_instance(self, challenge_id):
+            observed["challenge_id"] = challenge_id
+            return BoardBrokerResult(
+                BoardOperation.INSTANCE_READ,
+                BoardOutcome.ANSWERED,
+                Reply("answered", "nc 10.0.0.1 1337", NOON + dt.timedelta(minutes=20)),
+            )
+
+        def close(self):
+            observed["closed"] = True
+
+    def open_client(socket_path, binding, *, scope):
+        observed.update(socket_path=socket_path, binding=binding, scope=scope)
+        return Reader()
+
+    monkeypatch.setattr("solver.run.BoardBrokerClient.open", open_client)
+    run, _recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=1000.0,
+        board_broker_path=tmp_path / "board.sock",
+        board_broker_boot_id="boot-000001",
+    )
+
+    run.work()
+
+    binding = observed["binding"]
+    assert observed["socket_path"] == tmp_path / "board.sock"
+    assert observed["scope"] == "board.instance.read"
+    assert (
+        binding.run_id,
+        binding.boot_id,
+        binding.generation_id,
+        binding.lane_id,
+        binding.attempt_id,
+        binding.step_id,
+    ) == ("gate", "boot-000001", "generation-000001", "lane-1", "1-1", "step-1")
+    assert observed["challenge_id"] == 1
+    assert observed["closed"] is True
 
 
 def test_the_run_works_at_least_five_distinct_challenges_and_requeues_without_deadlocking(tmp_path):

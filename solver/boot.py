@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from solver.codex import CODEX_HOME, Credential
+from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV
 from solver.credentials import NOT_SECRETS, SECRETS
 
 MARK = "[boot]"
@@ -157,7 +158,8 @@ def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None
             f"an empty key occupies its slot in a client's credential search and authenticates with "
             f"nothing. Delete the line rather than blanking it"
         )
-    if missing := [name for name in REQUIRED if not environ.get(name, "").strip()]:
+    brokered = _broker_holdings(environ)
+    if missing := [name for name in REQUIRED if not environ.get(name, "").strip() and name not in brokered]:
         raise Refusal(
             f"{MARK} unset: {', '.join(missing)}. A Run cannot be pointed at a Board without both a "
             f"URL and a token, and an unauthenticated read would be a Run that cannot submit"
@@ -166,7 +168,7 @@ def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None
     chain = _chain(environ.get(CODEX_MODEL, "").strip() or DEFAULT_MODEL, homes or _homes(environ))
     return Setup(
         url=environ[CTFD_URL].strip().rstrip("/"),
-        token=environ[CTFD_API_TOKEN].strip(),
+        token=environ.get(CTFD_API_TOKEN, "").strip(),
         run_id=run_id,
         model=chain[0].model,
         chain=chain,
@@ -182,7 +184,17 @@ def holdings_of(environ: Mapping[str, str]) -> dict[str, str]:
     redactor is a credential this check already reads. That is the whole of the criterion: one list,
     two readers, and no way for a name to be declared in one place and forgotten in the other.
     """
-    return {name: _holding(environ, name) for name in (*SECRETS, *NOT_SECRETS)}
+    holdings = {name: _holding(environ, name) for name in (*SECRETS, *NOT_SECRETS)}
+    for name in _broker_holdings(environ):
+        holdings[name] = SET
+    return holdings
+
+
+def _broker_holdings(environ: Mapping[str, str]) -> frozenset[str]:
+    if not environ.get(BOARD_BROKER_SOCKET_ENV, "").strip():
+        return frozenset()
+    named = {name for name in environ.get(BOARD_BROKER_HOLDINGS_ENV, "").split(",") if name}
+    return frozenset(named & set(SECRETS))
 
 
 def _holding(environ: Mapping[str, str], name: str) -> str:
