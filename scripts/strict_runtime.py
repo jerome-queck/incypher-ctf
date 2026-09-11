@@ -9,11 +9,14 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import runtime
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+import runtime  # noqa: E402
+from solver.attempt_executor_contracts import RuntimeBinding  # noqa: E402
 
 CGROUP_PARENT = "incypher-v2-strict"
 CGROUP_SOURCE = "/sys/fs/cgroup/system.slice/incypher-v2-strict"
@@ -21,14 +24,6 @@ IMAGE_TAG = "incypher-solver:strict"
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 CommandRunner = Callable[..., Any]
-
-
-@dataclass(frozen=True)
-class ImageBinding:
-    image_id: str
-    manifest_digest: str
-    config_digest: str
-    platform: str
 
 
 def _subprocess_run(command: list[str], **kwargs: Any) -> Any:
@@ -41,7 +36,7 @@ def container_command(
     env_file: Path | None,
     state: Path | None,
     preflight_only: bool,
-    binding: ImageBinding | None = None,
+    binding: RuntimeBinding | None = None,
 ) -> list[str]:
     """Return the one Docker command allowed to start the strict Solver image."""
     command = ["docker", "run"]
@@ -83,9 +78,9 @@ def container_command(
         command.extend(
             [
                 "--env",
-                f"INCYPHER_IMAGE_MANIFEST={binding.manifest_digest}",
+                f"INCYPHER_IMAGE_MANIFEST={binding.image_manifest_digest}",
                 "--env",
-                f"INCYPHER_IMAGE_CONFIG={binding.config_digest}",
+                f"INCYPHER_IMAGE_CONFIG={binding.image_config_digest}",
                 "--env",
                 f"INCYPHER_IMAGE_PLATFORM={binding.platform}",
             ]
@@ -128,7 +123,7 @@ def tool_probe_command(
 
 
 def attempt_resource_probe_command(
-    binding: ImageBinding,
+    binding: RuntimeBinding,
     state: Path,
 ) -> list[str]:
     """Run the semantic Resource fixtures in the same exact strict image."""
@@ -166,7 +161,7 @@ def _checked(command: list[str], runner: CommandRunner) -> Any:
     return result
 
 
-def build_image(runner: CommandRunner) -> ImageBinding:
+def build_image(runner: CommandRunner) -> RuntimeBinding:
     with tempfile.TemporaryDirectory(prefix="strict-image-metadata-") as temporary:
         metadata_path = Path(temporary) / "metadata.json"
         _checked(
@@ -204,11 +199,11 @@ def build_image(runner: CommandRunner) -> ImageBinding:
         or not IMAGE_ID.fullmatch(manifest)
         or not isinstance(config, str)
         or not IMAGE_ID.fullmatch(config)
-        or inspected[0] != manifest
+        or inspected[0] not in {manifest, config}
         or inspected[1] not in {"linux/arm64", "linux/amd64"}
     ):
         raise RuntimeError("BuildKit did not bind one loaded OCI image")
-    return ImageBinding(inspected[0], manifest, config, inspected[1])
+    return RuntimeBinding(inspected[0], manifest, config, inspected[1])
 
 
 def _validate_path(label: str, path: Path, home: Path) -> None:

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import strict_runtime
+from solver.attempt_executor_contracts import RuntimeBinding
 
 
 IMAGE_ID = "sha256:" + "a" * 64
@@ -15,8 +16,8 @@ MANIFEST = IMAGE_ID
 CONFIG = "sha256:" + "c" * 64
 
 
-def image_binding() -> strict_runtime.ImageBinding:
-    return strict_runtime.ImageBinding(IMAGE_ID, MANIFEST, CONFIG, "linux/arm64")
+def image_binding() -> RuntimeBinding:
+    return RuntimeBinding(IMAGE_ID, MANIFEST, CONFIG, "linux/arm64")
 
 
 def test_container_command_has_the_fixed_strict_profile() -> None:
@@ -209,6 +210,13 @@ def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
         preflight_only=True,
         binding=image_binding(),
     )
+
+
+def test_build_accepts_a_config_digest_as_the_local_image_identity() -> None:
+    binding = strict_runtime.build_image(Runner(image_id=CONFIG))
+
+    assert binding == RuntimeBinding(CONFIG, MANIFEST, CONFIG, "linux/arm64")
+    assert binding.image_manifest_digest != binding.image_config_digest
 
 
 def test_a_failed_strict_run_still_removes_only_the_owned_cgroup(

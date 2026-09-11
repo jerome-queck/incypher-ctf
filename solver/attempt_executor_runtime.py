@@ -275,15 +275,7 @@ class AttemptRuntime:
         response: dict[str, object] | None,
     ) -> RuntimeObservation:
         envelope = request.envelope
-        cleanup = self._cleanup(cgroup, envelope.cleanup_seconds)
-        worker_acknowledged = True
-        if cause is not None and (response is None or response.get("type") not in {"result", "error"}):
-            terminal = _await_worker_result(slot.connection, envelope.cleanup_seconds)
-            worker_acknowledged = terminal is not None
-            if terminal is not None:
-                response = {**(response or {}), **terminal}
-            else:
-                slot.healthy = False
+        cleanup, response, worker_acknowledged = self._cleanup_and_drain(slot, cgroup, envelope, cause, response)
         observed = self._observed(
             envelope,
             baseline,
@@ -307,6 +299,35 @@ class AttemptRuntime:
                 observed,
                 bool(cleanup["complete"]) and worker_acknowledged,
             )
+        return self._observation_from_terminal_response(request, slot, cgroup, sample, cleanup, response, observed)
+
+    def _cleanup_and_drain(
+        self,
+        slot: AttemptSlot,
+        cgroup: Path,
+        envelope: Any,
+        cause: ResourceOutcome | None,
+        response: dict[str, object] | None,
+    ) -> tuple[Mapping[str, object], dict[str, object] | None, bool]:
+        cleanup = self._cleanup(cgroup, envelope.cleanup_seconds)
+        if cause is None or (response is not None and response.get("type") in {"result", "error"}):
+            return cleanup, response, True
+        terminal = _await_worker_result(slot.connection, envelope.cleanup_seconds)
+        if terminal is None:
+            slot.healthy = False
+            return cleanup, response, False
+        return cleanup, {**(response or {}), **terminal}, True
+
+    def _observation_from_terminal_response(
+        self,
+        request: AttemptRequest,
+        slot: AttemptSlot,
+        cgroup: Path,
+        sample: ResourceSample,
+        cleanup: Mapping[str, object],
+        response: dict[str, object] | None,
+        observed: dict[str, int | float | str | bool],
+    ) -> RuntimeObservation:
         assert response is not None
         if response.get("type") == "error":
             observed["launch_failure"] = str(response.get("error", "worker-error"))[:512]
@@ -319,20 +340,17 @@ class AttemptRuntime:
                 observed,
                 bool(cleanup["complete"]),
             )
-        if cleanup["complete"] and not sample.unsafe_workspace:
-            try:
-                _sync_workspace(slot.work_path, request.workspace, self.workspace_limit)
-            except (OSError, ValueError):
-                observed["workspace_sync_failed"] = True
-                return RuntimeObservation(
-                    ResourceOutcome.FILESYSTEM,
-                    None,
-                    _output(response),
-                    str(cgroup),
-                    slot.uid,
-                    observed,
-                    bool(cleanup["complete"]),
-                )
+        if cleanup["complete"] and not sample.unsafe_workspace and not self._sync_result_workspace(request, slot):
+            observed["workspace_sync_failed"] = True
+            return RuntimeObservation(
+                ResourceOutcome.FILESYSTEM,
+                None,
+                _output(response),
+                str(cgroup),
+                slot.uid,
+                observed,
+                True,
+            )
         return RuntimeObservation(
             ResourceOutcome.EXITED,
             _int_or_none(response.get("exit_code")),
@@ -342,6 +360,13 @@ class AttemptRuntime:
             observed,
             bool(cleanup["complete"]),
         )
+
+    def _sync_result_workspace(self, request: AttemptRequest, slot: AttemptSlot) -> bool:
+        try:
+            _sync_workspace(slot.work_path, request.workspace, self.workspace_limit)
+        except (OSError, ValueError):
+            return False
+        return True
 
     def _observed(
         self,
