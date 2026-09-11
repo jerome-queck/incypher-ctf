@@ -221,7 +221,12 @@ class Recorder:
         for channel in (OBSERVATIONS, CLAIMS):
             (self.run_dir / channel).mkdir(parents=True, exist_ok=True)
         self.event_store = EventStore(Path(state), run_id=run_id, redactor=redactor, append_hook=event_store_hook)
-        self.write_authority = WriteAuthority(self.run_dir, write_profile, hook=write_authority_hook)
+        self.write_authority = WriteAuthority(
+            self.run_dir,
+            write_profile,
+            redactor=redactor,
+            hook=write_authority_hook,
+        )
         self.generations = GenerationFence(
             Path(state),
             run_id,

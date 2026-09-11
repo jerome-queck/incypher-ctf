@@ -8,7 +8,7 @@ import pytest
 
 from solver.write_reservation import (
     Capacity,
-    CONTROLLED_CRASH_OUTCOMES,
+    EffectIdentity,
     EffectIndeterminate,
     Pool,
     ReservationConflict,
@@ -19,6 +19,7 @@ from solver.write_reservation import (
     WriteProfile,
     manifest_receipt,
 )
+from solver.write_reservation_proof import load_controlled_proof
 from solver.manifest import generate_manifest
 from solver.event_store_storage import canonical_bytes
 from test_manifest import release_candidate_profile
@@ -33,7 +34,7 @@ NEED = Capacity(bytes=4_096, objects=1, operations=3)
 
 
 def identity(candidate="sha256:candidate-one"):
-    return {"operation": "board.submit", "challenge_id": "42", "candidate_digest": candidate}
+    return EffectIdentity("board.submit", "42", candidate)
 
 
 def test_full_ordinary_area_preserves_physical_authority_and_terminal_capacity(tmp_path):
@@ -43,26 +44,36 @@ def test_full_ordinary_area_preserves_physical_authority_and_terminal_capacity(t
     terminal_extent = authority.extent_path(Pool.TERMINAL)
 
     ordinary_need = Capacity(bytes=8_192, objects=1, operations=3)
-    ordinary = authority.reserve("ordinary:bulk", {"operation": "body.write"}, ordinary_need, pool=Pool.ORDINARY)
+    ordinary = authority.reserve(
+        "ordinary:bulk",
+        EffectIdentity("body.write", "bulk"),
+        ordinary_need,
+        pool=Pool.ORDINARY,
+    )
     authority.object_path(ordinary).write_bytes(b"x" * ordinary_need.bytes)
     authority.start(ordinary)
-    authority.commit(ordinary, {"digest": "sha256:ordinary"})
+    authority.commit(ordinary, {"digest": "sha256:ordinary"}, replenish=False)
     assert ordinary_extent.stat().st_size == 0
     with pytest.raises(ReservationUnavailable):
-        authority.reserve("ordinary:second", {"operation": "body.write"}, ordinary_need, pool=Pool.ORDINARY)
+        authority.reserve(
+            "ordinary:second",
+            EffectIdentity("body.write", "second"),
+            ordinary_need,
+            pool=Pool.ORDINARY,
+        )
 
     reservation = authority.reserve("submit:42:one", identity(), NEED)
     authority.start(reservation)
     authority.commit(reservation, {"outcome": "incorrect", "http_status": 200})
     terminal = authority.record_terminal(
         "run:terminal",
-        {"operation": "run.terminal", "run_id": "run-1"},
+        EffectIdentity("run.terminal", "run-1"),
         Capacity(bytes=4_096, objects=0, operations=3),
         classification="storage-terminal",
     )
 
-    assert shared_extent.stat().st_size < PROFILE.shared.bytes
-    assert terminal_extent.stat().st_size < PROFILE.terminal.bytes
+    assert shared_extent.stat().st_size == PROFILE.shared.bytes
+    assert terminal_extent.stat().st_size == PROFILE.terminal.bytes
     assert authority.current(reservation.key).state is ReservationState.COMMITTED
     assert WriteAuthority(tmp_path, PROFILE).current(terminal.key).state is ReservationState.TERMINAL
 
@@ -203,6 +214,97 @@ def test_concurrent_distinct_effects_cannot_overcommit_one_physical_grant(tmp_pa
     assert authority.extent_path(Pool.TERMINAL).stat().st_size == profile.terminal.bytes
 
 
+def test_closed_transactions_release_the_reusable_physical_grant(tmp_path):
+    profile = WriteProfile(
+        ordinary=Capacity(0, 0, 0),
+        shared=Capacity(4_096, 1, 12),
+        terminal=Capacity(0, 0, 0),
+    )
+    authority = WriteAuthority(tmp_path, profile)
+
+    for index in range(4):
+        result = ReservedEffect(authority).execute(
+            f"submit:{index}",
+            identity(f"sha256:{index}"),
+            NEED,
+            lambda index=index: {"outcome": f"answer-{index}"},
+            encode=lambda verdict: verdict,
+            decode=lambda verdict: verdict,
+        )
+        assert result == {"outcome": f"answer-{index}"}
+
+    assert authority.extent_path(Pool.SHARED).stat().st_size == profile.shared.bytes
+
+
+def _controlled_proof_observation(root):
+    crash_outcomes = {}
+    for crash_point in ("before_reserve", "after_reserve", "after_effect"):
+        calls = []
+
+        def crash(point, target=crash_point):
+            if point == target:
+                raise RuntimeError(f"controlled crash at {point}")
+
+        crash_root = root / crash_point
+        authority = WriteAuthority(crash_root, PROFILE, hook=crash)
+        with pytest.raises(RuntimeError, match="controlled crash"):
+            ReservedEffect(authority).execute(
+                "submit:42:one",
+                identity(),
+                NEED,
+                lambda: calls.append("wire") or {"outcome": "unread"},
+                encode=lambda verdict: verdict,
+                decode=lambda verdict: verdict,
+            )
+        current = WriteAuthority(crash_root, PROFILE).current("submit:42:one")
+        crash_outcomes[crash_point] = {
+            "durable_state": current.state.value if current is not None else "absent",
+            "effect_count": len(calls),
+        }
+
+    physical_root = root / "physical"
+    authority = WriteAuthority(physical_root, PROFILE)
+    ordinary = authority.reserve(
+        "ordinary:full",
+        EffectIdentity("body.write", "full"),
+        Capacity(8_192, 1, 3),
+        pool=Pool.ORDINARY,
+    )
+    authority.object_path(ordinary).write_bytes(b"x" * 8_192)
+    authority.start(ordinary)
+    authority.commit(ordinary, {"digest": "sha256:ordinary"}, replenish=False)
+    ReservedEffect(authority).execute(
+        "submit:42:one",
+        identity(),
+        NEED,
+        lambda: {"outcome": "incorrect"},
+        encode=lambda verdict: verdict,
+        decode=lambda verdict: verdict,
+    )
+    terminal = authority.record_terminal(
+        "run:terminal",
+        EffectIdentity("run.terminal", "run-1"),
+        Capacity(4_096, 0, 3),
+        classification="storage-terminal",
+    )
+    physical_result = {
+        "ordinary_extent_remaining": authority.extent_path(Pool.ORDINARY).stat().st_size,
+        "ordinary_state": authority.current(ordinary.key).state.value,
+        "shared_effect_state": authority.current("submit:42:one").state.value,
+        "terminal_state": terminal.state.value,
+    }
+    return {"crash_point_outcomes": crash_outcomes, "physical_exhaustion_result": physical_result}
+
+
+def test_controlled_proof_matches_independently_executed_boundaries(tmp_path):
+    proof = load_controlled_proof()
+
+    assert _controlled_proof_observation(tmp_path) == {
+        "crash_point_outcomes": proof["crash_point_outcomes"],
+        "physical_exhaustion_result": proof["physical_exhaustion_result"],
+    }
+
+
 def test_receipt_binds_profile_identity_capacity_and_durable_trace(tmp_path):
     authority = WriteAuthority(tmp_path, PROFILE)
     reservation = authority.reserve("submit:42:one", identity(), NEED)
@@ -216,7 +318,9 @@ def test_receipt_binds_profile_identity_capacity_and_durable_trace(tmp_path):
     assert receipt["profile_digest"] == authority.profile_digest
     assert receipt["effect_fingerprint"] == reservation.effect_fingerprint
     assert receipt["need"] == {"bytes": 4_096, "objects": 1, "operations": 3}
-    assert receipt["crash_point_outcomes"] == CONTROLLED_CRASH_OUTCOMES
+    proof = load_controlled_proof()
+    assert receipt["crash_point_outcomes"] == proof["crash_point_outcomes"]
+    assert receipt["physical_exhaustion_result"] == proof["physical_exhaustion_result"]
     assert receipt["manifest_link"] == {
         "row_id": "core.canonical-state-replay-restart",
         "receipt_ref": "receipt:write-reservation",

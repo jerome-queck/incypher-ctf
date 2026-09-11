@@ -86,7 +86,7 @@ from solver.record import NO_MODEL, SOURCE_SOLVER, Recorder
 from solver.shell import run
 from solver.stall import replayable
 from solver.wrapper import compiled, found_in
-from solver.write_reservation import Capacity, ReservedEffect
+from solver.write_reservation import Capacity, EffectIdentity, ReservedEffect
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
 # gives: a reader of a stream can tell what the Solver said from what a tool said, and never takes
@@ -627,11 +627,7 @@ class Flags:
 
         verdict = ReservedEffect(self._recorder.write_authority).execute(
             key,
-            {
-                "operation": "board.submit",
-                "challenge_id": str(challenge_id),
-                "candidate_digest": candidate_digest,
-            },
+            EffectIdentity("board.submit", str(challenge_id), candidate_digest),
             SUBMISSION_WRITE_NEED,
             lambda: self._board.submit(challenge_id, candidate.text),
             encode=lambda answer: {

@@ -197,6 +197,35 @@ def test_submission_reserves_authority_before_the_wire_and_commits_after_its_ver
     assert submitted(recorder) == [f"[flag] submit {FLAG}"]
 
 
+def test_reserved_verdict_survives_failed_v1_observation_sanitized_and_bounded(tmp_path, monkeypatch):
+    secret = "board-secret-that-must-never-reach-state"
+    recorder = Recorder(
+        tmp_path / "state",
+        run_id="run-1",
+        redactor=Redactor({"BOARD_TOKEN": secret}),
+    )
+    message = f"accepted {secret} " + "hostile-board-body" * 200
+    wire = Wire(graded(CORRECT, message))
+    flags = flags_of(recorder, wire)
+    monkeypatch.setattr(flags, "_record", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("full")))
+
+    outcome = spend(flags, [Candidate(FLAG, REPRODUCED)])
+
+    key = f"board-submit:{CHALLENGE}:{hashlib.sha256(FLAG.encode()).hexdigest()}"
+    reservation = recorder.write_authority.current(key)
+    assert outcome.solved is True
+    assert reservation.state is ReservationState.COMMITTED
+    assert reservation.observation["outcome"] == CORRECT
+    assert reservation.observation["http_status"] == 200
+    trace = json.dumps(recorder.write_authority.trace(key))
+    assert secret not in trace
+    assert "[redacted:BOARD_TOKEN]" in trace
+    assert "[truncated:" in trace
+    receipt = recorder.write_authority.write_receipt(key).read_text()
+    assert secret not in receipt
+    assert "[redacted:BOARD_TOKEN]" in receipt
+
+
 def test_a_flag_the_model_only_stated_is_never_authorised_by_its_own_prose(recorder):
     """The whole point. A Claim goes to a channel no check greps, so the only way this string can
     reach a candidate at all is by being nominated — and nominated is not authorised."""
