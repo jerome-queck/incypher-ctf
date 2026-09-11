@@ -46,14 +46,14 @@ def test_the_repository_fragment_assembles_once_and_is_copied_into_the_image(tmp
         )
         == 1
     )
-    assert copy_lines.count("COPY scripts/apply_tool_supply_modes.py /tmp/apply-tool-supply-modes.py") == 1
+    assert copy_lines.count("COPY scripts/apply_tool_supply_modes.py scripts/apply_tool_supply_modes.py") == 1
     install_position = dockerfile.index("xargs apt-get install --yes --no-install-recommends")
     assert install_position < dockerfile.index("COPY tool-supply/generated/rootfs/ /")
     assert install_position < dockerfile.index(
         "COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json"
     )
     assert dockerfile.index("COPY tool-supply/generated/rootfs/ /") < dockerfile.index(
-        "python3 /tmp/apply-tool-supply-modes.py"
+        "python3 -m scripts.apply_tool_supply_modes"
     )
 
     committed = REPO_ROOT / "tool-supply" / "generated"

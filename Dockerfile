@@ -316,11 +316,11 @@ RUN set -eu; \
     rm /tmp/tool-supply-apt-packages.txt
 COPY tool-supply/generated/rootfs/ /
 COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json /opt/solver/tool-supply/
-COPY scripts/apply_tool_supply_modes.py /tmp/apply-tool-supply-modes.py
-RUN python3 /tmp/apply-tool-supply-modes.py \
-      --inventory /opt/solver/tool-supply/inventory.json --root / \
-    && rm /tmp/apply-tool-supply-modes.py
 COPY solver/ solver/
+COPY scripts/apply_tool_supply_modes.py scripts/apply_tool_supply_modes.py
+RUN python3 -m scripts.apply_tool_supply_modes \
+      --inventory /opt/solver/tool-supply/inventory.json --root / \
+    && rm -r scripts
 COPY docs/competitions/*.board.json boards/
 
 # PID 1 is the Supervisor in exec form, with no shell between it and Docker. It owns one

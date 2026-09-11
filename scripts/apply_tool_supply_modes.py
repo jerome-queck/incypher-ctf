@@ -6,17 +6,9 @@ import argparse
 import json
 import os
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-
-def image_path(root: Path, destination: str) -> Path:
-    path = PurePosixPath(destination)
-    if not path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"Tool destination is not absolute and contained: {destination}")
-    target = root.joinpath(*path.parts[1:])
-    if not target.is_file() or target.is_symlink():
-        raise ValueError(f"Tool destination is not a regular file: {destination}")
-    return target
+from solver.image_path import image_path
 
 
 def apply_modes(inventory_path: Path, root: Path) -> int:
@@ -29,7 +21,10 @@ def apply_modes(inventory_path: Path, root: Path) -> int:
             mode = item["mode"]
             if not isinstance(destination, str) or not isinstance(mode, str) or not re.fullmatch(r"0[0-7]{3}", mode):
                 raise ValueError("Tool inventory contains an invalid destination or mode")
-            os.chmod(image_path(root, destination), int(mode, 8))
+            target = image_path(root, destination)
+            if not target.is_file() or target.is_symlink():
+                raise ValueError(f"Tool destination is not a regular file: {destination}")
+            os.chmod(target, int(mode, 8))
             changed += 1
     except (KeyError, TypeError) as error:
         raise ValueError("Tool inventory does not contain a file-mode closure") from error

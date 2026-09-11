@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from solver.image_path import image_path
 from solver.isolation import IsolationReceipt, strict_preflight
 
 INVENTORY = Path("/opt/solver/tool-supply/inventory.json")
@@ -20,13 +21,6 @@ MAX_OUTPUT = 64 * 1024
 
 def _sha(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
-
-
-def _inside(root: Path, absolute: str) -> Path:
-    path = Path(absolute)
-    if not path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"image path is not absolute and contained: {absolute}")
-    return root.joinpath(*path.parts[1:])
 
 
 def observe(
@@ -60,7 +54,7 @@ def observe(
         raise ValueError(f"component is absent from the built image: {component_id}") from error
     observed_files = []
     for declared in component["files"]:
-        installed = _inside(image_root, declared["destination"])
+        installed = image_path(image_root, declared["destination"])
         content = installed.read_bytes()
         if _sha(content) != declared["sha256"]:
             raise ValueError(f"installed file digest mismatch: {declared['destination']}")
@@ -68,10 +62,10 @@ def observe(
             {"destination": declared["destination"], "sha256": declared["sha256"], "size": len(content)}
         )
     observed_files.sort(key=lambda item: item["destination"])
-    entrypoint = _inside(image_root, component["entrypoint"])
+    entrypoint = image_path(image_root, component["entrypoint"])
 
     def mapped(arguments: list[str]) -> list[str]:
-        return [str(_inside(image_root, value)) if value.startswith("/") else value for value in arguments]
+        return [str(image_path(image_root, value)) if value.startswith("/") else value for value in arguments]
 
     options: dict[str, Any] = {
         "capture_output": True,
