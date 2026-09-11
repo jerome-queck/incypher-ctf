@@ -13,6 +13,7 @@ from solver.event_store_contracts import (
     CANONICAL_SCHEMA_VERSION,
     EVENTS_DIRECTORY,
     EVENTS_FILENAME,
+    OBSERVATION_RECORDED,
     RESERVATIONS_FILENAME,
     SEALED_DIRECTORY,
     BlobDigestMismatchError,
@@ -451,6 +452,9 @@ class EventStoreCore:
                 raise InvalidEventError("canonical envelope is missing typed fields", sequence=sequence)
             if run_id != self.run_id:
                 raise InvalidEventError("canonical envelope belongs to another Run", sequence=sequence)
+            if event_type != OBSERVATION_RECORDED:
+                raise InvalidEventError(f"unsupported event type {event_type!r}", sequence=sequence)
+            ObservationRecorded.validate_payload(payload, sequence=sequence)
             blob_digest = payload.get("blob_digest")
             blob_bytes = payload.get("blob_bytes")
             if not isinstance(blob_digest, str) or not isinstance(blob_bytes, int):
