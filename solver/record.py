@@ -45,6 +45,7 @@ from solver.event_store import (
     projection_fields,
 )
 from solver.redaction import Redactor
+from solver.write_reservation import DEFAULT_WRITE_PROFILE, WriteAuthority, WriteProfile
 from solver.work_generation import GenerationFence, GenerationIdentity
 
 # Bumped only for a change that the three stability rules cannot absorb — a field's meaning never
@@ -204,6 +205,8 @@ class Recorder:
         now: Callable[[], dt.datetime] | None = None,
         mono: Callable[[], float] = time.monotonic,
         event_store_hook: Callable[[str], None] | None = None,
+        write_authority_hook: Callable[[str], None] | None = None,
+        write_profile: WriteProfile = DEFAULT_WRITE_PROFILE,
     ) -> None:
         self.run_id = run_id
         self.run_dir = Path(state) / "runs" / run_id
@@ -218,6 +221,7 @@ class Recorder:
         for channel in (OBSERVATIONS, CLAIMS):
             (self.run_dir / channel).mkdir(parents=True, exist_ok=True)
         self.event_store = EventStore(Path(state), run_id=run_id, redactor=redactor, append_hook=event_store_hook)
+        self.write_authority = WriteAuthority(self.run_dir, write_profile, hook=write_authority_hook)
         self.generations = GenerationFence(
             Path(state),
             run_id,

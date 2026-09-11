@@ -70,6 +70,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import time
@@ -85,6 +86,7 @@ from solver.record import NO_MODEL, SOURCE_SOLVER, Recorder
 from solver.shell import run
 from solver.stall import replayable
 from solver.wrapper import compiled, found_in
+from solver.write_reservation import Capacity, ReservedEffect
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
 # gives: a reader of a stream can tell what the Solver said from what a tool said, and never takes
@@ -198,6 +200,10 @@ PATH = re.compile(r"/[^\s'\"$;|&()<>]*")
 # no newline in it is a stream rather than a line, and a Flag longer than this is not a Flag.
 SCAN_BLOCK_BYTES = 1 << 20
 LINE_CARRY_BYTES = 1 << 16
+
+# Complete path for one representative Board effect: durable admission, bounded verdict Observation,
+# and terminal effect classification. Candidate-profile trials replace this conservative slice value.
+SUBMISSION_WRITE_NEED = Capacity(bytes=32 * 1_024, objects=1, operations=3)
 
 # Characters that carry no width at all, so a Flag holding one looks exactly like the Flag that
 # grades. They reach a candidate through a copy out of a rendered page as readily as through malice.
@@ -604,17 +610,43 @@ class Flags:
         the Step that spent them.
         """
         waited = self._paced()
-        verdict = self._board.submit(challenge_id, candidate.text)
-        at = self._now()
-        self._pace.graded(verdict, at)
-        shape = submission_shape({"message": verdict.message})
-        told = (
-            f"{MARK} submitted a {candidate.strength} candidate and the Board graded it "
-            f"{verdict.outcome!r} (HTTP {verdict.http_status}): {verdict.message or 'no message'}"
-            + (f"\n{MARK} {shape}" if shape else "")
-            + (f"\n{MARK} held {waited:.1f}s first, under {self._pace.per_minute} wrong/min" if waited else "")
+        candidate_digest = hashlib.sha256(candidate.text.encode()).hexdigest()
+        key = f"board-submit:{challenge_id}:{candidate_digest}"
+
+        def observe(verdict: Verdict) -> None:
+            at = self._now()
+            self._pace.graded(verdict, at)
+            shape = submission_shape({"message": verdict.message})
+            told = (
+                f"{MARK} submitted a {candidate.strength} candidate and the Board graded it "
+                f"{verdict.outcome!r} (HTTP {verdict.http_status}): {verdict.message or 'no message'}"
+                + (f"\n{MARK} {shape}" if shape else "")
+                + (f"\n{MARK} held {waited:.1f}s first, under {self._pace.per_minute} wrong/min" if waited else "")
+            )
+            self._record(SUBMIT, f"{MARK} submit {candidate.text}", told.encode(), attempt_id, ok=verdict.solved)
+
+        verdict = ReservedEffect(self._recorder.write_authority).execute(
+            key,
+            {
+                "operation": "board.submit",
+                "challenge_id": str(challenge_id),
+                "candidate_digest": candidate_digest,
+            },
+            SUBMISSION_WRITE_NEED,
+            lambda: self._board.submit(challenge_id, candidate.text),
+            encode=lambda answer: {
+                "outcome": answer.outcome,
+                "message": answer.message,
+                "http_status": answer.http_status,
+            },
+            decode=lambda answer: Verdict(
+                outcome=str(answer["outcome"]),
+                message=str(answer["message"]),
+                http_status=int(answer["http_status"]),
+            ),
+            observe=observe,
         )
-        self._record(SUBMIT, f"{MARK} submit {candidate.text}", told.encode(), attempt_id, ok=verdict.solved)
+        shape = submission_shape({"message": verdict.message})
         return Graded(candidate, verdict, shape)
 
     def _paced(self) -> float:
