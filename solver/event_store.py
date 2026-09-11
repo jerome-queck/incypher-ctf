@@ -42,8 +42,11 @@ from solver.event_store_contracts import (
     ProjectionCheck,
     ProjectionMismatchError,
     ReservationStatus,
+    RunNotTerminalError,
+    RunSealedError,
     SequenceGapError,
     TornAppendError,
+    TerminalEventStoreSnapshot,
     UnknownSchemaError,
 )
 from solver.event_store_core import EventStoreCore
@@ -113,6 +116,9 @@ class EventStore:
     def events(self) -> list[CommittedEvent]:
         return self._core.events()
 
+    def terminal_snapshot(self) -> TerminalEventStoreSnapshot:
+        return self._core.terminal_snapshot()
+
     def reservations(self) -> list[EventReservation]:
         return self._core.reservations()
 
@@ -178,11 +184,14 @@ __all__ = [
     "ProjectionMismatchError",
     "projection_fields",
     "ReservationStatus",
+    "RunNotTerminalError",
+    "RunSealedError",
     "RECEIPT_FILENAME",
     "RECEIPT_TYPE",
     "RESERVATIONS_FILENAME",
     "SEALED_DIRECTORY",
     "SequenceGapError",
     "TornAppendError",
+    "TerminalEventStoreSnapshot",
     "UnknownSchemaError",
 ]

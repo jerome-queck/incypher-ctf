@@ -236,6 +236,70 @@ because a Brunner run would *use* it — the chain is automatic, so an overnight
 switch to paid the moment the subscription capped. Absence is the control in both cases; what it is
 protecting against is a leak in one and a bill in the other.
 
+## Scanner vault
+
+Evidence publication reads retained secret history from a distinct generic-password item in the
+macOS login Keychain. `.env` is only the live Board authority: it may confirm that each active value
+is in the vault's `current` set, but it is never a history source. Any legacy `.env.*` overlay makes
+publication refuse.
+
+The Keychain item has service `incypher-ctf.evidence-scanner-vault` and account `solver`. Its
+password is one JSON object:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "evidence-scanner-vault",
+  "version": 1,
+  "attestation_id": "64-cryptographically-random-lowercase-hex-characters",
+  "completeness_through": {"run_id": "RUN_ID", "chain_head": "64-lowercase-hex-digest"},
+  "values": {
+    "ANTHROPIC_API_KEY": {"current": [], "historical": []},
+    "ANTHROPIC_AUTH_TOKEN": {"current": [], "historical": []},
+    "CLAUDE_CODE_OAUTH_TOKEN": {"current": [], "historical": []},
+    "CTFD_API_TOKEN": {"current": ["replace-with-exact-live-value"], "historical": []},
+    "OPENAI_API_KEY": {"current": [], "historical": []},
+    "TEAM_KEY": {"current": [], "historical": []}
+  }
+}
+```
+
+Every declared name must be present. Lists contain exact values, not hashes: move a rotated or
+deleted value from `current` to `historical`. Multiple simultaneously valid Board tokens may remain
+in `current`. Increment `version` and replace `attestation_id` with a fresh
+`python3 -c 'import secrets; print(secrets.token_hex(32))'` value on every vault edit. The opaque ID
+is safe to publish and prevents the published vault identity from becoming a verifier for guessed
+secret values. Bind `completeness_through` to the closed Run being promoted. Its chain head is the
+final
+`event_digest` in `state/runs/<RUN_ID>/canonical/events.jsonl`.
+
+Retire a historical value only after auditing `state/runs/`: every remaining Run that could predate
+the rotation must have a verified capsule whose `content_basis.source.run_id` names that Run, or the
+Run must already have completed the storage-governor retirement transaction. If any unpromoted Run
+remains, the value remains. This is ADR-0045's reachability boundary; it avoids both premature
+deletion and indefinite retention after no source can contain the value.
+
+Prepare the completed object in a password manager's secure editor and compact it to one line
+there. Never save a plaintext scratch file, and never paste the displayed multi-line example at a
+shell prompt. Create or replace the item without putting its password in shell history:
+
+```bash
+security add-generic-password -U -s incypher-ctf.evidence-scanner-vault -a solver -w
+```
+
+Keep `-w` last; `security` prompts for the password. Paste the completed JSON minified to one line
+at that prompt. Do not add `-A`, and do not pass the JSON as a command argument. The Solver reads
+only the password body with `security find-generic-password ... -w`; a missing item, inaccessible
+`security`, invalid schema, incomplete name set, empty vault, mismatched active value, or stale Run
+attestation refuses publication without logging Keychain output.
+
+Verify only the non-secret metadata; the password body travels through the pipe and is not printed:
+
+```bash
+security find-generic-password -s incypher-ctf.evidence-scanner-vault -a solver -w \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"],d["version"],d["attestation_id"],d["completeness_through"])'
+```
+
 ## How they reach the container
 
 **Injected at runtime, never built into the image.**

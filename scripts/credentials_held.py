@@ -21,6 +21,7 @@ from pathlib import Path
 
 import declared_secrets
 import env_file
+from solver.env_file import environment_sources
 
 
 class Holding(enum.Enum):
@@ -39,16 +40,10 @@ class Holding(enum.Enum):
 
 SET, EMPTY, ABSENT = Holding.SET, Holding.EMPTY, Holding.ABSENT
 
-# The template is committed and blank by construction. Listing it beside the real files invites the
-# reading this command exists to prevent — a template mistaken for an inventory.
-TEMPLATE_NAME = ".env.example"
-
 
 def env_files(directory: Path) -> list[Path]:
     """The active env file followed by legacy files that must be diagnosed and removed."""
-    default = directory / ".env"
-    overlays = sorted(path for path in directory.glob(".env.*") if path.name != TEMPLATE_NAME)
-    return ([default] if default.exists() else []) + overlays
+    return list(environment_sources(directory))
 
 
 def read_holdings(path: Path) -> dict[str, Holding]:

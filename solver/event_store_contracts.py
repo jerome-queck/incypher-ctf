@@ -225,6 +225,14 @@ class InvalidReceiptError(EventStoreDamage):
     kind = DamageKind.INVALID_RECEIPT
 
 
+class RunSealedError(RuntimeError):
+    """A new canonical fact was attempted after the terminal Run fact."""
+
+
+class RunNotTerminalError(RuntimeError):
+    """A terminal snapshot was requested before the Run was complete."""
+
+
 @dataclass(frozen=True)
 class ObservationRecorded:
     attempt_id: str
@@ -740,6 +748,15 @@ class CommittedEvent:
     blob_digest: str
     blob_bytes: int
     body: bytes = b""
+
+
+@dataclass(frozen=True)
+class TerminalEventStoreSnapshot:
+    """One lock-consistent complete terminal canonical source."""
+
+    run_id: str
+    events: tuple[CommittedEvent, ...]
+    chain_head: str
 
 
 @dataclass(frozen=True)

@@ -15,15 +15,13 @@ board and no network, which is what makes it worth a seam of its own
 
 import hashlib
 import os
-import re
 import tempfile
 from pathlib import Path
 
 from solver.env_cutover import EnvCutoverResult, completed_cutover
+from solver.env_file import assignments as _assignments
 
-# `export` is a shell keyword rather than part of the name. Accept it when reading a hand-written
-# `.env`, even though Docker's env-file syntax does not require it.
-_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+assignments = _assignments
 
 _TEMPLATE_NAME = ".env.example"
 
@@ -88,33 +86,3 @@ def atomic_replace(path: Path, text: str) -> EnvCutoverResult:
                 pass
         if descriptor != -1:
             os.close(descriptor)
-
-
-def _unquote(value: str) -> str:
-    """Strip one matched pair of surrounding quotes, and nothing else.
-
-    An unmatched quote stays in the value: guessing past what the file says is how a parser invents
-    a credential. The pair that matters most is the empty one — `NAME=""` is a variable that exists
-    and holds nothing, which is the trap `docs/credentials.md` names.
-    """
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
-
-
-def assignments(text: str) -> dict[str, str]:
-    """Every live assignment in the file, name to value, later lines winning as a shell would.
-
-    A commented line assigns nothing — that is the template's own idiom for "not set here", and
-    reading it as an assignment would report a credential that does not exist. An inline `#` is
-    **kept** in the value, deliberately: a shell sourcing the file would treat it as a comment while
-    `docker run --env-file` keeps it, and since ADR-0008 injects with `--env-file`, taking the
-    narrower reading would call a value the container really receives empty.
-    """
-    found: dict[str, str] = {}
-    for line in text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        if match := _ASSIGNMENT.match(line):
-            found[match.group(1)] = _unquote(match.group(2).strip())
-    return found
