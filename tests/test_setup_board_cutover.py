@@ -35,22 +35,26 @@ def test_legacy_overlay_refuses_before_the_first_prompt_and_preserves_active_env
     assert "legacy-secret" not in result.stdout + result.stderr
 
 
-def test_staging_and_atomic_finish_are_wired_below_the_generated_library():
+def test_staging_and_atomic_activation_are_wired_below_the_generated_library():
     source = SCRIPT.read_text()
     stages = source.index(STAGES)
     banner = source.index('banner "Point the Solver at a CTF board"', stages)
     staging = source.index("STAGED_ENV_FILE", stages)
-    finish = source.index("finish() {", stages)
-    atomic = source.index("env_file.atomic_replace", finish)
+    activation = source.index("activate_staged_env() {", stages)
+    atomic = source.index("env_file.atomic_replace", activation)
     first_write = source.index("write_env CTFD_URL", stages)
-    restore = source.index('ENV_FILE="$ACTIVE_ENV_FILE"', finish)
+    restore = source.index('ENV_FILE="$ACTIVE_ENV_FILE"', activation)
+    activation_call = source.rindex("\nactivate_staged_env\n")
+    finish_call = source.rindex("\nfinish\n")
 
     assert staging < banner
     assert "assert_unambiguous" in source[stages:banner]
     assert 'sys.path.insert(0, "scripts")' in source[stages:banner]
     assert atomic < restore
     assert staging < first_write
-    assert finish < first_write
+    assert activation < first_write
+    assert source.count("finish() {") == 1
+    assert activation_call < finish_call
     assert source[:stages].count("STAGED_ENV_FILE") == 0
     assert ".setup-env-stage-" in source
     assert ".env-stage-" not in source

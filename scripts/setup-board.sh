@@ -212,7 +212,7 @@ fi
 chmod 0600 "$STAGED_ENV_FILE"
 ENV_FILE="$STAGED_ENV_FILE"
 
-finish() {
+activate_staged_env() {
   local staged_path="$ENV_FILE"
   python3 - "$ACTIVE_ENV_FILE" "$staged_path" <<'PY'
 import sys
@@ -229,15 +229,6 @@ PY
   trap - EXIT HUP INT TERM
   rm -f "$staged_path"
   ENV_FILE="$ACTIVE_ENV_FILE"
-  _clear
-  printf '\n%s%s  ✓ Setup complete%s\n' "$BOLD" "$GREEN" "$RESET"
-  (( ${#WRITTEN_ENV[@]} ))    && note "wrote ${#WRITTEN_ENV[@]} value(s) to $ENV_FILE: ${WRITTEN_ENV[*]}"
-  (( ${#WRITTEN_SECRET[@]} )) && note "set ${#WRITTEN_SECRET[@]} GitHub secret(s): ${WRITTEN_SECRET[*]}"
-  if (( ${#SKIPPED[@]} )); then
-    printf '\n'; warn "still to do by hand:"
-    for s in "${SKIPPED[@]}"; do note "  - $s"; done
-  fi
-  printf '\n'
 }
 
 # clear_env KEY — drop KEY from ENV_FILE entirely. The library's write_env can set a value
@@ -481,4 +472,5 @@ else
 fi
 pause
 
+activate_staged_env
 finish
