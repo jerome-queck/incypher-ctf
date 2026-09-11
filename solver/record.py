@@ -38,11 +38,14 @@ from solver.observation import OBSERVATION_LIMIT_BYTES, Observation, digest_of, 
 from solver.event_store import (
     CommittedEvent,
     EventStore,
+    GenerationAuthority,
+    GenerationDisposition,
     ObservationRecorded,
     ProjectionMismatchError,
     projection_fields,
 )
 from solver.redaction import Redactor
+from solver.work_generation import GenerationFence, GenerationIdentity
 
 # Bumped only for a change that the three stability rules cannot absorb — a field's meaning never
 # changes once written, a retired name is never reused, and readers access by name with a default.
@@ -106,6 +109,10 @@ CAUSES = (
     CUT_SELF_REPORTED_IMPOSSIBLE,
     CRASHED,
 )
+
+
+class LateGenerationEvent(RuntimeError):
+    """A closed Work generation tried to regain current authority."""
 
 
 @dataclass(frozen=True)
@@ -211,8 +218,29 @@ class Recorder:
         for channel in (OBSERVATIONS, CLAIMS):
             (self.run_dir / channel).mkdir(parents=True, exist_ok=True)
         self.event_store = EventStore(Path(state), run_id=run_id, redactor=redactor, append_hook=event_store_hook)
+        self.generations = GenerationFence(
+            Path(state),
+            run_id,
+            redactor,
+            timestamp=lambda: self._now().isoformat(),
+        )
         self._seq = _resume_after_a_crash(self.stream_path)
         self._reconcile_canonical_observations()
+
+    def acquire_generation(self, *, work_id: str, attempt_id: str) -> GenerationIdentity:
+        """Fence one Attempt before it can stage work or cause an effect."""
+
+        return self.generations.acquire(work_id, attempt_id)
+
+    def interrupt_generation(self, generation_id: str) -> None:
+        """Close acquired Work that failed before its Attempt row could open."""
+
+        self.generations.close(generation_id, GenerationDisposition.INTERRUPT)
+
+    def close_generation(self, generation_id: str, cause: str) -> None:
+        """Close Work after every authority-bearing boundary of its Attempt is done."""
+
+        self.generations.close(generation_id, _generation_disposition(cause))
 
     def run_open(self, *, board_profile: dict[str, Any]) -> None:
         """Open the Run with the whole Board profile **as discovered**.
@@ -291,7 +319,8 @@ class Recorder:
         instance_until: str | None,
         order_ranks: dict[str, int],
         exploring: bool = False,
-    ) -> None:
+        generation_id: str | None = None,
+    ) -> str:
         """Open an Attempt, including where every unsolved Challenge stood when it was picked.
 
         `attempt_sequence` is this Attempt's number *for that Challenge*, and `order_ranks` is
@@ -304,6 +333,13 @@ class Recorder:
         still one. It defaults because a reader defaults what is missing, which is the rule that
         lets this schema gain a field without invalidating a stream written before it.
         """
+        if generation_id is None:
+            generation_id = self.acquire_generation(
+                work_id=str(challenge_id),
+                attempt_id=attempt_id,
+            ).generation_id
+        else:
+            self._authorize_generation(attempt_id, GenerationAuthority.AUTHORITY, generation_id=generation_id)
         self._write(
             "attempt-open",
             {
@@ -321,6 +357,7 @@ class Recorder:
                 "exploring": exploring,
             },
         )
+        return generation_id
 
     def attempt_close(
         self,
@@ -331,6 +368,8 @@ class Recorder:
         solves_at_close: int,
         extensions_granted: int,
         flag: str | None,
+        generation_id: str | None = None,
+        close_generation: bool = True,
     ) -> None:
         """Close an Attempt with the **cause** that ended it, never an outcome.
 
@@ -341,6 +380,9 @@ class Recorder:
         `no-flag` is the absence of a cause rather than one, and naming it hides which counter
         fired — which is the only thing calibration needs to know.
         """
+        generation_id = generation_id or self._generation_for_attempt(attempt_id)
+        if generation_id is not None and close_generation:
+            self.close_generation(generation_id, cause)
         self._write(
             "attempt-close",
             {
@@ -365,12 +407,18 @@ class Recorder:
         Answers with the prose as the orchestrator will read it, so a caller that needs the approach
         label or a candidate Flag takes it from here rather than from the file.
         """
+        self._authorize_generation(attempt_id, GenerationAuthority.CARRY, evidence=text)
         ref, digest, nbytes, shown = self._body(text, CLAIMS, ".txt")
         self._write(
             "claim",
             {"attempt_id": attempt_id, "claim_ref": ref, "claim_digest": digest, "claim_bytes": nbytes},
         )
         return shown
+
+    def authorize_candidate(self, attempt_id: str) -> None:
+        """Reserve Candidate authority before submission or its local state can change."""
+
+        self._authorize_generation(attempt_id, GenerationAuthority.CANDIDATE)
 
     def step_begin(
         self,
@@ -400,6 +448,11 @@ class Recorder:
             "tool": tool,
             "source": source,
         }
+        self._authorize_generation(
+            attempt_id,
+            GenerationAuthority.TOOL,
+            evidence=command_raw.encode(),
+        )
         self._write("step-begin", identity)
         # Keep the legacy Step identity exact.  This private token gives the migrated canonical
         # family an idempotency key even where older callers reuse a step index, without widening
@@ -422,6 +475,11 @@ class Recorder:
         *,
         canonical_event_id: str | None = None,
     ) -> Observation:
+        self._authorize_generation(
+            str(identity["attempt_id"]),
+            GenerationAuthority.TOOL,
+            evidence=output,
+        )
         duration_ms = round((self._mono() - began_mono) * 1000)
         recorded = ObservationRecorded(
             attempt_id=str(identity["attempt_id"]),
@@ -545,6 +603,25 @@ class Recorder:
         self._attempt_twice(lambda: (self.run_dir / ref).write_bytes(body))
         return ref, digest_of(body), len(body), elide(body, self._observation_limit)
 
+    def _authorize_generation(
+        self,
+        attempt_id: str,
+        authority: GenerationAuthority,
+        *,
+        evidence: bytes = b"",
+        generation_id: str | None = None,
+    ) -> None:
+        generation_id = generation_id or self._generation_for_attempt(attempt_id)
+        if generation_id is None:
+            return
+        decision = self.generations.authorize(generation_id, authority, evidence)
+        if not decision.accepted:
+            raise LateGenerationEvent(f"{attempt_id!r} belongs to {decision.classification} {generation_id!r}")
+
+    def _generation_for_attempt(self, attempt_id: str) -> str | None:
+        matching = [state for state in self.generations.projection().generations if state.attempt_id == attempt_id]
+        return matching[-1].generation_id if matching else None
+
     def _write(
         self,
         kind: str,
@@ -607,6 +684,14 @@ def _redacted(value: Any, redactor: Redactor) -> Any:
     if isinstance(value, list):
         return [_redacted(item, redactor) for item in value]
     return value
+
+
+def _generation_disposition(cause: str) -> GenerationDisposition:
+    if cause == FLAG:
+        return GenerationDisposition.COMPLETE
+    if cause == CRASHED:
+        return GenerationDisposition.INTERRUPT
+    return GenerationDisposition.ABANDON
 
 
 def _resume_after_a_crash(stream: Path) -> int:

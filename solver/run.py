@@ -158,6 +158,7 @@ class _Held:
     boundary: Boundary
     deadline: Deadline
     attempt_id: str
+    generation_id: str
     began: dt.datetime
     recon_block: str = ""
     lease: Lease | None = None
@@ -302,10 +303,18 @@ class Run:
                 self._sleep(self._idle_seconds)
                 continue
             held = self._attempt(pick)
-            self._scheduler.release(Ended(pick.challenge.challenge_id, held.cause, self._spent(held), held.checkpoints))
-            # Nothing is kept: the Attempt released its own Lease as it closed, so anything the
-            # ledger still lists at this boundary is a leak by definition.
-            self._sweep(attempt_id=held.attempt_id, keeping=None)
+            try:
+                self._scheduler.release(
+                    Ended(pick.challenge.challenge_id, held.cause, self._spent(held), held.checkpoints)
+                )
+                # Nothing is kept: the Attempt released its own Lease as it closed, so anything the
+                # ledger still lists at this boundary is a leak by definition.
+                self._sweep(attempt_id=held.attempt_id, keeping=None)
+            except Exception:
+                self._recorder.interrupt_generation(held.generation_id)
+                raise
+            else:
+                self._recorder.close_generation(held.generation_id, held.cause)
             if backoff := self._breaker.backoff():
                 self._sleep(backoff)
 
@@ -319,39 +328,49 @@ class Run:
         """
         challenge = pick.challenge
         attempt_id = f"{challenge.challenge_id}-{pick.attempt_sequence}"
-        # Restarted before the working directory is settled rather than after it: what staging has
-        # to say about a name already taken is a Step of the Attempt it opens, and a counter still
-        # holding the last Attempt's total would number it into that one.
-        self._steps.restart()
-        workdir, staged = self._staged(challenge, attempt_id)
-        held = _Held(
-            pick=pick,
-            workdir=workdir,
-            boundary=self._boundaries.setdefault(challenge.challenge_id, Boundary()),
-            deadline=Deadline(budget=pick.deadline),
+        generation = self._recorder.acquire_generation(
+            work_id=str(challenge.challenge_id),
             attempt_id=attempt_id,
-            began=self._now(),
-            staged=staged,
         )
-        # Before the open, and it has to be: `attempt_open` records the Instance this Attempt was
-        # given, and there is no Instance to record until the deploy has answered. So the deploy is
-        # a Step of an Attempt whose `attempt-open` line comes after it — that line describes the
-        # Attempt rather than starting it, and a reader of the stream reconciles on `attempt_id`.
-        self._deploy(held)
-        self._recorder.attempt_open(
-            attempt_id=held.attempt_id,
-            challenge_id=challenge.challenge_id,
-            challenge_name=challenge.name,
-            category=challenge.category,
-            challenge_type=challenge.challenge_type,
-            solves_at_open=challenge.solves,
-            tier=pick.tier,
-            budget_s=pick.budget_s,
-            attempt_sequence=pick.attempt_sequence,
-            instance_until=held.lease.until.isoformat() if held.lease and held.lease.until else None,
-            order_ranks=pick.order_ranks,
-            exploring=pick.exploring,
-        )
+        try:
+            # Restarted before the working directory is settled rather than after it: what staging
+            # has to say about a name already taken is a Step of the Attempt it opens, and a counter
+            # still holding the last Attempt's total would number it into that one.
+            self._steps.restart()
+            workdir, staged = self._staged(challenge, attempt_id)
+            held = _Held(
+                pick=pick,
+                workdir=workdir,
+                boundary=self._boundaries.setdefault(challenge.challenge_id, Boundary()),
+                deadline=Deadline(budget=pick.deadline),
+                attempt_id=attempt_id,
+                generation_id=generation.generation_id,
+                began=self._now(),
+                staged=staged,
+            )
+            # Before the open, and it has to be: `attempt_open` records the Instance this Attempt
+            # was given, and there is no Instance to record until the deploy has answered. So the
+            # deploy is a Step of an Attempt whose `attempt-open` line comes after it — that line
+            # describes the Attempt rather than starting it, and a reader reconciles on its id.
+            self._deploy(held)
+            self._recorder.attempt_open(
+                attempt_id=held.attempt_id,
+                challenge_id=challenge.challenge_id,
+                challenge_name=challenge.name,
+                category=challenge.category,
+                challenge_type=challenge.challenge_type,
+                solves_at_open=challenge.solves,
+                tier=pick.tier,
+                budget_s=pick.budget_s,
+                attempt_sequence=pick.attempt_sequence,
+                instance_until=held.lease.until.isoformat() if held.lease and held.lease.until else None,
+                order_ranks=pick.order_ranks,
+                exploring=pick.exploring,
+                generation_id=held.generation_id,
+            )
+        except Exception:
+            self._recorder.interrupt_generation(generation.generation_id)
+            raise
         self._in_flight = held.deadline
         try:
             found = self._recon(held, challenge)
@@ -366,15 +385,22 @@ class Run:
             self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
         self._in_flight = None
         self._attempts += 1
-        self._recorder.attempt_close(
-            attempt_id=held.attempt_id,
-            cause=held.cause,
-            approach_label=held.approach,
-            solves_at_close=self._solves_now(challenge),
-            extensions_granted=held.deadline.granted,
-            flag=held.flag or None,
-        )
-        self._end_lease(held)
+        try:
+            self._end_lease(held)
+        except Exception as broken:
+            held.cause = CRASHED
+            self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
+        finally:
+            self._recorder.attempt_close(
+                attempt_id=held.attempt_id,
+                cause=held.cause,
+                approach_label=held.approach,
+                solves_at_close=self._solves_now(challenge),
+                extensions_granted=held.deadline.granted,
+                flag=held.flag or None,
+                generation_id=held.generation_id,
+                close_generation=False,
+            )
         return held
 
     def _turn(self, held: _Held, challenge: Sighting) -> bool:
@@ -466,6 +492,7 @@ class Run:
         )
         if not candidates:
             return Outcome()
+        self._recorder.authorize_candidate(held.attempt_id)
         offered.update(one.text for one in candidates)
         # Read now rather than remembered from the Pick, for the reason the reserved tail reads it
         # now: the count is the Board's and moves under us. Here it is *this Run* that moves it —

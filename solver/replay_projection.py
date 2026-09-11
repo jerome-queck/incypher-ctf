@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from solver.event_store import (
-    LIFECYCLE_RECORDED,
+    OBSERVATION_RECORDED,
     CommittedEvent,
     EventStore,
     ProjectionMismatchError,
@@ -67,7 +67,7 @@ def project(events: list[CommittedEvent], run_id: str) -> VersionedProjection:
             }
         )
         for event in events
-        if event.event_type != LIFECYCLE_RECORDED
+        if event.event_type == OBSERVATION_RECORDED
     )
     serialized = b"".join(canonical_bytes(thaw(row)) + b"\n" for row in rows)
     return VersionedProjection(
@@ -86,7 +86,7 @@ def verify_legacy_view(store: EventStore, events: list[CommittedEvent]) -> None:
     indexed = LegacyRows.read(stream_path)
     used: set[int] = set()
     for event in events:
-        if event.event_type == LIFECYCLE_RECORDED:
+        if event.event_type != OBSERVATION_RECORDED:
             continue
         candidates = _candidates(indexed, event)
         if not candidates:
