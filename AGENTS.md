@@ -84,12 +84,18 @@ exists and keeps its headings, never that it is true.
 organisation behind it to inherit from. In short: an issue first, then a pull request; no commit
 lands on `main` directly.
 
-**A change to this repository's files is finished when its pull request is open — not when the
-commit exists.** Branch, commit, **push, and open the pull request**, without asking whether to;
-nothing is merged by them. This outranks any instruction that stops earlier — a skill whose last
-step is "commit your work" has described the middle of the job. It reaches file changes and
-nothing else: a session that changes no file owes no pull request, and the only other thing that
-stops you is the author saying, here, that they want the commit alone.
+**Every change to this repository's files reaches an open pull request — a commit alone is not
+finished.** Branch, commit, **push, and open the pull request**, without asking whether to. An agent
+may squash-merge only when the current task explicitly authorizes an agent-managed merge and all
+acceptance criteria are delivered, exact-head local and hosted checks pass, every review and
+comment is resolved, the branch is current and mergeable, referenced evidence remains exact and
+reachable, and no human decision remains. Otherwise leave the pull request open and report the
+exact blocker; a generic request to implement, build or fix does not grant merge authority.
+
+This outranks any instruction that stops earlier — a skill whose last step is "commit your work"
+has described the middle of the job. It reaches file changes and nothing else: a session that
+changes no file owes no pull request, and the only other thing that stops you is the author saying,
+here, that they want the commit alone.
 
 **Checkout cleanup is mandatory after a pull request opens, merges or closes.** Before ending that
 session, follow [Pull-request lifecycle cleanup](CONTRIBUTING.md#pull-request-lifecycle-cleanup);
