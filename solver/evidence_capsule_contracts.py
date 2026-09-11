@@ -73,11 +73,32 @@ class ReceiptRegistry:
 
 
 @dataclass(frozen=True)
+class ScannerVaultIdentity:
+    receipt: str
+    version: int
+    completeness_run_id: str
+    completeness_chain_head: str
+    source_digest: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "receipt": self.receipt,
+            "version": self.version,
+            "completeness_through": {
+                "run_id": self.completeness_run_id,
+                "chain_head": self.completeness_chain_head,
+            },
+            "source_digest": self.source_digest,
+        }
+
+
+@dataclass(frozen=True)
 class SanitizationPolicy:
     """Exact historical values and host paths which publication must not carry."""
 
     secrets: tuple[tuple[str, str], ...]
     forbidden_paths: tuple[str, ...]
+    vault: ScannerVaultIdentity
     version: int = 1
 
 

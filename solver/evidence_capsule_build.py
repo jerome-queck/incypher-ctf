@@ -18,6 +18,7 @@ from solver.event_store import EventStore
 from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.manifest import attach_capsule_receipt, canonical_manifest_bytes, manifest_digest, parse_manifest
 from solver.manifest_contracts import ReleaseCandidateManifestDraft
+from solver.strict_json import StrictJSONError, strict_json_object
 from solver.write_reservation import Capacity, EffectIdentity
 
 
@@ -63,23 +64,10 @@ class PreparedCapsule:
 
 
 def _strict_receipt(body: bytes) -> dict[str, Any]:
-    import json
-
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise CapsuleRefused(f"receipt contains duplicate JSON key {key!r}")
-            result[key] = value
-        return result
-
     try:
-        value = json.loads(body.decode("utf-8"), object_pairs_hook=unique)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CapsuleRefused(f"receipt is not valid UTF-8 JSON: {error}") from None
-    if not isinstance(value, dict):
-        raise CapsuleRefused("receipt is not a JSON object")
-    return value
+        return strict_json_object(body, label="receipt")
+    except StrictJSONError as error:
+        raise CapsuleRefused(str(error)) from None
 
 
 def prepare_capsule(
@@ -92,6 +80,7 @@ def prepare_capsule(
     request: CapsuleRequest,
 ) -> PreparedCapsule:
     source = snapshot_terminal_run(store)
+    scan_authority.bind_source(source.run_id, source.chain_head)
     base_manifest = parse_manifest(candidate_manifest)
     scan_authority.verify(request.receipt, label="receipt", structured=True)
     receipt = _strict_receipt(request.receipt)
@@ -150,6 +139,7 @@ def prepare_capsule(
             "kind": "exact-values-and-host-paths",
             "version": scan_authority.version,
             "digest": scan_authority.digest,
+            "vault": scan_authority.identity,
         },
     }
     content_ref = f"capsule-content:{digest_bytes(canonical_bytes(content_basis))}"

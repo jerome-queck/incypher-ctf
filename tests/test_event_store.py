@@ -4,6 +4,7 @@ The event store owns the durable event and sealed bytes.  The existing Recorder/
 read-compatible projection while the migration is deliberately limited to one event family.
 """
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,6 +19,7 @@ from solver.event_store import (
     MissingBlobError,
     ObservationRecorded,
     PreviousDigestMismatchError,
+    RunNotTerminalError,
     RunSealedError,
     ReservationStatus,
     TornAppendError,
@@ -412,18 +414,31 @@ def test_canonical_event_store_receipt_is_versioned_sanitized_and_checkable(tmp_
     assert recorder.event_store.verify_receipt(receipt_path).event_chain_head == receipt["event_chain_head"]
 
 
-def test_terminal_snapshot_fences_every_concurrent_post_close_append(tmp_path):
+def test_terminal_snapshot_preserves_exact_retries_and_fences_novel_writes(tmp_path):
     store = EventStore(tmp_path / "terminal", run_id="terminal")
     store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
-    closed = store.append(
-        LifecycleRecorded("run:close", RunClosed(TerminalDisposition.NORMAL)),
-        body=b"",
+    closing = LifecycleRecorded("run:close", RunClosed(TerminalDisposition.NORMAL))
+    reserved = store.reserve(
+        closing,
+        blob_digest=hashlib.sha256(b"").hexdigest(),
+        blob_bytes=0,
     )
+    closed = store.commit(reserved, closing, body=b"")
 
     snapshot = store.terminal_snapshot()
 
+    assert store.append(closing, body=b"") == closed
+    retried = store.reserve(closing, blob_digest=hashlib.sha256(b"").hexdigest(), blob_bytes=0)
+    assert (retried.sequence, retried.status) == (reserved.sequence, ReservationStatus.COMMITTED)
+    assert store.commit(reserved, closing, body=b"") == closed
+
+    altered_close = LifecycleRecorded("run:close", RunClosed(TerminalDisposition.CRASHED, "different"))
     with pytest.raises(RunSealedError):
-        store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
+        store.append(altered_close, body=b"")
+    with pytest.raises(RunSealedError):
+        store.reserve(altered_close, blob_digest=hashlib.sha256(b"").hexdigest(), blob_bytes=0)
+    with pytest.raises(RunSealedError):
+        store.commit(reserved, altered_close, body=b"")
 
     def append(index):
         with pytest.raises(RunSealedError):
@@ -434,3 +449,20 @@ def test_terminal_snapshot_fences_every_concurrent_post_close_append(tmp_path):
 
     assert snapshot.chain_head == closed.event_digest
     assert len(snapshot.events) == len(store.events()) == 2
+
+    late = _event(step_index=3)
+    with pytest.raises(RunSealedError):
+        store.reserve(late, blob_digest=hashlib.sha256(b"late").hexdigest(), blob_bytes=4)
+    with pytest.raises(RunSealedError):
+        store.commit(reserved, late, body=b"late")
+
+
+def test_terminal_snapshot_uses_a_precise_unclosed_run_error(tmp_path):
+    empty = EventStore(tmp_path / "empty", run_id="empty")
+    with pytest.raises(RunNotTerminalError, match="no Run genesis"):
+        empty.terminal_snapshot()
+
+    open_run = EventStore(tmp_path / "open", run_id="open")
+    open_run.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
+    with pytest.raises(RunNotTerminalError, match="complete closed Run"):
+        open_run.terminal_snapshot()

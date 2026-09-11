@@ -26,6 +26,14 @@ AREA = Capacity(
 PROFILE = WriteProfile(AREA, AREA, AREA)
 
 
+class FileVaultReader:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def read(self) -> bytes:
+        return self.path.read_bytes()
+
+
 def main() -> None:
     root, crash_point = Path(sys.argv[1]), sys.argv[2]
     store = EventStore(root / "source", run_id="process-loss")
@@ -59,7 +67,11 @@ def main() -> None:
         candidate_manifest=parse_manifest((root / "candidate.json").read_bytes()),
         manifest_row_id="core.receipts-capsules",
         registry=ReceiptRegistry([ReceiptContract("promotion-transaction", 1, "synthetic-proof", validate)]),
-        scan_authority=HostSanitizationAuthority(root / "host-scan-authority", host_paths=(root,)),
+        scan_authority=HostSanitizationAuthority(
+            root / "host-scan-authority",
+            host_paths=(root,),
+            vault_reader=FileVaultReader(root / "scanner-vault.json"),
+        ),
         write_authority=WriteAuthority(root / "authority", PROFILE),
         runs_directory=root / "runs",
         hook=crash,

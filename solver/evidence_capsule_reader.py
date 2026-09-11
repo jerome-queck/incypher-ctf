@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -21,25 +20,15 @@ from solver.evidence_capsule_contracts import (
 from solver.event_store_contracts import CANONICAL_SCHEMA_VERSION, LifecycleRecord, event_contract
 from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.manifest import canonical_manifest_bytes, manifest_digest, parse_manifest
+from solver.strict_json import StrictJSONError, strict_json_object
 from solver.write_reservation import ReservationState, WriteAuthority
 
 
 def _json(body: bytes, label: str) -> dict[str, Any]:
-    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise CapsuleInvalid(f"duplicate JSON key {key!r}")
-            result[key] = value
-        return result
-
     try:
-        value = json.loads(body.decode("utf-8"), object_pairs_hook=unique)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CapsuleInvalid(f"{label} is not valid UTF-8 JSON: {error}") from None
-    if not isinstance(value, dict):
-        raise CapsuleInvalid(f"{label} is not a JSON object")
-    return value
+        return strict_json_object(body, label=label)
+    except StrictJSONError as error:
+        raise CapsuleInvalid(str(error)) from None
 
 
 def _load_capsule(path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:

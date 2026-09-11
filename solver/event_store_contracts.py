@@ -229,6 +229,10 @@ class RunSealedError(RuntimeError):
     """A new canonical fact was attempted after the terminal Run fact."""
 
 
+class RunNotTerminalError(RuntimeError):
+    """A terminal snapshot was requested before the Run was complete."""
+
+
 @dataclass(frozen=True)
 class ObservationRecorded:
     attempt_id: str

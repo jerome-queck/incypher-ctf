@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import solver.evidence_capsule_storage as capsule_storage
+import solver.evidence_capsule_vault as capsule_vault
 
 from solver.evidence_capsule import CapsuleRefused, CapsuleRequest, EvidenceCapsulePromoter
 from solver.evidence_capsule_contracts import (
@@ -21,6 +22,8 @@ from solver.evidence_capsule_contracts import (
 )
 from solver.evidence_capsule_reader import read_evidence, verify_evidence_content
 from solver.evidence_capsule_scan import HostSanitizationAuthority
+from solver.evidence_capsule_vault import VAULT_KIND, vault_receipt
+from solver.credentials import SECRETS
 from solver.event_store import EventStore
 from solver.event_store_contracts import (
     LifecycleRecorded,
@@ -94,12 +97,61 @@ def registry(*, producer="synthetic-proof", structured=True):
     return ReceiptRegistry([ReceiptContract("promotion-transaction", 1, producer, validate)])
 
 
-def scan_authority(tmp_path, *, secrets=(), forbidden_paths=("/Users/private",)):
+class VaultReader:
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        return self.body
+
+
+def vault_body(store, *, current=None, historical=(), source=None, version=1):
+    if source is None:
+        try:
+            snapshot = store.terminal_snapshot()
+            source = (snapshot.run_id, snapshot.chain_head)
+        except RuntimeError:
+            source = (store.run_id, "0" * 64)
+    values = {name: {"current": [], "historical": []} for name in SECRETS}
+    for name, value in (("TEAM_KEY", "fixture-current"),) if current is None else current:
+        values[name]["current"].append(value)
+    for name, value in historical:
+        values[name]["historical"].append(value)
+    through = {"run_id": source[0], "chain_head": source[1]}
+    return canonical_bytes(
+        {
+            "schema_version": 1,
+            "kind": VAULT_KIND,
+            "version": version,
+            "completeness_through": through,
+            "values": values,
+        }
+    )
+
+
+def scan_authority(
+    tmp_path,
+    store,
+    *,
+    current=None,
+    historical=(),
+    active=(),
+    forbidden_paths=("/Users/private",),
+    vault=None,
+    vault_reader=None,
+):
     root = tmp_path / "host-scan-authority"
     root.mkdir(parents=True, exist_ok=True)
-    lines = [f"{name}={value}" for name, value in secrets]
+    lines = [f"{name}={value}" for name, value in active]
     (root / ".env").write_text("\n".join(lines) + ("\n" if lines else ""))
-    return HostSanitizationAuthority(root, host_paths=tuple(Path(path) for path in forbidden_paths))
+    reader = vault_reader or VaultReader(
+        vault if vault is not None else vault_body(store, current=current, historical=historical)
+    )
+    return HostSanitizationAuthority(
+        root,
+        host_paths=tuple(Path(path) for path in forbidden_paths),
+        vault_reader=reader,
+    )
 
 
 def transaction(tmp_path, **overrides):
@@ -110,7 +162,7 @@ def transaction(tmp_path, **overrides):
         write_authority = authority(tmp_path)
     trusted_scan = overrides.pop("scan_authority", None)
     if trusted_scan is None:
-        trusted_scan = scan_authority(tmp_path)
+        trusted_scan = scan_authority(tmp_path, store)
     promoter = EvidenceCapsulePromoter(
         store=store,
         candidate_manifest=overrides.pop("candidate_manifest", draft()),
@@ -150,53 +202,116 @@ def test_producer_request_cannot_inject_scan_or_receipt_authority(tmp_path):
         publish(transaction(tmp_path / "empty", source=(store, digest), receipt=receipt("0" * 64)))
 
 
-def test_host_scan_authority_refuses_missing_or_changed_history(tmp_path):
-    missing = tmp_path / "missing-history"
-    missing.mkdir()
-    with pytest.raises(CapsuleRefused, match="canonical .env"):
-        HostSanitizationAuthority(missing, host_paths=())
-
-    trusted = scan_authority(tmp_path, secrets=(("CTFD_API_TOKEN", "historical"),))
-    (tmp_path / "host-scan-authority" / ".env.older").write_text("CTFD_API_TOKEN=older\n")
-    with pytest.raises(CapsuleRefused, match="history changed"):
-        publish(transaction(tmp_path, scan_authority=trusted))
-
-
-def test_host_scan_authority_includes_every_discovered_historical_value(tmp_path):
-    root = tmp_path / "history"
-    root.mkdir()
-    (root / ".env").write_text("CTFD_API_TOKEN=current\n")
-    (root / ".env.older").write_text("CTFD_API_TOKEN=old-secret\n")
-    source = terminal_store(tmp_path, evidence=b"leaked old-secret")
-
+@pytest.mark.parametrize(
+    ("current", "active"),
+    [
+        ((("CTFD_API_TOKEN", "current-secret"),), (("CTFD_API_TOKEN", "current-secret"),)),
+        ((), ()),
+    ],
+)
+def test_scanner_vault_retains_a_deleted_or_rotated_secret(tmp_path, current, active):
+    source = terminal_store(tmp_path, evidence=b'{"secret":"old-secret"}')
+    trusted = scan_authority(
+        tmp_path,
+        source[0],
+        current=current,
+        historical=(("CTFD_API_TOKEN", "old-secret"),),
+        active=active,
+    )
     with pytest.raises(CapsuleRefused, match="credential CTFD_API_TOKEN"):
-        publish(
-            transaction(
-                tmp_path,
-                source=source,
-                scan_authority=HostSanitizationAuthority(root, host_paths=()),
-            )
+        publish(transaction(tmp_path, source=source, scan_authority=trusted))
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (b"", "missing or empty"),
+        (b"{}", "schema is invalid or incomplete"),
+    ],
+)
+def test_scanner_vault_missing_empty_or_incomplete_refuses(tmp_path, body, message):
+    store, _digest = terminal_store(tmp_path)
+    root = tmp_path / "host-scan-authority"
+    root.mkdir()
+    (root / ".env").write_bytes(b"")
+    with pytest.raises(CapsuleRefused, match=message):
+        HostSanitizationAuthority(root, host_paths=(), vault_reader=VaultReader(body))
+
+
+def test_valid_but_empty_scanner_vault_refuses(tmp_path):
+    store, _digest = terminal_store(tmp_path)
+    empty = vault_body(store, current=())
+    with pytest.raises(CapsuleRefused, match="contains no exact credential values"):
+        scan_authority(tmp_path, store, vault=empty)
+
+
+def test_scanner_vault_missing_one_declared_name_refuses(tmp_path):
+    store, _digest = terminal_store(tmp_path)
+    incomplete = json.loads(vault_body(store))
+    del incomplete["values"]["TEAM_KEY"]
+    with pytest.raises(CapsuleRefused, match="does not attest every declared credential"):
+        scan_authority(tmp_path, store, vault=canonical_bytes(incomplete))
+
+
+def test_production_keychain_reader_refuses_unavailable_or_missing_item(tmp_path, monkeypatch, capsys):
+    store, _digest = terminal_store(tmp_path)
+    root = tmp_path / "host-scan-authority"
+    root.mkdir()
+    (root / ".env").write_bytes(b"")
+
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(capsule_vault.subprocess, "run", unavailable)
+    with pytest.raises(CapsuleRefused, match="unavailable from macOS Keychain"):
+        HostSanitizationAuthority.from_macos_keychain(root, host_paths=())
+
+    missing = subprocess.CompletedProcess([], 44, stdout=b"do-not-print-secret", stderr=b"keychain detail")
+    monkeypatch.setattr(capsule_vault.subprocess, "run", lambda *_args, **_kwargs: missing)
+    with pytest.raises(CapsuleRefused, match="item is missing or empty"):
+        HostSanitizationAuthority.from_macos_keychain(root, host_paths=())
+    captured = capsys.readouterr()
+    assert "do-not-print-secret" not in captured.out + captured.err
+
+
+def test_scanner_vault_stale_or_missing_active_current_refuses(tmp_path):
+    source = terminal_store(tmp_path)
+    stale = vault_body(source[0], source=("another-run", "f" * 64))
+    authority = scan_authority(tmp_path / "stale", source[0], vault=stale)
+    with pytest.raises(CapsuleRefused, match="stale for the terminal source Run"):
+        publish(transaction(tmp_path / "stale", source=source, scan_authority=authority))
+
+    with pytest.raises(CapsuleRefused, match="absent from the scanner vault current set"):
+        scan_authority(
+            tmp_path / "missing-current",
+            source[0],
+            current=(("TEAM_KEY", "another-current"),),
+            active=(("CTFD_API_TOKEN", "not-in-vault"),),
         )
 
 
-def test_host_scan_authority_preserves_repeated_values_and_rechecks_before_rename(tmp_path):
-    source = terminal_store(tmp_path, evidence=b'{"secret":"old-secret"}')
-    repeated = scan_authority(
-        tmp_path / "repeated",
-        secrets=(("CTFD_API_TOKEN", "old-secret"), ("CTFD_API_TOKEN", "current")),
-    )
-    with pytest.raises(CapsuleRefused, match="credential CTFD_API_TOKEN"):
-        publish(transaction(tmp_path / "repeated", source=source, scan_authority=repeated))
+def test_legacy_env_overlay_cannot_become_scanner_authority(tmp_path):
+    source = terminal_store(tmp_path)
+    root = tmp_path / "legacy"
+    trusted = scan_authority(root, source[0])
+    (root / "host-scan-authority" / ".env.older").write_text("CTFD_API_TOKEN=old-secret\n")
+    with pytest.raises(CapsuleRefused, match="legacy .env overlays are ambiguous"):
+        publish(transaction(root, source=source, scan_authority=trusted))
+
+
+def test_scanner_vault_rechecks_before_rename(tmp_path):
+    source = terminal_store(tmp_path)
 
     staged = tmp_path / "staged"
-    trusted = scan_authority(staged)
+    reader = VaultReader(vault_body(source[0]))
+    trusted = scan_authority(staged, source[0], vault_reader=reader)
 
-    def add_history(phase):
+    def rotate_vault(phase):
         if phase == "before_rename":
-            (staged / "host-scan-authority" / ".env.older").write_text("CTFD_API_TOKEN=old-secret\n")
+            reader.body = vault_body(source[0], version=2)
 
-    with pytest.raises(CapsuleRefused, match="history changed"):
-        publish(transaction(staged, source=source, scan_authority=trusted, hook=add_history))
+    with pytest.raises(CapsuleRefused, match="authority changed"):
+        publish(transaction(staged, source=source, scan_authority=trusted, hook=rotate_vault))
     assert not (staged / "runs" / "capsules").exists()
 
 
@@ -266,6 +381,17 @@ def test_identity_basis_binds_candidate_profile_source_blobs_schema_and_producer
     assert basis["blobs"][0]["digest"] == json.loads(source_events[1])["payload"]["blob_digest"]
     assert basis["receipt"]["schema_version"] == 1
     assert basis["receipt"]["producer"] == "synthetic-proof"
+    assert basis["scan_policy"]["vault"] == {
+        "receipt": vault_receipt(
+            version=1,
+            completeness_through={"run_id": "run-proof", "chain_head": basis["source"]["chain_head"]},
+            source_digest=basis["scan_policy"]["vault"]["source_digest"],
+        ),
+        "version": 1,
+        "completeness_through": {"run_id": "run-proof", "chain_head": basis["source"]["chain_head"]},
+        "source_digest": basis["scan_policy"]["vault"]["source_digest"],
+    }
+    assert b"fixture-current" not in b"".join(path.read_bytes() for path in promoted.path.rglob("*") if path.is_file())
     assert {item["digest"] for item in basis["blobs"]} | {
         item["digest"] for item in basis["excluded_source_blobs"]
     } == {json.loads(row)["payload"]["blob_digest"] for row in source_events}
@@ -321,7 +447,12 @@ def test_sanitization_refuses_before_anything_appears_under_runs(tmp_path, evide
             transaction(
                 tmp_path,
                 source=source,
-                scan_authority=scan_authority(tmp_path, secrets=secrets, forbidden_paths=forbidden_paths),
+                scan_authority=scan_authority(
+                    tmp_path,
+                    source[0],
+                    historical=secrets,
+                    forbidden_paths=forbidden_paths,
+                ),
             )
         )
     assert not (tmp_path / "runs").exists()
@@ -334,6 +465,11 @@ def test_opaque_binary_is_scanned_raw_without_forcing_semantic_decode(tmp_path):
     assert read_evidence(promoted.path, configured[2]).capsule_id == promoted.capsule_id
 
 
+def test_structured_blob_may_be_any_valid_json_value(tmp_path):
+    promoted = publish(transaction(tmp_path, source=terminal_store(tmp_path, evidence=b'["clean"]')))
+    assert verify_evidence_content(promoted.path).capsule_id == promoted.capsule_id
+
+
 def test_canonical_stream_is_scanned_in_addition_to_selected_blobs(tmp_path):
     source = terminal_store(tmp_path, command="old-secret")
     with pytest.raises(CapsuleRefused, match="source event 2 carries declared credential"):
@@ -341,7 +477,11 @@ def test_canonical_stream_is_scanned_in_addition_to_selected_blobs(tmp_path):
             transaction(
                 tmp_path,
                 source=source,
-                scan_authority=scan_authority(tmp_path, secrets=(("CTFD_API_TOKEN", "old-secret"),)),
+                scan_authority=scan_authority(
+                    tmp_path,
+                    source[0],
+                    historical=(("CTFD_API_TOKEN", "old-secret"),),
+                ),
             )
         )
     assert not (tmp_path / "runs").exists()
@@ -402,6 +542,7 @@ def test_abrupt_process_loss_recovers_absent_or_forensically_complete_publicatio
         body=b"",
     )
     (tmp_path / "candidate.json").write_bytes(canonical_manifest_bytes(draft()))
+    (tmp_path / "scanner-vault.json").write_bytes(vault_body(store))
     host_scan = tmp_path / "host-scan-authority"
     host_scan.mkdir()
     (host_scan / ".env").write_bytes(b"")

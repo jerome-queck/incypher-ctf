@@ -30,6 +30,7 @@ from solver.event_store_contracts import (
     TornAppendError,
     UnknownSchemaError,
     ReservationStatus,
+    RunNotTerminalError,
     RunSealedError,
     TerminalEventStoreSnapshot,
     event_contract,
@@ -86,6 +87,10 @@ class EventStoreCore:
         )
         with self._locked():
             existing = self._read_verified()
+            prior = self._find_exact_identity(existing, event, payload)
+            if prior is not None:
+                self._recover_reservation_locked(prior)
+                return prior
             self._refuse_after_terminal(existing)
             prior = self._find_identity(existing, event, payload)
             if prior is not None:
@@ -110,14 +115,18 @@ class EventStoreCore:
         payload = _redact(event.payload(blob_digest=blob_digest, blob_bytes=blob_bytes), self._redactor)
         with self._locked():
             existing = self._read_verified()
-            self._refuse_after_terminal(existing)
-            prior = self._find_identity(existing, event, payload)
+            prior = self._find_exact_identity(existing, event, payload)
             if prior is not None:
                 self._recover_reservation_locked(prior)
                 return self._reservation_from_event(prior)
             prior_reservation = self._find_reservation_for_payload(event, payload)
             if prior_reservation is not None:
                 return prior_reservation
+            self._refuse_after_terminal(existing)
+            prior = self._find_identity(existing, event, payload)
+            if prior is not None:
+                self._recover_reservation_locked(prior)
+                return self._reservation_from_event(prior)
             return self._reserve_locked(event, payload, existing)
 
     def commit(
@@ -134,6 +143,10 @@ class EventStoreCore:
         )
         with self._locked():
             existing = self._read_verified()
+            prior = self._find_exact_identity(existing, event, payload)
+            if prior is not None:
+                self._recover_reservation_locked(prior)
+                return prior
             self._refuse_after_terminal(existing)
             prior = self._find_identity(existing, event, payload)
             if prior is not None:
@@ -150,14 +163,14 @@ class EventStoreCore:
         with self._locked():
             events = self._read_verified()
             if not events or events[0].payload.get("record") != LifecycleRecord.RUN_OPEN.value:
-                raise RunSealedError("terminal snapshot has no Run genesis")
+                raise RunNotTerminalError("terminal snapshot has no Run genesis")
             records = [event.payload.get("record") for event in events]
             if (
                 records[-1] != LifecycleRecord.RUN_CLOSE.value
                 or records.count(LifecycleRecord.RUN_OPEN.value) != 1
                 or records.count(LifecycleRecord.RUN_CLOSE.value) != 1
             ):
-                raise RunSealedError("terminal snapshot requires one complete closed Run")
+                raise RunNotTerminalError("terminal snapshot requires one complete closed Run")
             return TerminalEventStoreSnapshot(self.run_id, tuple(events), events[-1].event_digest)
 
     def reservations(self) -> list[EventReservation]:
@@ -293,10 +306,9 @@ class EventStoreCore:
         )
 
     def _recover_reservation_locked(self, event: CommittedEvent) -> None:
-        for reservation in reversed(self._read_reservations()):
-            if reservation.sequence == event.sequence and reservation.status == ReservationStatus.RESERVED:
-                self._record_reservation(reservation, ReservationStatus.RECOVERED)
-                return
+        reservation = self._reservation_for_sequence(event.sequence)
+        if reservation is not None and reservation.status == ReservationStatus.RESERVED:
+            self._record_reservation(reservation, ReservationStatus.RECOVERED)
 
     def _read_reservations(self) -> list[EventReservation]:
         if not self.reservations_path.exists():
@@ -422,6 +434,21 @@ class EventStoreCore:
                 sequence=prior.sequence,
             )
         return None
+
+    @staticmethod
+    def _find_exact_identity(
+        existing: list[CommittedEvent],
+        event: CanonicalEvent,
+        payload: Mapping[str, Any],
+    ) -> CommittedEvent | None:
+        return next(
+            (
+                prior
+                for prior in existing
+                if prior.event_type == event.event_type and dict(prior.payload) == dict(payload)
+            ),
+            None,
+        )
 
     def _seal_blob(self, digest: str, body: bytes) -> None:
         path = self.sealed_dir / digest
