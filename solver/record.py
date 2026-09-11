@@ -249,7 +249,7 @@ class Recorder:
     def close_generation(self, generation_id: str, cause: str) -> None:
         """Close Work after every authority-bearing boundary of its Attempt is done."""
 
-        self.generations.close(generation_id, _generation_disposition(cause))
+        self.generations.close(generation_id, generation_disposition(cause))
 
     def run_open(self, *, board_profile: dict[str, Any]) -> None:
         """Open the Run with the whole Board profile **as discovered**.
@@ -695,7 +695,7 @@ def _redacted(value: Any, redactor: Redactor) -> Any:
     return value
 
 
-def _generation_disposition(cause: str) -> GenerationDisposition:
+def generation_disposition(cause: str) -> GenerationDisposition:
     if cause == FLAG:
         return GenerationDisposition.COMPLETE
     if cause == CRASHED:

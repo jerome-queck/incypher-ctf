@@ -89,6 +89,7 @@ class RuntimeBinding:
 class RuntimeReservation:
     cgroup_path: str
     executor_uid: int
+    control_nonce: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,10 +111,61 @@ class RuntimeObservation:
     executor_uid: int
     observed: Mapping[str, int | float | str | bool]
     cleanup_complete: bool
+    process_lifecycle: ProcessLifecycle | None = None
 
     @classmethod
     def exited(cls, *, exit_code: int, output: bytes, cgroup_path: str, executor_uid: int) -> RuntimeObservation:
         return cls(ResourceOutcome.EXITED, exit_code, output, cgroup_path, executor_uid, {}, True)
+
+
+@dataclass(frozen=True)
+class ProcessLifecycle:
+    """One bounded inventory, stream, and teardown observation for an envelope."""
+
+    descendants: tuple[int, ...]
+    after_term: tuple[int, ...]
+    after_kill: tuple[int, ...]
+    term_sent: bool
+    kill_sent: bool
+    term_grace_seconds: float
+    cleanup_seconds: float
+    stream_limit_bytes: int
+    stream_captured_bytes: int
+    stream_total_bytes: int
+    stream_truncated: bool
+    control_eof: bool
+    inventory_complete: bool = True
+    teardown_acknowledged: bool = True
+
+    def __post_init__(self) -> None:
+        inventories = (self.descendants, self.after_term, self.after_kill)
+        if any(any(isinstance(pid, bool) or pid <= 0 for pid in inventory) for inventory in inventories):
+            raise ValueError("process inventories require positive PIDs")
+        if any(len(set(inventory)) != len(inventory) for inventory in inventories):
+            raise ValueError("process inventories cannot contain duplicate PIDs")
+        counts = (self.stream_limit_bytes, self.stream_captured_bytes, self.stream_total_bytes)
+        if any(isinstance(value, bool) or value < 0 for value in counts):
+            raise ValueError("stream measures cannot be negative")
+        if self.stream_captured_bytes > self.stream_limit_bytes or self.stream_captured_bytes > self.stream_total_bytes:
+            raise ValueError("captured stream bytes exceed their bound")
+        if self.term_grace_seconds < 0 or self.cleanup_seconds < 0:
+            raise ValueError("process teardown durations cannot be negative")
+        booleans = (
+            self.term_sent,
+            self.kill_sent,
+            self.stream_truncated,
+            self.control_eof,
+            self.inventory_complete,
+            self.teardown_acknowledged,
+        )
+        if any(not isinstance(value, bool) for value in booleans):
+            raise ValueError("process lifecycle flags must be booleans")
+
+    def document(self) -> dict[str, object]:
+        document = asdict(self)
+        for field in ("descendants", "after_term", "after_kill"):
+            document[field] = list(document[field])
+        return document
 
 
 @dataclass(frozen=True)
@@ -245,6 +297,7 @@ __all__ = [
     "EnvelopeRecord",
     "EnvelopeSpec",
     "NetworkPolicy",
+    "ProcessLifecycle",
     "ResourceOutcome",
     "RuntimeBinding",
     "RuntimeObservation",

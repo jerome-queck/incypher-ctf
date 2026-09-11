@@ -21,6 +21,7 @@ from solver.attempt_executor_contracts import (
     RuntimeObservation,
     RuntimeReservation,
 )
+from solver.attempt_process_contracts import AttemptProcessRecorded, ProcessRecord
 from solver.event_store import EventStore
 from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED, EMPTY_BLOB_DIGEST
 from solver.event_store_storage import canonical_bytes
@@ -51,6 +52,10 @@ class ExecutorBusy(RuntimeError):
 
 class LateAttemptResult(RuntimeError):
     """A cleaned child result arrived after its Work generation closed."""
+
+
+class ProcessTreeResidue(RuntimeError):
+    """An owned process tree could not be completely reconciled."""
 
 
 class AttemptHandle:
@@ -120,8 +125,14 @@ class AttemptExecutor:
         self._handles_lock = threading.Lock()
         self._lock_file = self._open_lock()
         self._owner_epoch = self._next_owner_epoch()
-        self._append(EnvelopeRecord.OWNER_OPENED, event_id=f"{self._owner_epoch}:open")
-        self._reconcile()
+        try:
+            self._append(EnvelopeRecord.OWNER_OPENED, event_id=f"{self._owner_epoch}:open")
+            self._reconcile()
+        except BaseException:
+            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+            self._lock_file.close()
+            self._lock_file = None
+            raise
 
     def _open_lock(self):
         path = self._state / "runs" / self._run_id / "attempt-executor.lock"
@@ -144,12 +155,27 @@ class AttemptExecutor:
     def _reconcile(self) -> None:
         states = _envelope_states(self._store.events())
         unresolved = tuple(state for state in states.values() if state["record"] not in {"result", "discarded"})
-        observations = self._runtime.reconcile(unresolved)
-        for state, observation in zip(unresolved, observations, strict=True):
+        residue = _residue_states(self._store.events(), states, unresolved)
+        observations = self._runtime.reconcile((*unresolved, *residue))
+        for state, observation in zip((*unresolved, *residue), observations, strict=True):
+            if state in residue:
+                if observation.process_lifecycle is None:
+                    raise ProcessTreeResidue(f"envelope {state['envelope_id']!r} lacks reconciliation evidence")
+                self._append_process(
+                    ProcessRecord.OBSERVED,
+                    state,
+                    event_id=f"{state['envelope_id']}:process-observed:{self._owner_epoch}",
+                    lifecycle=observation.process_lifecycle,
+                )
+                if not observation.cleanup_complete:
+                    raise ProcessTreeResidue(f"envelope {state['envelope_id']!r} retains process residue")
+                continue
             try:
                 self._record_result(state, observation)
             except LateAttemptResult:
                 pass
+            if not observation.cleanup_complete:
+                raise ProcessTreeResidue(f"envelope {state['envelope_id']!r} retains process residue")
 
     def start(self, request: AttemptRequest) -> AttemptHandle:
         with self._canonical_lock:
@@ -200,6 +226,45 @@ class AttemptExecutor:
         self._lock_file.close()
         self._lock_file = None
 
+    def close_generation(self, generation_id: str, disposition) -> None:
+        """Fence one Work generation, then terminate and drain all of its envelopes."""
+
+        with self._canonical_lock:
+            self._generations.close(generation_id, disposition)
+            close = next(
+                event
+                for event in reversed(self._store.events())
+                if event.event_type == "work-generation.recorded"
+                and event.payload["generation_id"] == generation_id
+                and event.payload["record"] == "close"
+            )
+            fenced = {
+                event.payload["envelope_id"]
+                for event in self._store.events()
+                if event.event_type == "attempt-process.recorded"
+                and event.payload["record"] == ProcessRecord.FENCED.value
+            }
+            for state in _envelope_states(self._store.events()).values():
+                envelope_id = str(state["envelope_id"])
+                if state["generation_id"] == generation_id and envelope_id not in fenced:
+                    self._append_process(
+                        ProcessRecord.FENCED,
+                        state,
+                        event_id=f"{envelope_id}:fenced",
+                        fence_sequence=close.sequence,
+                        fence_ts=str(close.payload["ts"]),
+                    )
+        with self._handles_lock:
+            handles = tuple(handle for handle in self._handles if handle._request.generation_id == generation_id)
+        for handle in handles:
+            handle.cancel()
+        for handle in handles:
+            try:
+                handle.result()
+            except LateAttemptResult:
+                pass
+        self._write_process_receipt()
+
     def _run(self, handle: AttemptHandle) -> None:
         try:
             incoming = RuntimeInput(self._state, self._run_id, handle._request, self._binding)
@@ -228,6 +293,7 @@ class AttemptExecutor:
                     cgroup_path=reservation.cgroup_path,
                     executor_uid=reservation.executor_uid,
                     declared=handle._request.envelope.document(),
+                    observed={"control_nonce": reservation.control_nonce},
                 )
             observation = self._runtime.launch(
                 handle.envelope_id,
@@ -242,6 +308,7 @@ class AttemptExecutor:
                     observation.executor_uid,
                     observation.observed,
                     observation.cleanup_complete,
+                    observation.process_lifecycle,
                 )
             with self._canonical_lock:
                 state = _envelope_states(self._store.events())[handle.envelope_id]
@@ -262,12 +329,15 @@ class AttemptExecutor:
             workspace=self._state,
             envelope=_spec_from_document(state["declared"]),
         )
-        evidence = canonical_bytes(
-            {
-                "envelope_id": envelope_id,
-                "outcome": observation.outcome.value,
-                "cleanup_complete": observation.cleanup_complete,
-            }
+        if observation.process_lifecycle is not None:
+            self._append_process(
+                ProcessRecord.OBSERVED,
+                state,
+                event_id=f"{envelope_id}:process-observed:{self._owner_epoch}",
+                lifecycle=observation.process_lifecycle,
+            )
+        evidence = observation.output or canonical_bytes(
+            {"envelope_id": envelope_id, "outcome": observation.outcome.value}
         )
 
         def commit_result() -> None:
@@ -282,7 +352,7 @@ class AttemptExecutor:
                 exit_code=observation.exit_code,
                 cleanup_complete=observation.cleanup_complete,
                 declared=state["declared"],
-                observed=observation.observed,
+                observed={**dict(state.get("observed", {})), **observation.observed},
             )
 
         decision, _ = self._generations.authorize_and_commit(
@@ -301,14 +371,20 @@ class AttemptExecutor:
                 executor_uid=observation.executor_uid,
                 cleanup_complete=observation.cleanup_complete,
                 declared=state["declared"],
-                observed=observation.observed,
+                observed={**dict(state.get("observed", {})), **observation.observed},
             )
+            if not observation.cleanup_complete:
+                raise ProcessTreeResidue(f"envelope {envelope_id!r} retains process residue")
             raise LateAttemptResult(
                 f"Attempt result belongs to {decision.classification.value} {request.generation_id!r}"
             )
         from solver.attempt_resource_receipt import write_receipt
 
         write_receipt(self._state, self._run_id, self._isolation_receipt)
+        if observation.process_lifecycle is not None:
+            self._write_process_receipt()
+        if not observation.cleanup_complete:
+            raise ProcessTreeResidue(f"envelope {envelope_id!r} retains process residue")
         return AttemptResult(
             envelope_id=envelope_id,
             generation_id=request.generation_id,
@@ -318,6 +394,38 @@ class AttemptExecutor:
             observed=observation.observed,
             cleanup_complete=observation.cleanup_complete,
         )
+
+    def _append_process(
+        self,
+        record: ProcessRecord,
+        state: dict[str, object],
+        *,
+        event_id: str,
+        fence_sequence: int = 0,
+        fence_ts: str = "",
+        lifecycle=None,
+    ) -> None:
+        event = AttemptProcessRecorded(
+            event_id=event_id,
+            record=record,
+            owner_epoch=self._owner_epoch,
+            envelope_id=str(state["envelope_id"]),
+            generation_id=str(state["generation_id"]),
+            attempt_id=str(state["attempt_id"]),
+            step_id=str(state["step_id"]),
+            cgroup_path=str(state.get("cgroup_path", "")),
+            fence_sequence=fence_sequence,
+            fence_ts=fence_ts,
+            lifecycle=lifecycle,
+            ts=self._timestamp(),
+        )
+        self._store.append(event, body=b"")
+        self._write_process_receipt()
+
+    def _write_process_receipt(self) -> None:
+        from solver.attempt_process_lifecycle_receipt import write_receipt
+
+        write_receipt(self._state, self._run_id, self._isolation_receipt)
 
     def _next_envelope_id(self) -> str:
         serial = 1 + sum(
@@ -372,6 +480,19 @@ def _envelope_states(events) -> dict[str, dict[str, object]]:
     return states
 
 
+def _residue_states(events, states, unresolved) -> tuple[dict[str, object], ...]:
+    unresolved_ids = {state["envelope_id"] for state in unresolved}
+    latest: dict[str, dict[str, object]] = {}
+    for event in events:
+        if event.event_type == "attempt-process.recorded" and event.payload["record"] == ProcessRecord.OBSERVED.value:
+            latest[event.payload["envelope_id"]] = event.payload
+    return tuple(
+        states[envelope_id]
+        for envelope_id, process in latest.items()
+        if envelope_id not in unresolved_ids and process["lifecycle"]["after_kill"]
+    )
+
+
 def _spec_from_document(document) -> EnvelopeSpec:
     return EnvelopeSpec(
         cpu_seconds=float(document["cpu_seconds"]),
@@ -393,6 +514,7 @@ __all__ = [
     "EnvelopeSpec",
     "ExecutorBusy",
     "LateAttemptResult",
+    "ProcessTreeResidue",
     "NetworkPolicy",
     "ResourceOutcome",
     "RuntimeBinding",
