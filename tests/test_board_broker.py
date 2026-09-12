@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import solver.board_broker as board_broker
 
 from solver.board_broker import (
     BoardBrokerClient,
@@ -30,10 +31,20 @@ from solver.board_broker_contracts import (
     encode_result,
 )
 from solver.bootstrap_custody import Broker, BrokerVaultProcess
-from solver.capability import CapabilityAuthority, CapabilityBinding, PeerIdentity
+from solver.capability import CapabilityAuthority, CapabilityBinding, CapabilityRefused, PeerIdentity
 from solver.event_store import EventStore
 from solver.event_store_storage import canonical_bytes
-from solver.event_store_contracts import LifecycleRecorded, RunClosed, TerminalDisposition
+from solver.event_store_contracts import (
+    BlobDigestMismatchError,
+    LifecycleRecorded,
+    MissingBlobError,
+    RunClosed,
+    TerminalDisposition,
+)
+from solver.intake_evidence import IntakeEvidenceReader
+from solver.intake_journal import IntakeJournal
+from solver.intake_qualification import IntakeContract, IntakeDocument, PriorFence
+from solver.intake_receipt import write_interrupted_receipt
 from solver.redaction import Redactor
 from solver.local_ipc import receive_line
 from solver.work_generation import GenerationFence
@@ -140,7 +151,7 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
 
         assert result.outcome is BoardOutcome.ANSWERED
         assert result.value == ReadContractValue(reaches_ctfd=True)
-        assert result.provenance.endpoint == "/api/v1/challenges"
+        assert result.provenance.endpoint == "/api/v1/challenges?field=intake-is-not-a-field&q=a"
         assert result.provenance.response_digest
         assert "Token board-token" in observed["authorizations"]
     finally:
@@ -149,7 +160,14 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
         thread.join()
 
 
-def _broker(tmp_path: Path, transport, *, sealed_response_bytes: int = 4096, scope: str = "board.read"):
+def _broker(
+    tmp_path: Path,
+    transport,
+    *,
+    sealed_response_bytes: int = 4096,
+    scope: str = "board.read",
+    fetch_bytes: int = MAX_FETCH_BYTES,
+):
     state = tmp_path / "state"
 
     def timestamp():
@@ -186,6 +204,7 @@ def _broker(tmp_path: Path, transport, *, sealed_response_bytes: int = 4096, sco
         transport=transport,
         timestamp=timestamp,
         sealed_response_bytes=sealed_response_bytes,
+        fetch_bytes=fetch_bytes,
         profile_handle=PROFILE_HANDLE,
     )
     return state, authority, binding, handle, runtime
@@ -214,6 +233,230 @@ def test_authorized_current_generation_completes_typed_authenticated_read(tmp_pa
     assert records[1].response_truncated is False
     assert runtime.response_body(records[1]) == b'{"success":false,"message":"invalid field"}'
     assert b"board-token" not in (state / "runs" / "run-1" / "canonical" / "events.jsonl").read_bytes()
+
+
+def test_controller_intake_read_seals_exact_raw_privately_and_a_sanitized_canonical_view(tmp_path: Path) -> None:
+    raw = b'{"success":true,"data":{"description":"board-token"}}'
+    state, _authority, _binding, handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, raw, "", "application/json"),
+        scope="board.intake",
+    )
+
+    result = runtime.execute(object(), handle, BoardOperation.INTAKE_READ, path="/api/v1/challenges/7")
+
+    assert result.outcome is BoardOutcome.ANSWERED
+    assert result.value.body == raw
+    classified = runtime.records()[-1]
+    assert classified.raw_blob_class == "canonical-private-board-response"
+    assert classified.response_truncated is False
+    assert classified.response_lost_bytes == 0
+    assert classified.response_sanitized_bytes == len(runtime.response_body(classified))
+    assert (
+        IntakeEvidenceReader(state, "run-1").read(
+            classified.raw_blob_digest,
+            classified_event_id=classified.event_id,
+            sanitized=runtime.response_body(classified),
+        )
+        == raw
+    )
+    registration = next((state / "runs" / "run-1" / "sealed" / "private-board-response" / "references").iterdir())
+    registered = json.loads(registration.read_text())
+    assert registered["classified_event_id"] == classified.event_id
+    assert registered["storage_class"] == "restart-private-broker"
+    assert registered["retention"] == "retain-for-replay-unless-interrupted-attempt-retires"
+    assert registered["export"] is False
+    assert registered["model_readable"] is False
+    assert b"board-token" not in runtime.response_body(classified)
+    assert runtime.response_body(classified) != raw
+    assert b"board-token" not in (state / "runs" / "run-1" / "canonical" / "events.jsonl").read_bytes()
+
+
+def test_private_raw_reader_replays_the_sealed_redaction_transform(tmp_path: Path) -> None:
+    raw = b'{"secret":"board-token"}'
+    state, _authority, _binding, handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, raw, "", "application/json"),
+        scope="board.intake",
+    )
+    runtime.execute(object(), handle, BoardOperation.INTAKE_READ, path="/api/v1/challenges")
+    classified = runtime.records()[-1]
+    reference = next((state / "runs" / "run-1" / "sealed" / "private-board-response" / "references").iterdir())
+    registration = json.loads(reference.read_text())
+    registration["redaction"]["steps"][0]["positions"] = [0]
+    reference.write_text(json.dumps(registration, sort_keys=True, separators=(",", ":")) + "\n")
+
+    with pytest.raises(BlobDigestMismatchError, match="redaction"):
+        IntakeEvidenceReader(state, "run-1").read(
+            classified.raw_blob_digest,
+            classified_event_id=classified.event_id,
+            sanitized=runtime.response_body(classified),
+        )
+
+
+def test_canonical_broker_event_rejects_an_internally_consistent_substitute_redaction_policy(tmp_path: Path) -> None:
+    raw = b'{"secret":"board-token"}'
+    state, _authority, _binding, handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, raw, "", "application/json"),
+        scope="board.intake",
+    )
+    runtime.execute(object(), handle, BoardOperation.INTAKE_READ, path="/api/v1/challenges")
+    classified = runtime.records()[-1]
+    reference = next((state / "runs" / "run-1" / "sealed" / "private-board-response" / "references").iterdir())
+    registration = json.loads(reference.read_text())
+    registration["redaction"]["policy"]["forms"].append({"name": "SUBSTITUTE", "bytes": 8, "digest": "0" * 64})
+    registration["redaction"]["policy_digest"] = hashlib.sha256(
+        canonical_bytes(registration["redaction"]["policy"])
+    ).hexdigest()
+    reference.write_bytes(canonical_bytes(registration) + b"\n")
+
+    with pytest.raises(BlobDigestMismatchError, match="canonically reachable"):
+        IntakeEvidenceReader(state, "run-1").read(
+            classified.raw_blob_digest,
+            classified_event_id=classified.event_id,
+            sanitized=runtime.response_body(classified),
+        )
+
+
+def test_intake_over_limit_preserves_only_the_bounded_lower_bound_evidence(tmp_path: Path) -> None:
+    raw = b"12345"
+    state, _authority, _binding, handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, raw, "", "application/octet-stream"),
+        scope="board.intake",
+        fetch_bytes=4,
+    )
+
+    result = runtime.execute(object(), handle, BoardOperation.INTAKE_READ, path="/files/archive")
+
+    assert result.outcome is BoardOutcome.TOO_LARGE
+    assert result.value.body == raw
+    classified = runtime.records()[-1]
+    assert classified.response_original_bytes == 5
+    assert classified.raw_blob_bytes == 5
+    assert (
+        IntakeEvidenceReader(state, "run-1").read(
+            classified.raw_blob_digest,
+            classified_event_id=classified.event_id,
+        )
+        == raw
+    )
+
+
+def test_intake_cap_plus_one_crosses_the_real_service_client_seam(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(board_broker, "MAX_FETCH_BYTES", 4)
+    raw = b"12345"
+    _state, authority, binding, _handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, raw, "", "application/octet-stream"),
+        fetch_bytes=4,
+    )
+    runtime._profile_session_opened = True
+    runtime._profile_receipt_digest = "a" * 64
+    runtime._profile_peer_digest = PEER.digest
+    authority._token_bytes = lambda count: b"i" * count
+    socket_root = Path(tempfile.mkdtemp(prefix="bb-", dir="/tmp"))
+    service = BoardBrokerService(socket_root / "board.sock", runtime)
+    service.start()
+    try:
+        client, _peer, _profile = BoardBrokerClient.open_intake(service.path, binding, PROFILE_HANDLE)
+
+        result = client.intake_read("/files/archive")
+
+        assert result.outcome is BoardOutcome.TOO_LARGE
+        assert result.value.body == raw
+        client.close()
+    finally:
+        service.close()
+
+
+def test_interrupted_attempt_retires_its_reference_but_preserves_a_shared_live_blob(tmp_path: Path) -> None:
+    raw = b'{"success":true,"data":[]}'
+    state, _authority, _binding, handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, raw, "", "application/json"),
+        scope="board.intake",
+    )
+    first = runtime.execute(object(), handle, BoardOperation.INTAKE_READ, path="/api/v1/challenges")
+    second = runtime.execute(object(), handle, BoardOperation.INTAKE_READ, path="/api/v1/challenges")
+    profile = "1" * 64
+    subject = "2" * 64
+    journal = IntakeJournal(state, "run-1", Redactor({}), timestamp=lambda: "2026-09-12T00:00:00+00:00")
+    journal.start("attempt-interrupted", IntakeContract(profile, subject), PriorFence.genesis(profile))
+    provenance = first.provenance
+    journal.observe(
+        "attempt-interrupted",
+        IntakeDocument(
+            first.request_id,
+            provenance.classified_event_id,
+            1,
+            "list",
+            "/api/v1/challenges?page=1",
+            provenance.http_status,
+            provenance.content_type,
+            raw,
+            provenance.original_bytes,
+            True,
+            profile,
+            subject,
+            provenance.binding_digest,
+            provenance.peer_identity_digest,
+            page=1,
+            raw_blob_digest=provenance.raw_blob_digest,
+            sanitized_blob_digest=provenance.sanitized_blob_digest,
+            request_digest=provenance.request_digest,
+        ),
+    )
+    journal.close_orphans()
+
+    write_interrupted_receipt(state, "run-1", "attempt-interrupted")
+
+    with pytest.raises(MissingBlobError, match="registration is unavailable"):
+        IntakeEvidenceReader(state, "run-1").read(
+            first.provenance.raw_blob_digest,
+            classified_event_id=first.provenance.classified_event_id,
+        )
+    assert (
+        IntakeEvidenceReader(state, "run-1").read(
+            second.provenance.raw_blob_digest,
+            classified_event_id=second.provenance.classified_event_id,
+        )
+        == raw
+    )
+
+
+def test_only_profile_bound_controller_command_can_issue_intake_scope(tmp_path: Path) -> None:
+    _state, authority, binding, _handle, runtime = _broker(
+        tmp_path,
+        lambda _request: (200, b'{"success":true,"data":[]}', "", "application/json"),
+    )
+    runtime._profile_session_opened = True
+    runtime._profile_receipt_digest = "a" * 64
+    runtime._profile_peer_digest = PEER.digest
+    authority._token_bytes = lambda count: b"i" * count
+    socket_root = Path(tempfile.mkdtemp(prefix="bb-", dir="/tmp"))
+    service = BoardBrokerService(socket_root / "board.sock", runtime)
+    service.start()
+    try:
+        with pytest.raises(CapabilityRefused):
+            BoardBrokerClient.open(service.path, binding, scope="board.intake")
+        client, peer_digest, profile_digest = BoardBrokerClient.open_intake(
+            service.path,
+            binding,
+            PROFILE_HANDLE,
+        )
+        try:
+            result = client.intake_read("/api/v1/challenges?page=1")
+        finally:
+            client.close()
+    finally:
+        service.close()
+        socket_root.rmdir()
+
+    assert result.outcome is BoardOutcome.ANSWERED
+    assert peer_digest == PEER.digest
+    assert profile_digest == "a" * 64
 
 
 def test_compatibility_download_crosses_the_bounded_ipc_as_binary_not_a_json_frame(tmp_path: Path) -> None:
@@ -449,7 +692,7 @@ def test_response_evidence_is_bounded_with_exact_loss_metadata(tmp_path: Path) -
     record = runtime.records()[-1]
     assert record.response_original_bytes == len(body)
     assert record.response_truncated is True
-    assert record.response_lost_bytes == len(body) - 32
+    assert record.response_lost_bytes == record.response_sanitized_bytes - 32
     assert len(runtime.response_body(record)) <= 32
     assert b"team-key" not in runtime.response_body(record)
 

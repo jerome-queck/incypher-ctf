@@ -64,7 +64,7 @@ def env(**overrides):
 
 def wired(monkeypatch, wire):
     """Both Boards the entry point builds, over one scripted CTFd."""
-    monkeypatch.setattr(entry, "Board", lambda url, token: Board(url, token, wire.transport))
+    monkeypatch.setattr(entry, "TEST_DIRECT_BOARD_FACTORY", lambda url, token: Board(url, token, wire.transport))
 
 
 class Answered(Child):
@@ -190,7 +190,7 @@ def stop_at_board_construction(monkeypatch):
     def construct(*_args):
         raise BoardConstructed
 
-    monkeypatch.setattr(entry, "Board", construct)
+    monkeypatch.setattr(entry, "TEST_DIRECT_BOARD_FACTORY", construct)
     return BoardConstructed
 
 
@@ -204,6 +204,15 @@ def test_a_board_nothing_holds_rules_for_refuses_before_a_single_request(capsys,
 
     assert code == REFUSED
     assert "no Board profile" in capsys.readouterr().err
+
+
+def test_production_refuses_direct_board_transport_without_an_explicit_test_injection(
+    capsys, tmp_path, logged_in, boards
+):
+    code = main(env(), run_state=tmp_path / "state", boards=boards)
+
+    assert code == REFUSED
+    assert "qualified Board broker is required" in capsys.readouterr().err
 
 
 def test_controlled_replay_proof_matches_the_current_entry_point(capsys, monkeypatch, tmp_path, logged_in, boards):
@@ -313,7 +322,11 @@ def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_re
             wire.listed, wire.control = [], CONTROL_AGREEABLE
         return answered
 
-    monkeypatch.setattr(entry, "Board", lambda url, token: Board(url, token, falls_over_after_the_profile))
+    monkeypatch.setattr(
+        entry,
+        "TEST_DIRECT_BOARD_FACTORY",
+        lambda url, token: Board(url, token, falls_over_after_the_profile),
+    )
 
     code = main(env(TEAM_KEY="never-print-me"), run_state=state, boards=boards)
 

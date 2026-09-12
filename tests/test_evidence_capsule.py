@@ -24,6 +24,7 @@ from solver.evidence_capsule_reader import read_evidence, verify_evidence_conten
 from solver.evidence_capsule_scan import HostSanitizationAuthority
 from solver.evidence_capsule_vault import VAULT_KIND, vault_receipt
 from solver.credentials import SECRETS
+from solver.board_broker_contracts import BoardBrokerRecorded, BoardOperation, BoardOutcome, BoardRecord
 from solver.event_store import EventStore
 from solver.event_store_contracts import (
     LifecycleRecorded,
@@ -66,6 +67,43 @@ def terminal_store(tmp_path, evidence=b'{"answer":"clean"}', run_id="run-proof",
     return store, observation.blob_digest
 
 
+def terminal_intake_store(tmp_path, raw: bytes, sanitized: bytes, run_id="run-proof"):
+    store = EventStore(tmp_path / run_id, run_id=run_id)
+    store.append(LifecycleRecorded("run:open", RunOpened()), body=b"")
+    event = store.append(
+        BoardBrokerRecorded(
+            event_id="board-broker:000002",
+            request_id="board-broker:000001",
+            record=BoardRecord.CLASSIFIED,
+            operation=BoardOperation.INTAKE_READ,
+            binding_digest="1" * 64,
+            run_id=run_id,
+            boot_id="boot-1",
+            generation_id="generation-1",
+            lane_id="lane-1",
+            attempt_id="attempt-1",
+            step_id="step-1",
+            scope="board.intake",
+            peer_identity_digest="2" * 64,
+            request_digest="3" * 64,
+            outcome=BoardOutcome.ANSWERED,
+            endpoint="/api/v1/challenges",
+            http_status=200,
+            response_digest=hashlib.sha256(raw).hexdigest(),
+            response_original_bytes=len(raw),
+            response_sanitized_bytes=len(sanitized),
+            raw_blob_digest=hashlib.sha256(raw).hexdigest(),
+            raw_blob_bytes=len(raw),
+            raw_blob_class="canonical-private-board-response",
+            response_content_type="application/json",
+            redaction_policy_digest="4" * 64,
+        ),
+        body=sanitized,
+    )
+    store.append(LifecycleRecorded("run:close", RunClosed(TerminalDisposition.NORMAL)), body=b"")
+    return store, event.blob_digest
+
+
 def draft(image="a"):
     return generate_manifest(
         image_digest="sha256:" + image * 64,
@@ -95,6 +133,18 @@ def registry(*, producer="synthetic-proof", structured=True):
         return [BlobSelection(causal[0], "application/json", structured)]
 
     return ReceiptRegistry([ReceiptContract("promotion-transaction", 1, producer, validate)])
+
+
+def intake_registry():
+    def validate(document, source):
+        causal = [
+            event["payload"]["blob_digest"] for event in source.events if event["event_type"] == "board-broker.recorded"
+        ]
+        if causal != [document.get("evidence_digest")]:
+            raise CapsuleRefused("receipt evidence claim does not match its causal source")
+        return [BlobSelection(causal[0], "application/json", True)]
+
+    return ReceiptRegistry([ReceiptContract("promotion-transaction", 1, "synthetic-proof", validate)])
 
 
 class VaultReader:
@@ -405,6 +455,24 @@ def test_synthetic_receipt_passes_the_whole_transaction_and_versioned_read(tmp_p
     assert row["receipt_ref"] == "receipt:promotion-transaction"
     assert row["evidence_refs"] == [promoted.content_ref]
     assert promoted.candidate_manifest["lifecycle"] == "provisional"
+
+
+@pytest.mark.parametrize(
+    ("raw", "sanitized", "private_excluded"),
+    [
+        (b'{"answer":"clean"}', b'{"answer":"clean"}', False),
+        (b'{"token":"secret"}', b'{"token":"[redacted:CTFD_API_TOKEN]"}', True),
+    ],
+)
+def test_capsule_verifies_with_equal_or_distinct_private_intake_raw_digest(tmp_path, raw, sanitized, private_excluded):
+    source = terminal_intake_store(tmp_path, raw, sanitized)
+    configured = transaction(tmp_path, source=source, registry=intake_registry())
+
+    promoted = publish(configured)
+    verified = verify_evidence_content(promoted.path)
+
+    exclusions = verified.manifest["content_basis"]["excluded_source_blobs"]
+    assert any(item["classification"] == "restart-private-broker" for item in exclusions) is private_excluded
 
 
 def test_identity_basis_binds_candidate_profile_source_blobs_schema_and_producer(tmp_path):

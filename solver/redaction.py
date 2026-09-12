@@ -15,10 +15,12 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import base64
+import hashlib
 import urllib.parse
 from collections.abc import Mapping
 
 from solver.credentials import SECRETS
+from solver.event_store_storage import canonical_bytes
 
 
 # A base64 fragment shorter than this matches ordinary text, and an Observation eaten by a false
@@ -105,3 +107,55 @@ class Redactor:
             if form in redacted:
                 redacted = redacted.replace(form, f"[redacted:{name}]".encode())
         return redacted
+
+    def policy_document(self) -> dict[str, object]:
+        """Secret-free commitments to the exact ordered replacement policy."""
+
+        return {
+            "version": 1,
+            "forms": [
+                {"name": name, "bytes": len(form), "digest": hashlib.sha256(form).hexdigest()}
+                for form, name in self._forms
+            ],
+        }
+
+    @property
+    def policy_digest(self) -> str:
+        return hashlib.sha256(canonical_bytes(self.policy_document())).hexdigest()
+
+    def redact_with_proof(self, body: bytes | str) -> tuple[bytes, dict[str, object]]:
+        """Redact and return a secret-free, independently replayable transform proof."""
+
+        redacted = body.encode() if isinstance(body, str) else body
+        steps = []
+        for index, (form, name) in enumerate(self._forms):
+            positions = _positions(redacted, form)
+            if not positions:
+                continue
+            before = redacted
+            marker = f"[redacted:{name}]".encode()
+            redacted = redacted.replace(form, marker)
+            steps.append(
+                {
+                    "policy_index": index,
+                    "positions": positions,
+                    "before_digest": hashlib.sha256(before).hexdigest(),
+                    "after_digest": hashlib.sha256(redacted).hexdigest(),
+                }
+            )
+        return redacted, {
+            "policy": self.policy_document(),
+            "policy_digest": self.policy_digest,
+            "steps": steps,
+        }
+
+
+def _positions(body: bytes, needle: bytes) -> list[int]:
+    positions = []
+    start = 0
+    while True:
+        found = body.find(needle, start)
+        if found < 0:
+            return positions
+        positions.append(found)
+        start = found + len(needle)

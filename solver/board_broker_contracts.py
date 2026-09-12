@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from solver.board import Held, Mana, Reply, Standing, Verdict
 from solver.capability import CapabilityBinding
 from solver.event_store_contracts import InvalidEventError
+from solver.intake_evidence import PRIVATE_BOARD_RESPONSE_CLASS
 
 BOARD_BROKER_RECORDED = "board-broker.recorded"
 BOARD_BROKER_SOCKET_ENV = "INCYPHER_BOARD_BROKER_SOCKET"
@@ -20,6 +21,7 @@ SCHEMA_VERSION = 1
 
 
 class BoardOperation(str, enum.Enum):
+    INTAKE_READ = "intake-read"
     READ_CONTRACT = "read-contract"
     CHALLENGES = "challenges"
     CHALLENGE = "challenge"
@@ -60,6 +62,18 @@ class BoardProvenance:
     original_bytes: int = 0
     truncated: bool = False
     lost_bytes: int = 0
+    raw_blob_digest: str = ""
+    raw_blob_bytes: int = 0
+    raw_blob_class: str = ""
+    classified_event_id: str = ""
+    binding_digest: str = ""
+    peer_identity_digest: str = ""
+    request_digest: str = ""
+    profile_digest: str = ""
+    content_type: str = ""
+    location: str = ""
+    sanitized_blob_digest: str = ""
+    redaction_policy_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,8 +102,15 @@ class DownloadValue:
     hops: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class IntakeReadValue:
+    body: bytes
+    location: str
+
+
 BoardValue = (
-    ReadContractValue
+    IntakeReadValue
+    | ReadContractValue
     | ChallengesValue
     | ChallengeValue
     | ScoreboardValue
@@ -133,6 +154,17 @@ def encode_result(result: BoardBrokerResult) -> dict[str, object]:
             "original_bytes": result.provenance.original_bytes,
             "truncated": result.provenance.truncated,
             "lost_bytes": result.provenance.lost_bytes,
+            "raw_blob_digest": result.provenance.raw_blob_digest,
+            "raw_blob_bytes": result.provenance.raw_blob_bytes,
+            "raw_blob_class": result.provenance.raw_blob_class,
+            "classified_event_id": result.provenance.classified_event_id,
+            "binding_digest": result.provenance.binding_digest,
+            "peer_identity_digest": result.provenance.peer_identity_digest,
+            "request_digest": result.provenance.request_digest,
+            "profile_digest": result.provenance.profile_digest,
+            "content_type": result.provenance.content_type,
+            "location": result.provenance.location,
+            "sanitized_blob_digest": result.provenance.sanitized_blob_digest,
         },
         "request_id": result.request_id,
     }
@@ -155,6 +187,17 @@ def decode_result(document: Mapping[str, object]) -> BoardBrokerResult:
             original_bytes=int(provenance.get("original_bytes", 0)),
             truncated=bool(provenance.get("truncated", False)),
             lost_bytes=int(provenance.get("lost_bytes", 0)),
+            raw_blob_digest=str(provenance.get("raw_blob_digest", "")),
+            raw_blob_bytes=int(provenance.get("raw_blob_bytes", 0)),
+            raw_blob_class=str(provenance.get("raw_blob_class", "")),
+            classified_event_id=str(provenance.get("classified_event_id", "")),
+            binding_digest=str(provenance.get("binding_digest", "")),
+            peer_identity_digest=str(provenance.get("peer_identity_digest", "")),
+            request_digest=str(provenance.get("request_digest", "")),
+            profile_digest=str(provenance.get("profile_digest", "")),
+            content_type=str(provenance.get("content_type", "")),
+            location=str(provenance.get("location", "")),
+            sanitized_blob_digest=str(provenance.get("sanitized_blob_digest", "")),
         ),
         str(document.get("request_id", "")),
     )
@@ -163,6 +206,8 @@ def decode_result(document: Mapping[str, object]) -> BoardBrokerResult:
 def _encode_value(operation: BoardOperation, value: BoardValue | None) -> object:
     if value is None:
         return None
+    if isinstance(value, IntakeReadValue):
+        return {"body": base64.b64encode(value.body).decode(), "location": value.location}
     if isinstance(value, ReadContractValue):
         return {"reaches_ctfd": value.reaches_ctfd}
     if isinstance(value, ChallengesValue):
@@ -189,6 +234,8 @@ def _decode_value(operation: BoardOperation, value: object) -> BoardValue | None
         return None
     if not isinstance(value, Mapping):
         raise ValueError("Board broker value is not an object")
+    if operation is BoardOperation.INTAKE_READ:
+        return IntakeReadValue(base64.b64decode(str(value["body"])), str(value["location"]))
     if operation is BoardOperation.READ_CONTRACT:
         return ReadContractValue(bool(value["reaches_ctfd"]))
     if operation is BoardOperation.CHALLENGES:
@@ -237,8 +284,16 @@ class BoardBrokerRecorded:
     http_status: int = 0
     response_digest: str = ""
     response_original_bytes: int = 0
+    response_sanitized_bytes: int = 0
     response_truncated: bool = False
     response_lost_bytes: int = 0
+    raw_blob_digest: str = ""
+    raw_blob_bytes: int = 0
+    raw_blob_class: str = ""
+    profile_digest: str = ""
+    response_content_type: str = ""
+    response_location: str = ""
+    redaction_policy_digest: str = ""
     ts: str = ""
 
     @property
@@ -274,8 +329,16 @@ class BoardBrokerRecorded:
             "http_status": self.http_status,
             "response_digest": self.response_digest,
             "response_original_bytes": self.response_original_bytes,
+            "response_sanitized_bytes": self.response_sanitized_bytes,
             "response_truncated": self.response_truncated,
             "response_lost_bytes": self.response_lost_bytes,
+            "raw_blob_digest": self.raw_blob_digest,
+            "raw_blob_bytes": self.raw_blob_bytes,
+            "raw_blob_class": self.raw_blob_class,
+            "profile_digest": self.profile_digest,
+            "response_content_type": self.response_content_type,
+            "response_location": self.response_location,
+            "redaction_policy_digest": self.redaction_policy_digest,
             "ts": self.ts,
             "blob_digest": blob_digest,
             "blob_bytes": blob_bytes,
@@ -303,8 +366,21 @@ class BoardBrokerRecorded:
             "response_digest",
             "ts",
             "blob_digest",
+            "raw_blob_digest",
+            "raw_blob_class",
+            "profile_digest",
+            "response_content_type",
+            "response_location",
+            "redaction_policy_digest",
         )
-        integers = ("http_status", "response_original_bytes", "response_lost_bytes", "blob_bytes")
+        integers = (
+            "http_status",
+            "response_original_bytes",
+            "response_sanitized_bytes",
+            "response_lost_bytes",
+            "raw_blob_bytes",
+            "blob_bytes",
+        )
         required = (*strings, *integers, "response_truncated")
         if missing := [name for name in required if name not in payload]:
             raise InvalidEventError(f"Board-broker payload is missing: {', '.join(missing)}", sequence=sequence)
@@ -351,6 +427,10 @@ class BoardBrokerRecorded:
                 or payload["response_original_bytes"]
                 or payload["response_truncated"]
                 or payload["response_lost_bytes"]
+                or payload["raw_blob_digest"]
+                or payload["raw_blob_bytes"]
+                or payload["raw_blob_class"]
+                or payload["redaction_policy_digest"]
                 or payload["blob_bytes"]
             ):
                 raise InvalidEventError("Board-broker reservation carries a response", sequence=sequence)
@@ -359,7 +439,23 @@ class BoardBrokerRecorded:
                 raise InvalidEventError("Board-broker result has no typed outcome", sequence=sequence)
             if payload["response_digest"] and not _digest(payload["response_digest"]):
                 raise InvalidEventError("Board-broker response digest is invalid", sequence=sequence)
-            expected_loss = max(0, payload["response_original_bytes"] - payload["blob_bytes"])
+            if payload["operation"] == BoardOperation.INTAKE_READ.value:
+                if (
+                    not _digest(payload["raw_blob_digest"])
+                    or payload["raw_blob_digest"] != payload["response_digest"]
+                    or payload["raw_blob_bytes"] != payload["response_original_bytes"]
+                    or payload["raw_blob_class"] != PRIVATE_BOARD_RESPONSE_CLASS
+                    or not _digest(payload["redaction_policy_digest"])
+                ):
+                    raise InvalidEventError("Board-broker private raw response is invalid", sequence=sequence)
+            elif (
+                payload["raw_blob_digest"]
+                or payload["raw_blob_bytes"]
+                or payload["raw_blob_class"]
+                or payload["redaction_policy_digest"]
+            ):
+                raise InvalidEventError("non-Intake broker result carries private raw evidence", sequence=sequence)
+            expected_loss = max(0, payload["response_sanitized_bytes"] - payload["blob_bytes"])
             if payload["response_lost_bytes"] != expected_loss:
                 raise InvalidEventError("Board-broker response loss accounting disagrees", sequence=sequence)
             if payload["response_truncated"] != bool(payload["response_lost_bytes"]):
@@ -381,6 +477,8 @@ __all__ = [
     "ChallengeValue",
     "ChallengesValue",
     "DownloadValue",
+    "IntakeReadValue",
+    "PRIVATE_BOARD_RESPONSE_CLASS",
     "ReadContractValue",
     "ScoreboardValue",
     "BoardOperation",

@@ -20,6 +20,7 @@ import os
 import signal
 import sys
 from collections.abc import Mapping
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from solver.attempt_executor_pool import POOL_ENV, attach_attempt_pool
 from solver.attempt_executor_runtime import AttemptRuntime
 from solver.board import Board
 from solver.board_broker import BoardCompatibilityClient, BoardProfileClient
+from solver.coherent_intake import BrokerIntakeSource, CoherentIntake, contract_from_profile_receipt
 from solver.board_broker_contracts import BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
 from solver.boot import Refusal
 from solver.codex import Invocation, asking
@@ -37,6 +39,7 @@ from solver.event_store import EventStoreDamage
 from solver.flag import Flags, Pace
 from solver.instance import Instances
 from solver.intake import Intake
+from solver.intake_qualification import NoCoherentSnapshot
 from solver.isolation import IMAGE_ID as STRICT_IMAGE_ENV
 from solver.isolation_receipt import RECEIPT_FILENAME as ISOLATION_RECEIPT_FILENAME
 from solver.record import Recorder
@@ -72,6 +75,9 @@ REFUSED = 2
 # left off, because a stream that stops after `run-open` is indistinguishable from a container that
 # was killed, and those want opposite investigations.
 REFUSED_AT_BOOT = "refused-at-boot"
+
+# Tests may inject the retired direct transport explicitly. Production never assigns this seam.
+TEST_DIRECT_BOARD_FACTORY: Callable[[str, str], Board] | None = None
 
 
 def main(environ: Mapping[str, str], *, run_state: Path = RUN_STATE, boards: Path = profile.BOARDS) -> int:
@@ -133,7 +139,12 @@ def _run_admitted(
     """Keep capability IPC live beside every admitted v1 Board and inference call."""
 
     held.must_hold(rules.requires)
-    if board_broker_path:
+    if board_broker_path is None:
+        if TEST_DIRECT_BOARD_FACTORY is None:
+            raise Refusal(f"{boot.MARK} qualified Board broker is required for production Intake")
+        board = TEST_DIRECT_BOARD_FACTORY(held.url, held.token)
+        discovered = profile.discovered(board, TEST_DIRECT_BOARD_FACTORY(held.url, ""), rules)
+    else:
         profiler = BoardProfileClient(board_broker_path, profile_handle)
         decision = profiler.qualify(rules, rules_source or f"{rules.event}{profile.SUFFIX}")
         if not decision.authoritative or decision.profile is None:
@@ -141,10 +152,6 @@ def _run_admitted(
         profiler.open_operations()
         discovered = decision.profile
         board = BoardCompatibilityClient(board_broker_path)
-    else:
-        board = Board(held.url, held.token)
-        # Compatibility-only direct transport; production credentials stay behind the Board broker.
-        discovered = profile.discovered(board, Board(held.url, ""), rules)
 
     now = dt.datetime.now(dt.timezone.utc)
     try:
@@ -174,9 +181,27 @@ def _run_admitted(
         }
     )
 
-    intake = Intake(board, recorder)
+    if board_broker_path is None:
+        intake = Intake(board, recorder)
+    else:
+        intake_contract = contract_from_profile_receipt(run_state, held.run_id)
+        intake = CoherentIntake(
+            BrokerIntakeSource(
+                board_broker_path,
+                state=run_state,
+                run_id=held.run_id,
+                boot_id=boot_id,
+                board_url=held.url,
+                profile_handle=profile_handle,
+                contract=intake_contract,
+                generations=recorder.generations,
+            ),
+            recorder,
+            intake_contract,
+            Redactor.for_declared_secrets(environ),
+        )
     opening = intake.sync()
-    if not opening.believable:
+    if not isinstance(opening, NoCoherentSnapshot) and hasattr(opening, "believable") and not opening.believable:
         # The same fault mid-Run keeps the last snapshot and carries on — a Board that cannot be
         # read is not a Board that emptied. At boot there is no last snapshot to keep, and a Run that
         # started here would spend its window ranking nothing while reporting success.

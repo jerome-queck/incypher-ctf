@@ -733,6 +733,12 @@ def event_contract(event_type: str):
         BoardProfilePhaseRecorded,
     )
     from solver.lead_contracts import LEAD_ENGAGEMENT_RECORDED, LeadEngagementRecorded
+    from solver.intake_contracts import (
+        INTAKE_DECISION_RECORDED,
+        INTAKE_OBSERVATION_RECORDED,
+        IntakeDecisionRecorded,
+        IntakeObservationRecorded,
+    )
     from solver.storage_governor_contracts import STORAGE_GOVERNOR_RECORDED, StorageGovernorRecorded
 
     contracts = {
@@ -746,6 +752,8 @@ def event_contract(event_type: str):
         BOARD_PROFILE_OBSERVATION_RECORDED: BoardProfileObservationRecorded,
         BOARD_PROFILE_PHASE_RECORDED: BoardProfilePhaseRecorded,
         LEAD_ENGAGEMENT_RECORDED: LeadEngagementRecorded,
+        INTAKE_DECISION_RECORDED: IntakeDecisionRecorded,
+        INTAKE_OBSERVATION_RECORDED: IntakeObservationRecorded,
         STORAGE_GOVERNOR_RECORDED: StorageGovernorRecorded,
     }
     return contracts.get(event_type)
@@ -762,6 +770,12 @@ class CommittedEvent:
     blob_digest: str
     blob_bytes: int
     body: bytes = b""
+
+
+@dataclass(frozen=True)
+class CompareAndAppendResult:
+    committed: CommittedEvent | None
+    observed: CommittedEvent | None
 
 
 @dataclass(frozen=True)

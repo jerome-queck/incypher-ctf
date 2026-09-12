@@ -40,6 +40,8 @@ from solver.board_broker_contracts import (
     BoardProvenance,
     BoardRecord,
     DownloadValue,
+    IntakeReadValue,
+    PRIVATE_BOARD_RESPONSE_CLASS,
     ReadContractValue,
     ScoreboardValue,
     binding_document,
@@ -49,6 +51,7 @@ from solver.board_broker_contracts import (
 )
 from solver.board_profile_phase import ProfilePhaseWriter
 from solver.board_profile_contracts import BoardProfileObservationRecorded
+from solver.intake_evidence import IntakeEvidenceWriter
 from solver.capability import (
     CapabilityAuthority,
     CapabilityBinding,
@@ -63,6 +66,7 @@ from solver.redaction import Redactor
 MAX_SEALED_RESPONSE_BYTES = 64 * 1024
 
 _SCOPE = {
+    BoardOperation.INTAKE_READ: "board.intake",
     BoardOperation.READ_CONTRACT: "board.read",
     BoardOperation.CHALLENGES: "board.read",
     BoardOperation.CHALLENGE: "board.read",
@@ -106,8 +110,16 @@ class BoardBrokerRecordView:
     http_status: int
     response_digest: str
     response_original_bytes: int
+    response_sanitized_bytes: int
     response_truncated: bool
     response_lost_bytes: int
+    raw_blob_digest: str
+    raw_blob_bytes: int
+    raw_blob_class: str
+    profile_digest: str
+    response_content_type: str
+    response_location: str
+    redaction_policy_digest: str
     blob_digest: str
 
 
@@ -127,6 +139,7 @@ class BoardBrokerRuntime:
         transport: Transport | None = None,
         timestamp: Callable[[], str],
         sealed_response_bytes: int = MAX_SEALED_RESPONSE_BYTES,
+        fetch_bytes: int = MAX_FETCH_BYTES,
         profile_required: bool = False,
         profile_handle: str = "",
     ) -> None:
@@ -141,6 +154,8 @@ class BoardBrokerRuntime:
             {name: value for name, value in {"CTFD_API_TOKEN": token, "TEAM_KEY": team_key}.items() if value}
         )
         self._store = EventStore(state, run_id=run_id, redactor=self._redactor)
+        self._fetch_bytes = fetch_bytes
+        self._intake_evidence = IntakeEvidenceWriter(state, run_id, max_response_bytes=fetch_bytes + 1)
         self._serial = sum(event.event_type == "board-broker.recorded" for event in self._store.events())
         self._sealed_response_bytes = sealed_response_bytes
         self._wire_local = threading.local()
@@ -151,27 +166,29 @@ class BoardBrokerRuntime:
         self._profile_handle_digest = hashlib.sha256(profile_handle.encode()).digest() if profile_handle else b""
         self._profile_peer_digest = ""
         self._profile_session_opened = False
+        self._profile_receipt_digest = ""
 
-        bounded_transport = transport or network_transport()
+        bounded_transport = transport or network_transport(fetch_bytes)
 
         def observed(request):
             wire = self._wire()
+            parsed = urllib.parse.urlsplit(request.full_url)
+            endpoint = parsed.path + (f"?{parsed.query}" if parsed.query else "")
             try:
                 result = bounded_transport(request)
             except OSError as error:
-                wire.append((0, b"", "", type(error).__name__))
+                wire.append((0, b"", endpoint, type(error).__name__, "", ""))
                 raise
             if len(result) == 3:
                 status, raw, location = result
                 content_type = ""
             else:
                 status, raw, location, content_type = result
-            path = urllib.parse.urlparse(request.full_url).path
-            wire.append((status, raw, path, ""))
+            wire.append((status, raw, endpoint, "", content_type, location))
             return status, raw, location, content_type
 
-        self._board = Board(url, token, observed)
-        self._public_board = Board(url, "", observed)
+        self._board = Board(url, token, observed, fetch_bytes=fetch_bytes)
+        self._public_board = Board(url, "", observed, fetch_bytes=fetch_bytes)
 
     def qualify_profile(self, connection: object, profile_handle: str, rules, rules_source: str) -> ProfileDecision:
         """Run one Boot-owned, peer-authenticated profile probe behind credential custody."""
@@ -192,6 +209,7 @@ class BoardBrokerRuntime:
                 if hashlib.sha256(receipt_path.read_bytes()).hexdigest() != phase.receipt_digest:
                     raise ValueError("canonical Board-profile receipt digest disagrees with its decision")
                 receipt_path = verify_profile_receipt(receipt_path)
+                self._profile_receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
                 receipt = json.loads(receipt_path.read_text())
                 if receipt["rules"]["source"] != rules_source:
                     raise ValueError("canonical Board profile belongs to a different Rules source")
@@ -211,6 +229,7 @@ class BoardBrokerRuntime:
                 decision.authoritative,
                 hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
             )
+            self._profile_receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
             return decision
 
     def open_profiled_operations(self, connection: object, profile_handle: str) -> None:
@@ -218,6 +237,8 @@ class BoardBrokerRuntime:
         with self._profile_lock:
             self._authorize_profile(profile_handle, peer)
             self._profile_phase.open_operations()
+            if not self._profile_receipt_digest:
+                self._profile_receipt_digest = self._profile_phase.state().receipt_digest
             self._profile_session_opened = True
 
     def _authorize_profile(self, profile_handle: str, peer) -> None:
@@ -358,9 +379,11 @@ class BoardBrokerRuntime:
         except OSError:
             outcome = BoardOutcome.UNREACHABLE
         wire = self._wire()
-        status, raw, endpoint, transport_error = wire[-1] if wire else (0, b"", "", "")
+        status, raw, endpoint, transport_error, content_type, location = wire[-1] if wire else (0, b"", "", "", "", "")
         if transport_error:
             outcome, value = _transport_failure(operation, transport_error), None
+        if operation is BoardOperation.INTAKE_READ and len(raw) > self._fetch_bytes:
+            outcome, value = BoardOutcome.TOO_LARGE, None
         if status == 401:
             outcome, value = BoardOutcome.AUTH_FAILURE, None
         try:
@@ -369,14 +392,26 @@ class BoardBrokerRuntime:
             outcome, value = _refusal_outcome(refused), None
         except (OSError, RuntimeError, ValueError):
             outcome, value = BoardOutcome.RESERVATION_REFUSED, None
-        sanitized = self._redactor.redact(raw)
-        sealed = sanitized[: self._sealed_response_bytes]
+        classified_event_id = self._next_id()
+        sanitized, redaction_proof = self._redactor.redact_with_proof(raw)
+        raw_blob_digest = (
+            self._intake_evidence.seal(
+                raw,
+                classified_event_id=classified_event_id,
+                sanitized=sanitized,
+                redaction_proof=redaction_proof,
+            )
+            if operation is BoardOperation.INTAKE_READ
+            else ""
+        )
+        sealed = sanitized if operation is BoardOperation.INTAKE_READ else sanitized[: self._sealed_response_bytes]
         original_bytes = len(raw)
-        lost_bytes = max(0, original_bytes - len(sealed))
+        lost_bytes = max(0, len(sanitized) - len(sealed))
+        classified = None
         try:
-            self._store.append(
+            classified = self._store.append(
                 self._record(
-                    event_id=self._next_id(),
+                    event_id=classified_event_id,
                     request_id=request_id,
                     record=BoardRecord.CLASSIFIED,
                     operation=operation,
@@ -387,26 +422,77 @@ class BoardBrokerRuntime:
                     outcome=outcome,
                     endpoint=endpoint,
                     http_status=status,
-                    response_digest=hashlib.sha256(raw).hexdigest() if raw else "",
+                    response_digest=hashlib.sha256(raw).hexdigest(),
                     response_original_bytes=original_bytes,
+                    response_sanitized_bytes=len(sanitized),
                     response_truncated=bool(lost_bytes),
                     response_lost_bytes=lost_bytes,
+                    raw_blob_digest=raw_blob_digest,
+                    raw_blob_bytes=original_bytes if raw_blob_digest else 0,
+                    raw_blob_class=PRIVATE_BOARD_RESPONSE_CLASS if raw_blob_digest else "",
+                    response_content_type=content_type,
+                    response_location=location,
+                    redaction_policy_digest=(
+                        self._redactor.policy_digest if operation is BoardOperation.INTAKE_READ else ""
+                    ),
                 ),
                 body=sealed,
             )
+            if raw_blob_digest:
+                self._intake_evidence.commit(
+                    classified_event_id,
+                    event_sequence=classified.sequence,
+                    event_digest=classified.event_digest,
+                )
         except (OSError, RuntimeError, ValueError):
+            if raw_blob_digest and classified is None:
+                self._intake_evidence.abort(classified_event_id)
             outcome = BoardOutcome.EFFECT_INDETERMINATE if operation in _EFFECTS else BoardOutcome.RESERVATION_REFUSED
             return BoardBrokerResult(operation, outcome, request_id=request_id)
         provenance = BoardProvenance(
             endpoint,
             status,
-            hashlib.sha256(raw).hexdigest() if raw else "",
+            hashlib.sha256(raw).hexdigest(),
             original_bytes,
             bool(lost_bytes),
             lost_bytes,
+            raw_blob_digest,
+            original_bytes if raw_blob_digest else 0,
+            PRIVATE_BOARD_RESPONSE_CLASS if raw_blob_digest else "",
+            classified_event_id,
+            grant.binding.digest,
+            peer.digest,
+            request_digest,
+            self._profile_receipt_digest,
+            content_type,
+            location,
+            hashlib.sha256(sealed).hexdigest(),
+            self._redactor.policy_digest,
         )
-        typed = self._typed(operation, value) if outcome is BoardOutcome.ANSWERED else None
+        typed = (
+            IntakeReadValue(raw, location)
+            if operation is BoardOperation.INTAKE_READ
+            else self._typed(operation, value)
+            if outcome is BoardOutcome.ANSWERED
+            else None
+        )
         return BoardBrokerResult(operation, outcome, typed, provenance, request_id)
+
+    def issue_intake(
+        self,
+        connection: object,
+        profile_handle: str,
+        binding: CapabilityBinding,
+    ) -> tuple[str, str, str]:
+        """Mint the profile- and peer-bound controller Intake capability."""
+
+        peer = self._authority.peer_identity(connection)
+        with self._profile_lock:
+            self._authorize_profile(profile_handle, peer)
+            if not self._profile_session_opened or not self._profile_receipt_digest:
+                raise PermissionError("Board-profile authority is not open for Intake")
+            handle = self._authority.issue(binding, "board.intake", peer)
+            return handle, peer.digest, self._profile_receipt_digest
 
     def execute_compatibility(
         self,
@@ -431,7 +517,7 @@ class BoardBrokerRuntime:
         except OSError:
             outcome = BoardOutcome.UNREACHABLE
         wire = self._wire()
-        status, raw, endpoint, error = wire[-1] if wire else (0, b"", "", "")
+        status, raw, endpoint, error, content_type, location = wire[-1] if wire else (0, b"", "", "", "", "")
         if error:
             outcome, value = _transport_failure(operation, error), None
         if status == 401:
@@ -445,6 +531,18 @@ class BoardBrokerRuntime:
             len(raw),
             bool(lost),
             lost,
+            "",
+            0,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            content_type,
+            location,
+            hashlib.sha256(sanitized[: self._sealed_response_bytes]).hexdigest(),
+            "",
         )
         return BoardBrokerResult(
             operation,
@@ -475,6 +573,8 @@ class BoardBrokerRuntime:
 
     def _dispatch(self, operation: BoardOperation, arguments: dict[str, object], *, board: Board | None = None):
         board = board or self._board
+        if operation is BoardOperation.INTAKE_READ:
+            return board.inspect("GET", str(arguments["path"]))
         if operation is BoardOperation.READ_CONTRACT:
             return board.collection_endpoints_reach_ctfd()
         if operation is BoardOperation.CHALLENGES:
@@ -519,7 +619,7 @@ class BoardBrokerRuntime:
             self._serial += 1
             return f"board-broker:{self._serial:06d}"
 
-    def _wire(self) -> list[tuple[int, bytes, str, str]]:
+    def _wire(self) -> list[tuple[int, bytes, str, str, str, str]]:
         if not hasattr(self._wire_local, "events"):
             self._wire_local.events = []
         return self._wire_local.events
@@ -534,11 +634,14 @@ class BoardBrokerRuntime:
             attempt_id=binding.attempt_id,
             step_id=binding.step_id,
             peer_identity_digest=peer_digest,
+            profile_digest=self._profile_receipt_digest,
             ts=self._timestamp(),
             **fields,
         )
 
     def _typed(self, operation: BoardOperation, value) -> object:
+        if operation is BoardOperation.INTAKE_READ:
+            return IntakeReadValue(value.body, value.location)
         value = _sanitize_public(value, self._redactor)
         if operation is BoardOperation.READ_CONTRACT:
             return ReadContractValue(bool(value))
@@ -563,6 +666,8 @@ class BoardBrokerClient:
 
     @classmethod
     def open(cls, socket_path: Path, binding: CapabilityBinding, *, scope: str) -> BoardBrokerClient:
+        if scope == "board.intake":
+            raise CapabilityRefused()
         response = _ipc_request(
             Path(socket_path),
             {"command": "issue", "binding": binding_document(binding), "scope": scope},
@@ -570,6 +675,34 @@ class BoardBrokerClient:
         if response.get("status") != "issued" or not isinstance(response.get("handle"), str):
             raise CapabilityRefused()
         return cls(Path(socket_path), str(response["handle"]))
+
+    @classmethod
+    def open_intake(
+        cls,
+        socket_path: Path,
+        binding: CapabilityBinding,
+        profile_handle: str,
+    ) -> tuple[BoardBrokerClient, str, str]:
+        response = _ipc_request(
+            Path(socket_path),
+            {
+                "command": "issue-intake",
+                "binding": binding_document(binding),
+                "profile_handle": profile_handle,
+            },
+        )
+        if (
+            response.get("status") != "issued"
+            or not isinstance(response.get("handle"), str)
+            or not isinstance(response.get("controller_peer_digest"), str)
+            or not isinstance(response.get("profile_digest"), str)
+        ):
+            raise CapabilityRefused()
+        return (
+            cls(Path(socket_path), str(response["handle"])),
+            str(response["controller_peer_digest"]),
+            str(response["profile_digest"]),
+        )
 
     def close(self) -> None:
         if self._closed:
@@ -579,6 +712,9 @@ class BoardBrokerClient:
 
     def read_contract(self) -> BoardBrokerResult:
         return self._execute(BoardOperation.READ_CONTRACT)
+
+    def intake_read(self, path: str) -> BoardBrokerResult:
+        return self._execute(BoardOperation.INTAKE_READ, path=path)
 
     def challenges(self) -> BoardBrokerResult:
         return self._execute(BoardOperation.CHALLENGES)
@@ -778,10 +914,25 @@ class BoardBrokerService:
     ) -> tuple[dict[str, object], bytes]:
         command = request.get("command")
         if command == "issue":
+            if request.get("scope") == "board.intake":
+                raise CapabilityRefused()
             binding = binding_from(request["binding"])
             peer = self._runtime._authority.peer_identity(connection)
             handle = self._runtime._authority.issue(binding, str(request["scope"]), peer)
             return {"status": "issued", "handle": handle}, b""
+        if command == "issue-intake":
+            binding = binding_from(request["binding"])
+            handle, peer_digest, profile_digest = self._runtime.issue_intake(
+                connection,
+                str(request.get("profile_handle", "")),
+                binding,
+            )
+            return {
+                "status": "issued",
+                "handle": handle,
+                "controller_peer_digest": peer_digest,
+                "profile_digest": profile_digest,
+            }, b""
         if command == "execute":
             arguments = request.get("arguments")
             if not isinstance(arguments, dict):
@@ -870,6 +1021,9 @@ def _result_response(result: BoardBrokerResult) -> tuple[dict[str, object], byte
     if isinstance(result.value, DownloadValue):
         payload = result.value.content
         result = dataclasses.replace(result, value=dataclasses.replace(result.value, content=b""))
+    elif isinstance(result.value, IntakeReadValue):
+        payload = result.value.body
+        result = dataclasses.replace(result, value=dataclasses.replace(result.value, body=b""))
     response: dict[str, object] = {"status": "answered", "result": encode_result(result)}
     if payload:
         response["binary"] = {
@@ -887,9 +1041,15 @@ def _decode_ipc_result(response: dict[str, object]) -> BoardBrokerResult:
     payload = response.get("_binary_payload")
     if payload is None:
         return result
-    if not isinstance(payload, bytes) or not isinstance(result.value, DownloadValue) or result.value.content:
+    if not isinstance(payload, bytes) or not isinstance(result.value, (DownloadValue, IntakeReadValue)):
         raise ValueError("Board broker binary response does not match its typed result")
-    return dataclasses.replace(result, value=dataclasses.replace(result.value, content=payload))
+    if isinstance(result.value, DownloadValue):
+        if result.value.content:
+            raise ValueError("Board broker binary response duplicates its typed payload")
+        return dataclasses.replace(result, value=dataclasses.replace(result.value, content=payload))
+    if result.value.body:
+        raise ValueError("Board broker binary response duplicates its typed payload")
+    return dataclasses.replace(result, value=dataclasses.replace(result.value, body=payload))
 
 
 def _ipc_request(path: Path, request: dict[str, object]) -> dict[str, object]:
@@ -911,7 +1071,9 @@ def _ipc_request(path: Path, request: dict[str, object]) -> dict[str, object]:
             ):
                 raise ValueError("Board broker binary response metadata is invalid")
             length = binary["bytes"]
-            if length <= 0 or length > MAX_FETCH_BYTES:
+            operation = request.get("operation") if request.get("command") == "execute" else None
+            binary_limit = MAX_FETCH_BYTES + 1 if operation == BoardOperation.INTAKE_READ.value else MAX_FETCH_BYTES
+            if length <= 0 or length > binary_limit:
                 raise ValueError("Board broker binary response exceeds the download bound")
             connection.sendall(b"ready\n")
             payload = bytes(receive_exact(connection, length, failure="incomplete Board broker binary response"))

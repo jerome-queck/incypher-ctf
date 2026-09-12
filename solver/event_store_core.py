@@ -18,6 +18,7 @@ from solver.event_store_contracts import (
     SEALED_DIRECTORY,
     BlobDigestMismatchError,
     CommittedEvent,
+    CompareAndAppendResult,
     DuplicateSequenceError,
     EventReservation,
     EventStoreDamage,
@@ -100,6 +101,64 @@ class EventStoreCore:
             if reservation is None:
                 reservation = self._reserve_locked(event, payload, existing)
             return self._commit_locked(reservation, event, payload, body_bytes, existing)
+
+    def compare_and_append(
+        self,
+        event: CanonicalEvent,
+        *,
+        body: bytes,
+        latest_event_type: str,
+        latest_payload: Mapping[str, object],
+        expected_projection: Mapping[str, object],
+    ) -> CompareAndAppendResult:
+        """Append under one short lock only if a named canonical projection is unchanged."""
+
+        body_bytes = self._redactor.redact(body)
+        payload = _redact(
+            event.payload(blob_digest=digest_bytes(body_bytes), blob_bytes=len(body_bytes)),
+            self._redactor,
+        )
+        with self._locked():
+            existing = self._read_verified()
+            prior = self._find_exact_identity(existing, event, payload)
+            if prior is not None:
+                self._recover_reservation_locked(prior)
+                return CompareAndAppendResult(prior, prior)
+            observed = next(
+                (
+                    candidate
+                    for candidate in reversed(existing)
+                    if candidate.event_type == latest_event_type
+                    and all(candidate.payload.get(name) == value for name, value in latest_payload.items())
+                ),
+                None,
+            )
+            if observed is None:
+                actual_projection = {
+                    "event_id": "genesis",
+                    "event_digest": "",
+                    "profile_digest": payload.get("profile_digest", ""),
+                    "snapshot_digest": "",
+                }
+            else:
+                actual_projection = {
+                    "event_id": observed.payload.get("event_id", ""),
+                    "event_digest": observed.event_digest,
+                    "profile_digest": observed.payload.get("profile_digest", ""),
+                    "snapshot_digest": observed.payload.get("snapshot_digest", ""),
+                }
+            if actual_projection != dict(expected_projection):
+                return CompareAndAppendResult(None, observed)
+            self._refuse_after_terminal(existing)
+            prior = self._find_identity(existing, event, payload)
+            if prior is not None:
+                self._recover_reservation_locked(prior)
+                return CompareAndAppendResult(prior, observed)
+            reservation = self._find_reservation_for_payload(event, payload)
+            if reservation is None:
+                reservation = self._reserve_locked(event, payload, existing)
+            committed = self._commit_locked(reservation, event, payload, body_bytes, existing)
+            return CompareAndAppendResult(committed, observed)
 
     def reserve(
         self,
