@@ -25,6 +25,7 @@ from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKE
 from solver.bootstrap_custody import Broker
 from solver.credentials import SECRETS
 from solver.codex_control_contracts import CODEX_CONTROL_SOCKET_ENV
+from solver.cpa_service import CPA_CREDENTIAL_FD_ENV
 from solver.event_store import EventStore, EventStoreDamage
 from solver.event_store_contracts import (
     BootClosed,
@@ -259,18 +260,41 @@ def preflight_isolation(environ, state: Path, run_id: str, *, prepare_attempt_ru
     )
 
 
-def launch_boot(boot_id: str, environ, attempt_pool: AttemptPool | None = None) -> SpawnedBoot:
+def launch_boot(
+    boot_id: str,
+    environ,
+    attempt_pool: AttemptPool | None = None,
+    cpa_credential: bytearray | None = None,
+) -> SpawnedBoot:
     controller_environment = dict(environ)
     controller_environment["SUPERVISOR_BOOT_ID"] = boot_id
     pass_fds: tuple[int, ...] = ()
     if attempt_pool is not None:
         controller_environment[POOL_ENV], pass_fds = attempt_pool.controller_environment()
-    process = subprocess.Popen(
-        [sys.executable, "-m", "solver"],
-        env=controller_environment,
-        start_new_session=True,
-        pass_fds=pass_fds,
-    )
+    credential_read = credential_write = None
+    if cpa_credential is not None:
+        credential_read, credential_write = os.pipe()
+        controller_environment[CPA_CREDENTIAL_FD_ENV] = str(credential_read)
+        pass_fds = (*pass_fds, credential_read)
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "solver"],
+            env=controller_environment,
+            start_new_session=True,
+            pass_fds=pass_fds,
+        )
+        if credential_read is not None and credential_write is not None:
+            os.close(credential_read)
+            credential_read = None
+            os.write(credential_write, cpa_credential)
+    finally:
+        if credential_read is not None:
+            os.close(credential_read)
+        if credential_write is not None:
+            os.close(credential_write)
+        if cpa_credential is not None:
+            for index in range(len(cpa_credential)):
+                cpa_credential[index] = 0
     for name in SECRETS:
         environ.pop(name, None)
     return SpawnedBoot(process)
@@ -310,6 +334,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
     """Run PID 1 and report its terminal classification."""
 
     attempt_pool: AttemptPool | None = None
+    cpa_credential: bytearray | None = None
     try:
         run_id = boot.run_identity(environ)
         redactor = Redactor.for_declared_secrets(environ)
@@ -333,6 +358,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
             attempt_pool = prepare_attempt_pool()
 
         def open_custody(boot_id: str):
+            nonlocal cpa_credential
             result = custody.open(boot_id)
             endpoint = result.endpoints.get(Broker.BOARD)
             holdings = result.holdings.get(Broker.BOARD, ())
@@ -351,7 +377,15 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
                 result.close()
                 raise Refusal(f"{boot.MARK} Codex Control custody has no usable endpoint")
             controller_environment[CODEX_CONTROL_SOCKET_ENV] = str(codex_endpoint)
+            cpa = getattr(result, "brokers", {}).get(Broker.CPA)
+            if cpa is not None:
+                cpa_credential = cpa.claim_secret("CPA_TOKEN")
             return result
+
+        def launch_controller(boot_id: str):
+            if cpa_credential is None:
+                return launch_boot(boot_id, controller_environment, attempt_pool)
+            return launch_boot(boot_id, controller_environment, attempt_pool, cpa_credential)
 
         supervisor = Supervisor(
             state=state,
@@ -367,7 +401,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
                     prepare_attempt_runtime=prepare_pool,
                 ),
                 bootstrap_custody=open_custody,
-                launch_controller=lambda boot_id: launch_boot(boot_id, controller_environment, attempt_pool),
+                launch_controller=launch_controller,
                 reap_children=reap_children,
             ),
             stay_quiescent=stay_quiescent,

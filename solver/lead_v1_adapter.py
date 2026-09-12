@@ -32,8 +32,10 @@ class V1LeadTurn:
 class V1LeadAdapter:
     """Bind v1's real prompt, carry and route facts to the pure Lead seam."""
 
-    def __init__(self, controller: LeadController) -> None:
+    def __init__(self, controller: LeadController, *, harness: str = "native-codex", route: str | None = None) -> None:
         self._controller = controller
+        self._harness = harness
+        self._route = route
         self._bindings: dict[str, LeadBinding] = {}
         self._turns: dict[str, int] = {}
 
@@ -55,8 +57,7 @@ class V1LeadAdapter:
             self._turns[incoming.attempt_id] = turn_index
         return outcome
 
-    @staticmethod
-    def _binding(incoming: V1LeadTurn) -> LeadBinding:
+    def _binding(self, incoming: V1LeadTurn) -> LeadBinding:
         selected = incoming.chain[0]
         prompt_digest = digest_bytes(incoming.prompt.encode())
         carry = [line.render() for line in incoming.boundary.lines]
@@ -79,8 +80,8 @@ class V1LeadAdapter:
                 canonical_bytes({"proposals": ["board", "target", "research", "tool", "candidate", "progress", "stop"]})
             ),
             capability_digest=digest_bytes(canonical_bytes({"authority": "proposal-only"})),
-            harness="native-codex",
-            requested_route=selected.slot,
+            harness=self._harness,
+            requested_route=self._route or selected.slot,
             requested_model=selected.model,
             selected_model=selected.model,
             effective_model=selected.model,

@@ -107,6 +107,37 @@ def test_nonclear_executor_probe_refuses_and_closes_broker(tmp_path):
     assert environment == {"PATH": os.environ["PATH"], "CTFD_URL": "https://board.example"}
 
 
+def test_supervisor_custodies_cpa_token_and_probe_contract_covers_it_before_one_way_claim(tmp_path):
+    environment = {
+        "PATH": os.environ["PATH"],
+        "CTFD_URL": "https://board.example",
+        "CTFD_API_TOKEN": "board-token",
+        "TEAM_KEY": "team-key",
+        "CPA_TOKEN": "cpa-token",
+    }
+    observed = []
+
+    def probe(secrets, **_options):
+        observed.extend(secrets)
+        return _probe_result(secrets)
+
+    result = SupervisorCustody(
+        state=tmp_path,
+        run_id="run-1",
+        environment=environment,
+        redactor=Redactor({"CPA_TOKEN": "cpa-token"}),
+        timestamp=lambda: "2026-09-11T00:00:00Z",
+        probe=probe,
+    ).open("boot-000001")
+    try:
+        assert result.holdings[Broker.CPA] == ("CPA_TOKEN",)
+        assert b"cpa-token" in observed
+        claimed = result.brokers[Broker.CPA].claim_secret("CPA_TOKEN")
+        assert claimed == bytearray(b"cpa-token")
+    finally:
+        result.close()
+
+
 def test_answered_hostile_socket_probe_refuses_boot(tmp_path, monkeypatch):
     environment = {
         "PATH": os.environ["PATH"],

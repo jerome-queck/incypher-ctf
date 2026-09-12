@@ -72,6 +72,10 @@ def test_each_secret_crosses_once_to_its_own_broker_then_sources_are_cleared(tmp
         assert all(source.zeroed for source in sources)
         assert not codex_file.exists()
         assert not cpa_file.exists()
+        claimed = result.brokers[Broker.CPA].claim_secret("CPA_AUTH")
+        assert claimed == bytearray(b"cpa-oauth-secret")
+        with pytest.raises(ValueError, match="did not acknowledge"):
+            result.brokers[Broker.CPA].claim_secret("CPA_AUTH")
 
         audit = json.dumps(records(tmp_path), sort_keys=True)
         assert "board-team-secret" not in audit

@@ -19,6 +19,10 @@ from solver.manifest import (
     parse_manifest,
     validate_manifest,
 )
+from solver.cpa_contracts import CPAConfig, CPAHarnessRecorded
+from solver.cpa_receipt import attach_cpa_receipt, build_cpa_receipt, config_digest, manifest_receipt
+from solver.event_store import EventStore
+from solver.redaction import Redactor
 
 
 def bind_profile_digest(profile: dict[str, object]) -> dict[str, object]:
@@ -94,6 +98,36 @@ def release_candidate_profile() -> dict[str, object]:
             "enabled_packs": [],
         }
     )
+
+
+def test_cpa_receipt_links_the_actual_candidate_manifest_row(tmp_path):
+    config = CPAConfig(2, 1, ("inspect",))
+    store = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
+    store.append(
+        CPAHarnessRecorded(
+            event_id="cpa:000001",
+            request_id="probe",
+            record="probe",
+            status="refused",
+            config_digest=config_digest(config),
+            peer_digest="a" * 64,
+            detail="capability refused",
+            ts="2026-09-12T00:00:00Z",
+        ),
+        body=b"",
+    )
+    receipt = build_cpa_receipt(store, config)
+    with pytest.raises(TypeError):
+        manifest_receipt(receipt)
+    manifest = generate_manifest(
+        image_digest="sha256:" + "1" * 64, release_candidate_profile=release_candidate_profile()
+    )
+
+    linked = attach_cpa_receipt(manifest, receipt, store=store, config=config)
+
+    row = next(item for item in linked["requirements"] if item["row_id"] == "core.inference-cpa")
+    assert row["receipt_ref"] == "receipt:cpa-harness"
+    assert next(item for item in linked["receipts"] if item["ref"] == row["receipt_ref"])["kind"] == "cpa-harness"
 
 
 def draft(**kwargs: object) -> dict[str, object]:
