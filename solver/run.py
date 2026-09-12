@@ -935,6 +935,7 @@ class Run:
             terms,
             attempt_id=held.attempt_id,
             recovery_reader=recovery_reader,
+            generation_id=held.generation_id,
         )
         if answer.lease is None:
             return
@@ -947,7 +948,7 @@ class Run:
         second renewed early is a second thrown away."""
         if held.lease is None or not held.lease.due_for_renewal(self._now()):
             return
-        answer = self._instances.renew(held.lease, attempt_id=held.attempt_id)
+        answer = self._instances.renew(held.lease, attempt_id=held.attempt_id, generation_id=held.generation_id)
         if answer.lease is None:
             return
         held.lease = answer.lease
@@ -959,7 +960,7 @@ class Run:
         the Cut path — and holding one past the Attempt costs mana nobody reclaims."""
         if held.lease is None:
             return
-        self._instances.terminate(held.lease.challenge_id, attempt_id=held.attempt_id)
+        self._instances.terminate(held.lease.challenge_id, attempt_id=held.attempt_id, generation_id=held.generation_id)
         self._leases.pop(held.lease.challenge_id, None)
         held.lease = None
 

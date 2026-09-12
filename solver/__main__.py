@@ -44,7 +44,9 @@ from solver.cpa_responses import CPAResponsesModel
 from solver.cpa_service import CPA_CREDENTIAL_FD_ENV, CPA_RESPONSES_URL_ENV, CPALeadPort, CPAService
 from solver.flag import Flags, Pace
 from solver.instance import Instances
-from solver.instance_ledger import AuthenticatedIdentity
+from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger
+from solver.instance_lease_contracts import LeaseVerdict, RowCorroboration
+from solver.event_store_contracts import GenerationAuthority
 from solver.intake import Intake
 from solver.intake_qualification import NoCoherentSnapshot
 from solver.isolation import IMAGE_ID as STRICT_IMAGE_ENV
@@ -235,12 +237,32 @@ def _run_admitted(
             discovered.authenticated_team_id,
         )
         ledger_broker = board
+    lease_coordinator = None
+    if board_broker_path is not None:
+        from solver.instance_lease import LeaseCoordinator
+
+        owner_id = (
+            f"team:{discovered.authenticated_team_id}"
+            if discovered.instance_ledger_mode == "teams"
+            else f"user:{discovered.authenticated_user_id}"
+        )
+        lease_coordinator = LeaseCoordinator(
+            recorder.write_authority,
+            board,
+            run_id=held.run_id,
+            board_id=held.url,
+            owner_id=owner_id,
+            corroborate=lambda challenge_id: _owned_instance_row(ledger_identity, ledger_broker, challenge_id),
+            admit_generation=lambda generation_id, effect: _admit_lease_effect(recorder, generation_id, effect),
+            generation_events=recorder.event_store.events,
+        )
     instances = Instances(
         board,
         recorder,
         step_numbers=steps.spend,
         ledger_identity=ledger_identity,
         ledger_broker=ledger_broker,
+        coordinator=lease_coordinator,
     )
     # Triage's last resort, and the one collaborator only this file can hand it: what the Board
     # states and what its solves say are read off the Board itself, and the model is asked about
@@ -339,9 +361,36 @@ def _run_admitted(
     try:
         return run.work()
     finally:
+        if lease_coordinator is not None:
+            canonical = run_state / "runs" / held.run_id / "canonical"
+            lease_coordinator.write_receipt(
+                canonical / "instance-lease.receipt.json",
+                manifest_path=canonical / "candidate-manifest.json",
+            )
         stack.close()
         if attempt_executor is not None:
             attempt_executor.close()
+
+
+def _owned_instance_row(identity, broker, challenge_id):
+    """Corroborate deploy identity from one authenticated, complete team ledger."""
+    if identity is None or broker is None:
+        return RowCorroboration(LeaseVerdict.UNCORROBORATED_ROW)
+    result = read_profiled_instance_ledger(identity, broker)
+    matches = [row.row_id for row in result.owned if row.challenge_id == challenge_id]
+    if len(matches) == 1:
+        return RowCorroboration(row_id=matches[0])
+    foreign = any(row.challenge_id == challenge_id for row in result.foreign)
+    return RowCorroboration(LeaseVerdict.FOREIGN_ROW if foreign else LeaseVerdict.UNCORROBORATED_ROW)
+
+
+def _admit_lease_effect(recorder, generation_id, effect):
+    _decision, result = recorder.generations.authorize_and_commit(
+        generation_id,
+        GenerationAuthority.AUTHORITY,
+        lambda grant: effect(grant.sequence, grant.event_id),
+    )
+    return result
 
 
 def _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack):
