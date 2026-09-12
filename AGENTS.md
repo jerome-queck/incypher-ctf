@@ -28,11 +28,12 @@ declares no dependency at all, so the tree reads as though they are. Build them 
 virtualenv under `.cache/`, which is gitignored:
 
 ```
-python3 -m venv .cache/venv && .cache/venv/bin/pip install -q ruff pytest
+python3 -m venv .cache/venv && .cache/venv/bin/pip install -q cryptography ruff pytest
 .cache/venv/bin/ruff check . && .cache/venv/bin/ruff format --check . && .cache/venv/bin/pytest
 ```
 
-They are CI-side tools and are in no image — the image's two package lists live in the `Dockerfile`
+Ruff and pytest are CI-side tools and are in no image; cryptography mirrors the image's Candidate-vault
+runtime dependency for host-side tests. The image's two package lists live in the `Dockerfile`
 itself, one package per line with the reason beside it (ADR-0024 amends them), and nothing lints at
 14:00 on competition day. **Three checks run before you push, because the workflows fire *after*
 it:** `sh conformance/check-conformance.sh .` and `sh conformance/check-trailers.sh main..HEAD`,

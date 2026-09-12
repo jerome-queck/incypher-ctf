@@ -106,6 +106,7 @@ class ToolProposal:
 class CandidateProposal:
     value: str
     evidence_refs: tuple[str, ...]
+    derivation: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
