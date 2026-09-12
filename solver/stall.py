@@ -49,6 +49,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 from solver.record import (
     CRASHED,
@@ -175,6 +176,10 @@ class Deadline:
     # Set by `shorten`, and the whole of "may shorten a budget and may never lengthen one": once the
     # model has volunteered that this is impossible, no later Checkpoint can hand the time back.
     sealed: bool = False
+    _base_budget: dt.datetime = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._base_budget = self.budget
 
     @property
     def at(self) -> dt.datetime:
@@ -203,6 +208,13 @@ class Deadline:
         self.granted += 1
         return True
 
+    def apply_epochs(self, epochs: int, seconds: float, *, cap: int) -> None:
+        """Restore the canonical epoch count idempotently after any crash boundary."""
+        if self.sealed:
+            return
+        self.granted = min(max(epochs, 0), cap)
+        self.budget = self._base_budget + dt.timedelta(seconds=seconds * self.granted)
+
     def shorten(self, to: dt.datetime) -> None:
         """Bring the kill forward and seal it there. Never lengthens: an argument for more time
         arriving through the one door that only closes is how ADR-0005's exception stays narrow."""
@@ -221,6 +233,7 @@ class Checkpoint:
 
     moved: str
     replay: str
+    evidence_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -229,6 +242,12 @@ class Tried:
 
     command: str
     exit_code: int | None
+
+
+@dataclass(frozen=True)
+class Confirmation:
+    accepted: bool
+    newly_recorded: bool
 
 
 @dataclass
@@ -256,10 +275,12 @@ class Watch:
     tried: list[Tried] = field(default_factory=list)
     last: str = ""
     _answered: dict[str, tuple[int | None, str]] = field(default_factory=dict)
+    _candidates: dict[str, tuple[tuple[int | None, str], Checkpoint]] = field(default_factory=dict)
     _digests: set[str] = field(default_factory=set)
     _repeats: dict[str, int] = field(default_factory=dict)
     _stale: int = 0
     _impossible: bool = False
+    _confirms: Callable[[Checkpoint], Confirmation] | None = None
 
     def observed(self, command: str, *, exit_code: int | None, digest: str) -> Checkpoint | None:
         """One Step of this Attempt, as the record took it — and a Checkpoint if it moved anything.
@@ -277,10 +298,20 @@ class Watch:
         answer = (exit_code, digest)
         before = self._answered.get(key)
         self._answered[key] = answer
+        candidate = self._candidates.get(key)
+        if candidate is not None and candidate[0] == answer:
+            del self._candidates[key]
+            return self._confirmed(candidate[1])
         if before is None or before == answer:
             self._repeat(key, exit_code, repeated=before is not None)
             return None
-        return self._moved(key, before[0], exit_code)
+        checkpoint = Checkpoint(
+            moved=f"{key} answers differently than it did — exit {before[0]} then {exit_code}",
+            replay=key,
+            evidence_digest=digest,
+        )
+        self._candidates[key] = (answer, checkpoint)
+        return None
 
     def said(self, prose: str, *, now: dt.datetime) -> bool:
         """The one direction the model's prose is read in, and the reason it is read at all.
@@ -328,22 +359,24 @@ class Watch:
         self.tried = [entry for entry in self.tried if entry.command != key]
         self.tried.append(Tried(command=key, exit_code=exit_code))
 
-    def _moved(self, key: str, before: int | None, exit_code: int | None) -> Checkpoint:
-        """A command that answered differently than it did — so the environment moved under it.
+    def _confirmed(self, checkpoint: Checkpoint) -> Checkpoint:
+        """A changed answer repeated stably — so the environment proved it moved.
 
         The tried list clears here rather than merely being appended to, because a command that
         failed before a Checkpoint may be exactly right after one; and the counters clear with it,
         since an Attempt that is moving the environment is by definition not stalled.
         """
-        checkpoint = Checkpoint(
-            moved=f"{key} answers differently than it did — exit {before} then {exit_code}",
-            replay=key,
-        )
-        self.checkpoints.append(checkpoint)
+        confirmation = self._confirms(checkpoint) if self._confirms is not None else Confirmation(True, True)
+        if not confirmation.accepted:
+            return checkpoint
+        if confirmation.newly_recorded:
+            self.checkpoints.append(checkpoint)
         self.tried = []
         self._repeats = {}
         self._stale = 0
-        self.deadline.extend(self.thresholds.extension_seconds, cap=self.thresholds.extensions)
+        self.steps = 0
+        if self._confirms is None:
+            self.deadline.extend(self.thresholds.extension_seconds, cap=self.thresholds.extensions)
         return checkpoint
 
 

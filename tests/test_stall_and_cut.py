@@ -160,6 +160,7 @@ def test_a_repeat_that_answers_differently_is_a_checkpoint_rather_than_repetitio
     watch = watching()
 
     watch.observed("curl -s http://target/admin", exit_code=22, digest="forbidden")
+    assert watch.observed("curl -s http://target/admin", exit_code=0, digest="the-panel") is None
     found = watch.observed("curl -s http://target/admin", exit_code=0, digest="the-panel")
 
     assert found is not None
@@ -181,6 +182,7 @@ def test_a_checkpoint_buys_the_kill_deadline_and_never_a_step():
 
     watch.observed("curl -s http://target/admin", exit_code=22, digest="forbidden")
     watch.observed("curl -s http://target/admin", exit_code=0, digest="the-panel")
+    watch.observed("curl -s http://target/admin", exit_code=0, digest="the-panel")
 
     assert watch.deadline.at == at(11)
     assert watch.deadline.granted == 1
@@ -190,7 +192,9 @@ def test_extensions_are_capped_at_a_small_k():
     """An approach that keeps yielding cheap Checkpoints still ends."""
     watch = watching(extensions=2, extension_seconds=60.0)
 
-    for index in range(6):
+    watch.observed("curl -s http://target/admin", exit_code=0, digest="body-0")
+    for index in range(1, 4):
+        watch.observed("curl -s http://target/admin", exit_code=index, digest=f"body-{index}")
         watch.observed("curl -s http://target/admin", exit_code=index, digest=f"body-{index}")
 
     assert watch.deadline.granted == 2
@@ -203,6 +207,7 @@ def test_a_checkpoint_clears_the_counters_and_the_commands_already_tried():
 
     watch.observed("unzip -l a.zip", exit_code=9, digest="not-an-archive")
     watch.observed("ls -la", exit_code=0, digest="a-listing")
+    watch.observed("unzip -l a.zip", exit_code=0, digest="a-listing-of-members")
     watch.observed("unzip -l a.zip", exit_code=0, digest="a-listing-of-members")
 
     assert watch.tried == []
@@ -228,6 +233,7 @@ def test_an_extension_can_never_outlive_the_instance_that_bounds_it():
     watch = Watch(Deadline(budget=at(10), instance=at(4)), thresholds=Thresholds(extension_seconds=600.0))
 
     watch.observed("curl -s http://target/", exit_code=22, digest="refused")
+    watch.observed("curl -s http://target/", exit_code=0, digest="a-page")
     watch.observed("curl -s http://target/", exit_code=0, digest="a-page")
 
     assert watch.deadline.at == at(4)
@@ -257,6 +263,7 @@ def test_nothing_the_model_says_lengthens_a_budget():
 
     watch.said("this is impossible", now=at(2))
     watch.observed("curl -s http://target/", exit_code=22, digest="refused")
+    watch.observed("curl -s http://target/", exit_code=0, digest="a-page")
     watch.observed("curl -s http://target/", exit_code=0, digest="a-page")
 
     assert watch.deadline.at == at(2)

@@ -274,7 +274,7 @@ def test_checkpoints_are_derived_from_the_stream_rather_than_read_off_it(run):
     won = next(one for one in run.attempts if one.attempt_id == "7-1")
 
     assert won.checkpoints == []
-    assert eval_thresholds.replay(won, Thresholds()).checkpoints == (3,)
+    assert eval_thresholds.replay(won, Thresholds()).checkpoints == ()
 
 
 def test_the_alarm_exits_non_zero_only_when_it_fired(tmp_path, capsys):
