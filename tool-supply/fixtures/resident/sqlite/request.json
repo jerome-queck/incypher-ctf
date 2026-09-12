@@ -1,0 +1,1 @@
+{"database":"fixture.sqlite.b64","query":"select value from facts"}

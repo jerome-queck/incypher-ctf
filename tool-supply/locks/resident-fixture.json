@@ -4,6 +4,9 @@
   "components": [
     {
       "component_id": "fixture.identity",
+      "capability_ids": [
+        "fixture.identity"
+      ],
       "version": "1.0.0",
       "license_expression": "MIT",
       "license_classification": "free-redistributable",

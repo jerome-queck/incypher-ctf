@@ -72,6 +72,19 @@ class MimeExecutor:
         )
 
 
+class ResidentMimeRuntime:
+    def __init__(self):
+        self.requests = []
+
+    def invoke_resident(self, **request):
+        self.requests.append(request)
+        return type(
+            "Result",
+            (),
+            {"exit_code": 0, "output": b"schema=resident.recon.mime.v1\nmime=image/png\n"},
+        )()
+
+
 def commands(result, subject=None) -> list[str]:
     return [probe.command for probe in result.probes if subject in (None, probe.subject)]
 
@@ -127,6 +140,37 @@ def test_mime_dispatch_is_the_one_legacy_shell_step_routed_through_the_attempt_e
     assert dispatched.attempt_id == "attempt-1"
     assert dispatched.argv == (*DISPATCH, "notes.txt")
     assert dispatched.workspace == tmp_path
+
+
+def test_production_mime_dispatch_uses_the_locked_resident_capability(tmp_path, recorder):
+    artefact = tmp_path / "notes.txt"
+    artefact.write_bytes(PNG)
+    runtime = ResidentMimeRuntime()
+
+    result = recon(
+        "",
+        [artefact],
+        flag_wrappers=(BRUNNER,),
+        recorder=recorder,
+        attempt_id="attempt-1",
+        generation_id="generation-000001",
+        executor=MimeExecutor(),
+        tool_runtime=runtime,
+    )
+
+    assert output_for(result, "file").splitlines() == ["schema=resident.recon.mime.v1", "mime=image/png"]
+    assert "exiftool" in tools(result, subject="notes.txt")
+    assert runtime.requests == [
+        {
+            "generation_id": "generation-000001",
+            "attempt_id": "attempt-1",
+            "step_id": "attempt-1:step-3",
+            "workspace": tmp_path,
+            "capability_id": "recon.mime",
+            "input_path": artefact,
+        }
+    ]
+    assert next(probe.command for probe in result.probes if probe.tool == "file") == "recon.mime notes.txt"
 
 
 def test_a_type_the_cascade_has_never_met_still_gets_the_whole_floor(tmp_path, recorder):

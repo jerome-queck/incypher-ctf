@@ -16,7 +16,6 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import os
 import signal
 import sys
@@ -57,7 +56,7 @@ from solver.schedule import Dials, Scheduler, Window
 from solver.order_runtime import CanonicalScheduler
 from solver.lead_controller import LeadController
 from solver.lead_v1_adapter import V1LeadAdapter
-from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController
+from solver.tool_control import AttemptToolRuntime, ToolController, resident_components
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
@@ -273,22 +272,12 @@ def _run_admitted(
             peer_identity=lambda _connection: tool_peer,
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
-        file_digest = "sha256:" + hashlib.sha256(Path("/usr/bin/file").read_bytes()).hexdigest()
         tool_controller = ToolController(
             state=run_state,
             run_id=held.run_id,
             authority=tool_authority,
             image_digest=binding.image_manifest_digest,
-            components=(
-                ToolComponent(
-                    capability_id="recon.mime",
-                    component_id="file",
-                    version=file_digest,
-                    profiles=("resident",),
-                    max_arguments=4,
-                    max_output_bytes=8 * 1024,
-                ),
-            ),
+            components=resident_components(Path("/opt/solver/tool-supply/inventory.json")),
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
         tool_runtime = AttemptToolRuntime(

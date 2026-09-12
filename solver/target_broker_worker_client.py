@@ -8,7 +8,7 @@ import os
 import socket
 import sys
 
-from solver.target_broker_contracts import TARGET_EXCHANGE_COMMAND
+TARGET_EXCHANGE_COMMAND = "exchange"
 
 
 def request(document: dict[str, object]) -> dict[str, object]:

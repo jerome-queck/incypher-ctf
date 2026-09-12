@@ -208,18 +208,26 @@ def _network_breach(trace: str, target_socket: str) -> bool:
     network = [line for line in trace.splitlines() if any(marker in line for marker in NETWORK_MARKERS)]
     if not network:
         return False
-    if not target_socket:
-        return True
     return any(not _allowed_target_socket_call(line, target_socket) for line in network)
 
 
 def _allowed_target_socket_call(line: str, target_socket: str) -> bool:
-    if "socket(AF_UNIX" in line or "socket(AF_LOCAL" in line:
+    if any(
+        marker in line for marker in ("socket(AF_UNIX", "socket(AF_LOCAL", "socketpair(AF_UNIX", "socketpair(AF_LOCAL")
+    ):
         return True
     if "connect(" in line:
-        return target_socket in line
+        return (bool(target_socket) and target_socket in line) or (
+            ("sa_family=AF_UNIX" in line or "sa_family=AF_LOCAL" in line) and " = -1 " in line
+        )
+    if "bind(" in line:
+        return "sa_family=AF_UNIX" in line or "sa_family=AF_LOCAL" in line
     if "sendto(" in line:
-        return line.rstrip().endswith("NULL, 0) = 0") or ", NULL, 0) = " in line
+        return (
+            line.rstrip().endswith("NULL, 0) = 0")
+            or ", NULL, 0) = " in line
+            or (("AF_UNIX" in line or "AF_LOCAL" in line) and " = -1 " in line)
+        )
     if "sendmsg(" in line:
         return "msg_name=NULL" in line
     return False

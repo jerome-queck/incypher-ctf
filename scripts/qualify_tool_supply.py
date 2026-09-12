@@ -19,6 +19,7 @@ import promote_run  # noqa: E402
 import runtime  # noqa: E402
 import strict_runtime  # noqa: E402
 from solver.tool_supply_receipt import ReceiptInvalid, create_receipt, promote_receipt  # noqa: E402
+from solver.resident_handle_receipt import create_receipt as create_handle_receipt  # noqa: E402
 
 Runner = Callable[..., Any]
 
@@ -124,17 +125,55 @@ def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> d
     inventory = (supply / "generated" / "inventory.json").read_bytes()
     inventory_document = json.loads(inventory)
     try:
-        profile = next(
-            item["profiles"][0] for item in inventory_document["components"] if item["component_id"] == component_id
-        )
+        component = next(item for item in inventory_document["components"] if item["component_id"] == component_id)
+        profile = component["profiles"][0]
     except (KeyError, StopIteration, TypeError) as error:
         raise ReceiptInvalid(f"no generated component named {component_id}") from error
+    handle_solve = None
+    if profile == "resident":
+        cache = REPO_ROOT / ".cache"
+        cache.mkdir(exist_ok=True)
+        runner(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--cgroup-parent",
+                strict_runtime.CGROUP_PARENT,
+                "--entrypoint",
+                "/bin/true",
+                manifest_digest,
+            ],
+            check=True,
+        )
+        try:
+            with tempfile.TemporaryDirectory(prefix="tool-handle-", dir=cache) as temporary:
+                state = Path(temporary)
+                result = runner(
+                    strict_runtime.tool_handle_probe_command(
+                        strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
+                        state,
+                        component_id,
+                    ),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    raise ReceiptInvalid(
+                        f"strict Tool-handle Solve refused: {result.stderr.strip() or result.returncode}"
+                    )
+                closure = {str(item["source"]): (supply / item["source"]).read_bytes() for item in component["files"]}
+                handle_solve = create_handle_receipt(state, component, inventory, closure)
+        finally:
+            runner(["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE], check=True)
     receipt = create_receipt(
         observation,
         lock_fragment=(supply / "locks" / f"{profile}.json").read_bytes(),
         inventory=inventory,
         supply_receipt=(supply / "generated" / "receipt.json").read_bytes(),
         source_root=supply,
+        handle_solve=handle_solve,
     )
     promote_receipt(
         receipt,

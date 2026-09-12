@@ -10,13 +10,140 @@ from solver.capability import CapabilityAuthority, CapabilityBinding, PeerIdenti
 from solver.redaction import Redactor
 from solver.attempt_executor import AttemptExecutor, EnvelopeSpec, NetworkPolicy, RuntimeBinding
 from solver.event_store import EventStore
-from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController, ToolInvocation
+from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController, ToolInvocation, resident_components
 from solver.tool_control_receipt import manifest_receipt, receipt_document, verify_receipt, write_receipt
 from solver.work_generation import GenerationDisposition, GenerationFence
 from test_attempt_executor import CancellableRuntime, IMAGE_ID, ImmediateRuntime, isolation_receipt, request
 
 
 PEER = PeerIdentity(pid=101, uid=20_000, gid=20_000, started="123", cgroup="/attempt-1")
+
+
+def test_locked_resident_catalogue_exposes_every_capability_with_bounded_policy() -> None:
+    inventory = Path(__file__).resolve().parent.parent / "tool-supply" / "generated" / "inventory.json"
+
+    components = resident_components(inventory)
+
+    assert len(components) == 16
+    assert {item.capability_id for item in components} >= {
+        "archive.extract",
+        "firmware.rootfs",
+        "image.inspect",
+        "document.pdf",
+        "recognition.ocr",
+        "recognition.barcode",
+        "crypto.primitive",
+        "math.symbolic",
+        "solver.smt",
+    }
+    assert all(
+        item.component_id == "/bin/dash"
+        and item.max_arguments == 4
+        and item.fixed_arguments[1] == item.capability_id
+        and item.input_paths == 1
+        and item.resource_limits
+        for item in components
+    )
+
+
+def test_production_runtime_dispatches_every_resident_capability_from_its_locked_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inventory = Path(__file__).resolve().parent.parent / "tool-supply" / "generated" / "inventory.json"
+    components = resident_components(inventory)
+    controller = object.__new__(ToolController)
+    controller._components = {item.capability_id: item for item in components}
+    runtime = object.__new__(AttemptToolRuntime)
+    runtime._controller = controller
+    observed = []
+
+    def invoke(**request):
+        observed.append(request)
+        return request
+
+    monkeypatch.setattr(runtime, "invoke", invoke)
+    held = tmp_path / "held"
+    held.write_text("input")
+
+    for component in components:
+        runtime.invoke_resident(
+            generation_id="generation-000001",
+            attempt_id="attempt-1",
+            step_id="step-1",
+            workspace=tmp_path,
+            capability_id=component.capability_id,
+            input_path=held,
+        )
+
+    assert {item["invocation"].capability_id for item in observed} == {item.capability_id for item in components}
+    for dispatched in observed:
+        component = next(item for item in components if item.capability_id == dispatched["invocation"].capability_id)
+        assert dispatched["invocation"].argv == (
+            component.component_id,
+            *component.fixed_arguments,
+            "/work/held",
+        )
+        assert dispatched["invocation"].resource_request == component.resource_limits
+        assert dispatched["envelope"].document() == {
+            "cpu_seconds": dict(component.resource_limits)["cpu_seconds"],
+            "cpu_quota_us": 100_000,
+            "memory_bytes": dict(component.resource_limits)["memory_bytes"],
+            "pids": dict(component.resource_limits)["pids"],
+            "filesystem_bytes": dict(component.resource_limits)["filesystem_bytes"],
+            "network": "deny",
+            "wall_seconds": dict(component.resource_limits)["wall_seconds"],
+            "cleanup_seconds": 5,
+        }
+
+
+def test_resident_policy_denies_flags_code_urls_and_paths_outside_work(tmp_path: Path) -> None:
+    state, _generations, authority, binding = tool_authority(tmp_path)
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    held = workspace / "input"
+    held.write_text("held")
+    component = ToolComponent(
+        "network.http",
+        "/bin/dash",
+        "1.0.0",
+        ("resident",),
+        max_arguments=4,
+        fixed_arguments=("/usr/local/bin/incypher-resident-network-data", "network.http"),
+        input_paths=1,
+    )
+    controller = ToolController(
+        state=state,
+        run_id="run-1",
+        authority=authority,
+        image_digest="sha256:" + "a" * 64,
+        components=(component,),
+        timestamp=lambda: "2026-09-12T00:00:00Z",
+    )
+    _view, handle = controller.issue_view(binding, PEER, enabled_profiles=("resident",))
+    called = False
+
+    def execute(_invocation):
+        nonlocal called
+        called = True
+        return 0, b"", {}
+
+    unsafe = (
+        ("/bin/dash", "-c", "open('/run/credential').read()", "/work/input"),
+        ("/bin/dash", component.fixed_arguments[0], "network.http", "https://example.invalid"),
+        ("/bin/dash", component.fixed_arguments[0], "network.http", "/etc/passwd"),
+    )
+    for argv in unsafe:
+        with pytest.raises(PermissionError, match="tool invocation refused"):
+            controller.invoke(
+                object(),
+                handle,
+                ToolInvocation("network.http", argv),
+                execute=execute,
+                workspace=workspace,
+                network=NetworkPolicy.DENY,
+            )
+
+    assert not called
 
 
 def test_declared_component_executes_through_handle_with_semantic_receipt(tmp_path: Path) -> None:

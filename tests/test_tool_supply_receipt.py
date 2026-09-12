@@ -167,7 +167,7 @@ def receipt() -> dict[str, object]:
             ],
             "packages": [],
         },
-        "semantic_fixture": {
+        "component_admission": {
             "entrypoint": "/usr/local/bin/incypher-fixture-tool",
             "entrypoint_sha256": sha(source),
             "observed_version": "1.0.0",
@@ -176,6 +176,7 @@ def receipt() -> dict[str, object]:
             "stderr_sha256": sha(b""),
             "outcome": "pass",
         },
+        "handle_solve": None,
         "identity": "",
     }
     document["identity"] = "sha256:" + sha(canonical_receipt_bytes(document, without_identity=True))
@@ -199,7 +200,7 @@ def test_one_receipt_carries_supply_chain_semantics_and_manifest_link() -> None:
     [
         (("image", "manifest_digest"), "sha256:" + "9" * 64, "strict profile"),
         (("materials", "lock", "bytes"), b"changed lock".hex(), "lock digest"),
-        (("semantic_fixture", "stdout_sha256"), "9" * 64, "semantic fixture output"),
+        (("component_admission", "stdout_sha256"), "9" * 64, "semantic fixture output"),
         (("materials", "closure", "0", "bytes"), b"not MIT".hex(), "closure.*digest"),
     ],
 )
@@ -218,7 +219,7 @@ def test_image_lock_fixture_or_licence_tampering_invalidates(
 
 def test_presence_without_the_locked_entrypoint_semantic_result_is_rejected() -> None:
     changed = copy.deepcopy(receipt())
-    changed["semantic_fixture"]["entrypoint"] = "/bin/true"  # type: ignore[index]
+    changed["component_admission"]["entrypoint"] = "/bin/true"  # type: ignore[index]
     changed["identity"] = "sha256:" + sha(canonical_receipt_bytes(changed, without_identity=True))
 
     with pytest.raises(ReceiptInvalid, match="locked entrypoint"):

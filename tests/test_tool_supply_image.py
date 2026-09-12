@@ -10,6 +10,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSEMBLER = REPO_ROOT / "scripts" / "assemble_tool_supply.py"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 
+RESIDENT_CAPABILITY_IDS = {
+    "archive.extract",
+    "crypto.primitive",
+    "data.sqlite",
+    "document.pdf",
+    "firmware.rootfs",
+    "image.inspect",
+    "math.symbolic",
+    "network.http",
+    "network.tcp",
+    "process.inspect",
+    "recognition.barcode",
+    "recognition.ocr",
+    "recon.bytes",
+    "recon.mime",
+    "recon.repository",
+    "solver.smt",
+}
+
 
 def test_the_repository_fragment_assembles_once_and_is_copied_into_the_image(tmp_path: Path):
     output = tmp_path / "generated"
@@ -33,7 +52,7 @@ def test_the_repository_fragment_assembles_once_and_is_copied_into_the_image(tmp
     assert (output / "rootfs" / "opt" / "solver" / "tool-supply" / "identity.txt").read_bytes() == (
         b"tool-supply-probe\n"
     )
-    assert (output / "apt-packages.txt").read_text() == ""
+    assert "7zip=26.02+dfsg-2\n" in (output / "apt-packages.txt").read_text()
     assert (output / "receipt.json").is_file()
 
     dockerfile = DOCKERFILE.read_text()
@@ -70,6 +89,22 @@ def test_the_repository_fragment_assembles_once_and_is_copied_into_the_image(tmp
     assert assembled_files == committed_files
 
 
+def test_resident_floor_declares_its_public_capabilities_and_locked_packages(tmp_path: Path) -> None:
+    output = tmp_path / "generated"
+    result = subprocess.run(
+        [sys.executable, str(ASSEMBLER), "--source", str(REPO_ROOT / "tool-supply"), "--output", str(output)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    inventory = json.loads((output / "inventory.json").read_text())
+    resident = [item for item in inventory["components"] if "resident" in item["profiles"]]
+    assert {capability for item in resident for capability in item["capability_ids"]} == RESIDENT_CAPABILITY_IDS
+    assert all(item["packages"] for item in resident)
+    assert all(package["version"] not in {"*", "latest"} for item in resident for package in item["packages"])
+
+
 def test_the_promoted_sample_receipt_is_self_contained_and_manifest_addressable() -> None:
     path = REPO_ROOT / "tool-supply" / "receipts" / "fixture.identity.json"
     receipt = json.loads(path.read_text())
@@ -86,5 +121,6 @@ def test_the_promoted_sample_receipt_is_self_contained_and_manifest_addressable(
         "fixture",
     }
     assert issue_manifest_receipt(receipt)["ref"] == "receipt:tool-supply:fixture.identity"
-    assert receipt["semantic_fixture"]["outcome"] == "pass"
+    assert receipt["component_admission"]["outcome"] == "pass"
+    assert receipt["handle_solve"] is None
     assert "/Users/" not in path.read_text()

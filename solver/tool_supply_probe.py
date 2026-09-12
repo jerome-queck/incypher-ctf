@@ -73,8 +73,9 @@ def observe(
         "env": {"PATH": "/usr/local/bin:/usr/bin:/bin"},
         "timeout": component["fixture"]["timeout_seconds"],
     }
-    version = execute([str(entrypoint), *mapped(component["version_argv"])], **options)
-    result = execute([str(entrypoint), *mapped(component["fixture"]["argv"])], **options)
+    prefix = [str(component["interpreter"])] if component.get("interpreter") else []
+    version = execute([*prefix, str(entrypoint), *mapped(component["version_argv"])], **options)
+    result = execute([*prefix, str(entrypoint), *mapped(component["fixture"]["argv"])], **options)
     if any(len(output) > MAX_OUTPUT for output in (version.stdout, version.stderr, result.stdout, result.stderr)):
         raise ValueError("semantic fixture exceeded its bounded output")
     observed_version = version.stdout.decode("utf-8").strip() if version.returncode == 0 else ""

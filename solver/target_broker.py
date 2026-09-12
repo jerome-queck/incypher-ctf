@@ -57,6 +57,7 @@ class TargetBrokerRuntime:
         limits: TargetLimits,
         timestamp: Callable[[], str],
         denied_endpoints: Mapping[str, TargetEndpoint] | None = None,
+        request_namespace: str = "",
     ) -> None:
         if not challenge_id or not boot_id:
             raise ValueError("Target binding needs Challenge and Boot identity")
@@ -85,6 +86,11 @@ class TargetBrokerRuntime:
         self._connections: dict[str, int] = {}
         self._generation_handles: dict[str, set[str]] = {}
         self._serial = 0
+        if request_namespace and any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for character in request_namespace
+        ):
+            raise ValueError("Target request namespace is invalid")
+        self._request_prefix = f"target-broker:{request_namespace}:" if request_namespace else "target-broker:"
         self._lock = threading.Lock()
         self._expected: dict[str, CapabilityBinding] = {}
         self._denied_endpoints = dict(denied_endpoints or {})
@@ -152,7 +158,7 @@ class TargetBrokerRuntime:
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
         with self._lock:
             self._serial += 1
-            request_id = f"target-broker:{self._serial:06d}"
+            request_id = f"{self._request_prefix}{self._serial:06d}"
         self._append_record(request_id, TargetRecord.RESERVED, grant.binding, request_digest)
         validated = _validate_exchange(self.endpoint, request)
         if validated is None:
@@ -264,7 +270,7 @@ class TargetBrokerRuntime:
         self._denial_observations.add(observed.event_digest)
         with self._lock:
             self._serial += 1
-            request_id = f"target-broker:{self._serial:06d}"
+            request_id = f"{self._request_prefix}{self._serial:06d}"
         digest = hashlib.sha256(
             canonical_bytes({"probe_kind": kind, "attempted_endpoint_digest": attempted})
         ).hexdigest()
