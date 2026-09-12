@@ -17,6 +17,7 @@ from solver.event_store_contracts import (
     SEALED_DIRECTORY,
     BlobDigestMismatchError,
     CommittedEvent,
+    CompareAndAppendResult,
     DamageKind,
     DuplicateSequenceError,
     EventReservation,
@@ -95,6 +96,23 @@ class EventStore:
     def append(self, event: CanonicalEvent, *, body: bytes) -> CommittedEvent:
         return self._core.append(event, body=body)
 
+    def compare_and_append(
+        self,
+        event: CanonicalEvent,
+        *,
+        body: bytes,
+        latest_event_type: str,
+        latest_payload: dict[str, object],
+        expected_projection: dict[str, object],
+    ) -> CompareAndAppendResult:
+        return self._core.compare_and_append(
+            event,
+            body=body,
+            latest_event_type=latest_event_type,
+            latest_payload=latest_payload,
+            expected_projection=expected_projection,
+        )
+
     def reserve(
         self,
         event: CanonicalEvent,
@@ -157,6 +175,7 @@ __all__ = [
     "CapabilityCustodyRecorded",
     "CapabilityRecord",
     "CommittedEvent",
+    "CompareAndAppendResult",
     "DamageKind",
     "DuplicateSequenceError",
     "EventReservation",

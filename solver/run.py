@@ -300,9 +300,19 @@ class Run:
         while not self._stopping:
             if self._intake.due():
                 self._intake.sync()
+                if not getattr(self._intake, "available", True):
+                    if self._scheduler.out_of_time():
+                        break
+                    self._sleep(self._idle_seconds)
+                    continue
                 # The Board's own answer overwrites ours: an id it now lists solved leaves the
                 # floor, so a Run that mis-recorded a solve cannot exclude a Challenge for good.
                 self._solved &= {one.challenge_id for one in self._intake.snapshot.unsolved}
+            if not getattr(self._intake, "available", True):
+                if self._scheduler.out_of_time():
+                    break
+                self._sleep(self._idle_seconds)
+                continue
             pick = self._scheduler.acquire(
                 self._intake.snapshot, leased=tuple(self._leases), solved=tuple(self._solved)
             )

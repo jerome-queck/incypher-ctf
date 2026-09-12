@@ -644,7 +644,12 @@ def _over_the_network(fetch_bytes: int = MAX_FETCH_BYTES) -> Transport:
                     response.headers.get("Content-Type", ""),
                 )
         except urllib.error.HTTPError as error:
-            return error.code, error.read(), error.headers.get("Location", ""), error.headers.get("Content-Type", "")
+            return (
+                error.code,
+                error.read(fetch_bytes + 1),
+                error.headers.get("Location", ""),
+                error.headers.get("Content-Type", ""),
+            )
 
     return fetch
 

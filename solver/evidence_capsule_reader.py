@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -193,12 +194,32 @@ def _verify_blob_closure(path: Path, content: Mapping[str, Any]) -> None:
             raise CapsuleInvalid("blob closure content differs")
         selected.add(blob["digest"])
     excluded = content.get("excluded_source_blobs")
+    allowed_exclusions = {"canonical-private-body", "restart-private-broker"}
     if not isinstance(excluded, list) or any(
-        not isinstance(item, dict) or item.get("classification") != "canonical-private-body" for item in excluded
+        not isinstance(item, dict)
+        or set(item) != {"digest", "classification"}
+        or item.get("classification") not in allowed_exclusions
+        or not isinstance(item.get("digest"), str)
+        for item in excluded
     ):
         raise CapsuleInvalid("excluded source blob classification is malformed")
-    excluded_digests = {str(item["digest"]) for item in excluded}
-    if selected & excluded_digests or selected | excluded_digests != referenced:
+    canonical_excluded = {
+        str(item["digest"]) for item in excluded if item["classification"] == "canonical-private-body"
+    }
+    private_excluded = {str(item["digest"]) for item in excluded if item["classification"] == "restart-private-broker"}
+    source_events = [json.loads(line) for line in (path / "source" / "events.jsonl").read_bytes().splitlines()]
+    private_referenced = {
+        str(event["payload"]["raw_blob_digest"])
+        for event in source_events
+        if event.get("event_type") == "board-broker.recorded"
+        and event.get("payload", {}).get("operation") == "intake-read"
+        and event.get("payload", {}).get("raw_blob_digest")
+    }
+    if (
+        selected & (canonical_excluded | private_excluded)
+        or selected | canonical_excluded != referenced
+        or private_excluded != private_referenced - selected - canonical_excluded
+    ):
         raise CapsuleInvalid("selected and excluded blobs do not close the canonical source")
 
 

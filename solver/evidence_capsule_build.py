@@ -131,10 +131,7 @@ def prepare_capsule(
             }
             for item, body in blobs
         ],
-        "excluded_source_blobs": [
-            {"digest": blob_digest, "classification": "canonical-private-body"}
-            for blob_digest in sorted(source.referenced_blobs - {item.digest for item in selected})
-        ],
+        "excluded_source_blobs": _excluded_blobs(source, selected),
         "scan_policy": {
             "kind": "exact-values-and-host-paths",
             "version": scan_authority.version,
@@ -162,3 +159,22 @@ def prepare_capsule(
         events_body=b"".join(row + b"\n" for row in event_rows),
         blobs=tuple(blobs),
     )
+
+
+def _excluded_blobs(source, selected) -> list[dict[str, str]]:
+    selected_digests = {item.digest for item in selected}
+    private = {
+        str(event["payload"]["raw_blob_digest"])
+        for event in source.events
+        if event.get("event_type") == "board-broker.recorded"
+        and event.get("payload", {}).get("operation") == "intake-read"
+        and event.get("payload", {}).get("raw_blob_digest")
+    }
+    canonical = source.referenced_blobs - selected_digests
+    canonical_private = canonical - private
+    rows = [{"digest": digest, "classification": "canonical-private-body"} for digest in canonical_private]
+    rows.extend(
+        {"digest": digest, "classification": "restart-private-broker"}
+        for digest in private - selected_digests - canonical_private
+    )
+    return sorted(rows, key=lambda item: (item["digest"], item["classification"]))
