@@ -257,6 +257,37 @@ class GenerationFence:
         )
         return GenerationIdentity(generation_id, work_id, attempt_id)
 
+    def acquire_exact(self, generation_id: str, work_id: str, attempt_id: str) -> GenerationIdentity:
+        """Consume one preallocated Order grant without changing any identity."""
+
+        if not work_id or not attempt_id or _GENERATION_ID.fullmatch(generation_id) is None:
+            raise ValueError("generation_id, work_id and attempt_id are required")
+        with self._authority_lock:
+            projection = self.projection()
+            existing = next((item for item in projection.generations if item.generation_id == generation_id), None)
+            if existing is not None:
+                if existing.work_id == work_id and existing.attempt_id == attempt_id and existing.active:
+                    return GenerationIdentity(generation_id, work_id, attempt_id)
+                raise GenerationConflict(f"generation {generation_id!r} is already consumed")
+            if generation_id != _next_generation_id(projection):
+                raise GenerationConflict(f"generation {generation_id!r} is not the next durable identity")
+            if work_id in projection.active_by_work:
+                raise GenerationConflict(f"work {work_id!r} already has an active generation")
+            if any(state.attempt_id == attempt_id for state in projection.generations):
+                raise GenerationConflict(f"attempt {attempt_id!r} already belongs to a generation")
+            self._append(
+                WorkGenerationRecorded(
+                    event_id=f"{generation_id}:acquire",
+                    generation_id=generation_id,
+                    work_id=work_id,
+                    attempt_id=attempt_id,
+                    record=GenerationRecord.ACQUIRE,
+                    ts=self._timestamp(),
+                ),
+                b"",
+            )
+            return GenerationIdentity(generation_id, work_id, attempt_id)
+
     def replace(self, work_id: str, attempt_id: str) -> GenerationIdentity:
         """Supersede current Work durably before acquiring its replacement."""
 

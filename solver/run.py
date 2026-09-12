@@ -349,10 +349,14 @@ class Run:
         because that is not something that ends anything.
         """
         challenge = pick.challenge
-        attempt_id = f"{challenge.challenge_id}-{pick.attempt_sequence}"
-        generation = self._recorder.acquire_generation(
-            work_id=str(challenge.challenge_id),
-            attempt_id=attempt_id,
+        attempt_id = pick.order_attempt_id or f"{challenge.challenge_id}-{pick.attempt_sequence}"
+        generation = (
+            self._recorder.acquire_order_generation(pick)
+            if pick.order_generation_id
+            else self._recorder.acquire_generation(
+                work_id=str(challenge.challenge_id),
+                attempt_id=attempt_id,
+            )
         )
         try:
             # Restarted before the working directory is settled rather than after it: what staging

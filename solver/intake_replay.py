@@ -26,6 +26,7 @@ from solver.intake_receipt import verify_canonical_attempt
 class ReplayedIntake:
     snapshot: IntakeSnapshot | None
     fence: PriorFence
+    history: tuple[IntakeSnapshot, ...] = ()
 
 
 def replay_intake(state: Path, run_id: str, profile_digest: str) -> ReplayedIntake:
@@ -34,7 +35,7 @@ def replay_intake(state: Path, run_id: str, profile_digest: str) -> ReplayedInta
     store = EventStore(state, run_id=run_id)
     events = store.events()
     evidence = IntakeEvidenceReader(state, run_id)
-    current = ReplayedIntake(None, PriorFence.genesis(profile_digest))
+    current = ReplayedIntake(None, PriorFence.genesis(profile_digest), ())
     terminals = [
         event
         for event in events
@@ -93,6 +94,7 @@ def replay_intake(state: Path, run_id: str, profile_digest: str) -> ReplayedInta
                 terminal.event_digest,
                 decision.snapshot.digest,
             ),
+            (*current.history, decision.snapshot),
         )
     return current
 

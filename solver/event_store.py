@@ -119,8 +119,9 @@ class EventStore:
         *,
         blob_digest: str,
         blob_bytes: int,
+        sequence: int | None = None,
     ) -> EventReservation:
-        return self._core.reserve(event, blob_digest=blob_digest, blob_bytes=blob_bytes)
+        return self._core.reserve(event, blob_digest=blob_digest, blob_bytes=blob_bytes, sequence=sequence)
 
     def commit(
         self,

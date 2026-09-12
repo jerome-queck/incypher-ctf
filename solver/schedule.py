@@ -242,6 +242,11 @@ class Pick:
     # recording because a Run whose Flags all came from explored picks and one where none did are
     # the measurement that says whether the share is worth its quarter.
     exploring: bool = False
+    # Non-empty only for the canonical v2 Order adapter. The legacy view never mints or changes
+    # these identities; Run consumes the already-published grant exactly.
+    order_attempt_id: str = ""
+    order_generation_id: str = ""
+    order_publication_id: str = ""
 
 
 @dataclass(frozen=True)

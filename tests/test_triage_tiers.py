@@ -17,7 +17,7 @@ from solver.intake import OVER_THE_CAP, Attachment, Sighting
 from solver.instance import Terms
 from solver.record import Recorder
 from solver.redaction import Redactor
-from solver.triage import EXTRACTED, FLOOR, JUDGED, SOLVES, UNJUDGED, render, triage, unasked
+from solver.triage import EXTRACTED, FLOOR, JUDGED, SOLVES, UNJUDGED, parse_judged_tiers, render, triage, unasked
 
 
 @pytest.fixture
@@ -66,6 +66,17 @@ def transcribing():
         return ""
 
     return judge, seen
+
+
+def test_textually_colliding_typed_ids_are_never_sent_to_or_applied_from_the_model(recorder):
+    judge, seen = transcribing()
+
+    judged = triage([sighting(2), sighting("2")], recorder=recorder, judge=judge)
+
+    assert [(one.challenge_id, one.provenance) for one in judged] == [(2, UNJUDGED), ("2", UNJUDGED)]
+    assert seen == []
+    with pytest.raises(ValueError, match="textually ambiguous"):
+        parse_judged_tiers("2 4", (2, "2"))
 
 
 @pytest.mark.parametrize(

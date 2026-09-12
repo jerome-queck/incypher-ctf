@@ -47,6 +47,7 @@ from solver.redaction import Redactor
 from solver.replay import verify_and_materialize_run_state
 from solver.run import WORK_ROOT, Ending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
+from solver.order_runtime import CanonicalScheduler
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
@@ -244,7 +245,11 @@ def _run_admitted(
         profile=discovered,
         recorder=recorder,
         intake=intake,
-        scheduler=Scheduler(window, recorder, dials=dials, judge=judge),
+        scheduler=(
+            CanonicalScheduler(window, recorder, intake.order_authority, dials=dials, judge=judge)
+            if isinstance(intake, CoherentIntake)
+            else Scheduler(window, recorder, dials=dials, judge=judge)
+        ),
         flags=Flags(
             board,
             recorder,

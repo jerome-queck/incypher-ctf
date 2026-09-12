@@ -48,6 +48,20 @@ def test_acquire_assigns_a_global_durable_generation_identity(tmp_path):
     assert events[0].payload["record"] == "acquire"
 
 
+def test_an_order_grant_acquires_its_exact_preallocated_generation_idempotently(tmp_path):
+    fence = make_fence(tmp_path)
+
+    first = fence.acquire_exact("generation-000001", "integer:42", "i:42-1")
+    retried = fence.acquire_exact("generation-000001", "integer:42", "i:42-1")
+
+    assert first == retried
+    assert len(fence.projection().generations) == 1
+    with pytest.raises(GenerationConflict):
+        fence.acquire_exact("generation-000001", "integer:99", "i:99-1")
+    with pytest.raises(GenerationConflict):
+        fence.acquire_exact("generation-000003", "integer:43", "i:43-1")
+
+
 def test_acquire_rejects_reusing_an_attempt_identity(tmp_path):
     fence = make_fence(tmp_path)
     fence.acquire("challenge-1", "attempt-1")

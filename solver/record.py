@@ -241,6 +241,22 @@ class Recorder:
 
         return self.generations.acquire(work_id, attempt_id)
 
+    @property
+    def redactor(self) -> Redactor:
+        return self._redactor
+
+    def acquire_order_generation(self, pick) -> GenerationIdentity:
+        """Consume a canonical Order grant without reminting its identities."""
+
+        if not pick.order_generation_id or not pick.order_attempt_id:
+            raise ValueError("Pick carries no canonical Order grant")
+        kind = "integer" if isinstance(pick.challenge.challenge_id, int) else "string"
+        return self.generations.acquire_exact(
+            pick.order_generation_id,
+            f"{kind}:{pick.challenge.challenge_id}",
+            pick.order_attempt_id,
+        )
+
     def interrupt_generation(self, generation_id: str) -> None:
         """Close acquired Work that failed before its Attempt row could open."""
 
