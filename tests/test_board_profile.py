@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from solver import profile
-from solver.board import Board
+from solver.board import INSTANCE_LEDGER, Board
 from solver.boot import Refusal
 from solver.profile import ABSENT, INSTALLED, UNREADABLE, Rules, discovered, rules_for, tracked
 
@@ -22,6 +22,7 @@ CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "not a valid en
 CONTROL_AGREEABLE = (200, b'{"success": true, "data": []}')
 
 LEDGER = (
+    '<script>window.init = {"userId": 7, "teamId": 11, "userMode": "teams"};</script>'
     "<table><thead><tr><th>Challenge</th><th>Until</th></tr></thead>"
     "<tbody><tr><td>alpha</td><td>later</td></tr></tbody></table>"
 ).encode()
@@ -56,30 +57,42 @@ class Wire:
         path = request.full_url[len(BOARD) :]
         self.asked.append(path)
         if "field=" in path:
-            return (*self.control, "")
+            return (*self.control, "", "application/json")
+        if path == "/api/v1/users/me":
+            return self._answer({"id": 7, "team_id": 11})
+        if path == "/":
+            body = b'<script>window.init = {"userId": 7, "teamId": 11, "userMode": "teams"};</script>'
+            return (200, body, "", "text/html; charset=utf-8")
         if path == "/api/v1/challenges":
             if request.get_header("Authorization") or self.anonymous_reads:
                 return self._answer(self.listed)
-            return (302, b"", "/login")
+            return (302, b"", "/login", "text/html")
         if path.endswith("/mana"):
             if self.mana is None:
-                return (404, b'{"success": false}', "")
-            return (*self.mana, "") if isinstance(self.mana, tuple) else self._answer(self.mana)
-        if path == profile.INSTANCE_LEDGER:
+                return (404, b'{"success": false}', "", "application/json")
+            return (*self.mana, "", "application/json") if isinstance(self.mana, tuple) else self._answer(self.mana)
+        if path == INSTANCE_LEDGER:
             if self.ledger is None:
-                return (404, b"", "")
+                return (404, b"", "", "text/html")
             if isinstance(self.ledger, tuple):
-                return (*self.ledger, "")
-            return (200, self.ledger, "")
+                return (*self.ledger, "", "text/html")
+            return (200, self.ledger, "", "text/html; charset=utf-8")
         if path == "/api/v1/configs":
             if self.configs is None:
-                return (403, b'{"success": false}', "")
-            return (200, json.dumps({"data": [{"key": k, "value": v} for k, v in self.configs.items()]}).encode(), "")
-        return (404, b'{"success": false}', "")
+                return (403, b'{"success": false}', "", "application/json")
+            return (
+                200,
+                json.dumps(
+                    {"success": True, "data": [{"key": k, "value": v} for k, v in self.configs.items()]}
+                ).encode(),
+                "",
+                "application/json",
+            )
+        return (404, b'{"success": false}', "", "application/json")
 
     @staticmethod
     def _answer(data):
-        return (200, json.dumps({"success": True, "data": data}).encode(), "")
+        return (200, json.dumps({"success": True, "data": data}).encode(), "", "application/json")
 
     def boards(self):
         return Board(BOARD, "token", self.transport), Board(BOARD, "", self.transport)
@@ -175,7 +188,7 @@ def test_a_board_that_does_not_answer_at_boot_refuses_rather_than_raising_at_nob
     def unplugged(_request):
         raise OSError("Name or service not known")
 
-    with pytest.raises(Refusal, match="could not be read at boot"):
+    with pytest.raises(Refusal, match="landing page is unreadable"):
         discovered(Board(BOARD, "token", unplugged), Board(BOARD, "", unplugged), RULES)
 
 
@@ -299,18 +312,18 @@ def test_a_board_that_fails_the_read_contract_control_refuses_the_run():
     would let Order rank an empty set while reporting success for five and a half hours."""
     wire = Wire(control=CONTROL_AGREEABLE)
 
-    with pytest.raises(Refusal, match="not composed by CTFd"):
+    with pytest.raises(Refusal, match="not a CTFd field refusal"):
         discovered(*wire.boards(), RULES)
 
 
-def test_the_control_is_never_retried_into_a_pass():
-    """ADR-0016 is explicit that failing it is not transient. One ask, one verdict."""
+def test_each_required_coherence_cycle_asks_the_control_once():
+    """ADR-0016's control is never retried; each of the two required cycles asks it once."""
     wire = Wire(control=CONTROL_AGREEABLE)
 
     with pytest.raises(Refusal):
         discovered(*wire.boards(), RULES)
 
-    assert sum("field=" in path for path in wire.asked) == 1
+    assert sum("field=" in path for path in wire.asked) == 2
 
 
 def test_a_flag_wrapper_that_does_not_compile_refuses_before_anything_is_swept():
@@ -344,7 +357,7 @@ def test_deploying_what_we_could_not_sweep_refuses_the_run():
     reclaims for the rest of the event."""
     wire = Wire(listed=[instanced()], ledger=(403, b""))
 
-    with pytest.raises(Refusal, match="ledger reads"):
+    with pytest.raises(Refusal, match="no compatible Instance ledger"):
         discovered(*wire.boards(), RULES)
 
 
@@ -370,8 +383,11 @@ def test_whether_an_unauthenticated_read_is_answered_is_discovered_both_ways():
     because our own submission counts ride the authenticated payload."""
     listed = [{"id": 1, "name": "alpha", "type": "standard"}]
 
-    assert discovered(*Wire(listed=listed).boards(), RULES).unauthenticated_read is False
-    assert discovered(*Wire(listed=listed, anonymous_reads=True).boards(), RULES).unauthenticated_read is True
+    assert discovered(*Wire(listed=listed).boards(), RULES).unauthenticated_read == profile.ANONYMOUS_REFUSED
+    assert (
+        discovered(*Wire(listed=listed, anonymous_reads=True).boards(), RULES).unauthenticated_read
+        == profile.ANONYMOUS_ANSWERED
+    )
 
 
 def test_the_submission_limit_is_stated_where_the_board_says_so_and_assumed_where_it_does_not():

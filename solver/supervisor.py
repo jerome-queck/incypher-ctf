@@ -21,7 +21,7 @@ from solver.attempt_executor_pool import (
     prepare_attempt_pool,
 )
 from solver.boot import Refusal
-from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV
+from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
 from solver.bootstrap_custody import Broker
 from solver.credentials import SECRETS
 from solver.event_store import EventStore, EventStoreDamage
@@ -344,6 +344,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
                 controller_environment.pop(name, None)
             controller_environment[BOARD_BROKER_SOCKET_ENV] = str(endpoint)
             controller_environment[BOARD_BROKER_HOLDINGS_ENV] = ",".join(holdings)
+            controller_environment[BOARD_PROFILE_HANDLE_ENV] = result.profile_handles[Broker.BOARD]
             return result
 
         supervisor = Supervisor(

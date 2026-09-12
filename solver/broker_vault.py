@@ -27,6 +27,7 @@ class BrokerVaultProcess:
         self._process = process
         self._channel = channel
         self._runtime = runtime
+        self._profile_handle = ""
 
     @property
     def pid(self) -> int:
@@ -69,9 +70,23 @@ class BrokerVaultProcess:
         }
         self._channel.sendall(canonical_bytes(request) + b"\n")
         response = json.loads(receive_line(self._channel, failure="Board owner did not configure its service"))
-        if response != {"path": str(self.service_path), "status": "ready"}:
+        if (
+            not isinstance(response, dict)
+            or set(response) != {"path", "status", "profile_handle"}
+            or response["path"] != str(self.service_path)
+            or response["status"] != "ready"
+            or not isinstance(response["profile_handle"], str)
+            or not response["profile_handle"]
+        ):
             raise RuntimeError("Board owner returned an invalid service endpoint")
+        self._profile_handle = response["profile_handle"]
         return self.service_path
+
+    @property
+    def profile_handle(self) -> str:
+        if not self._profile_handle:
+            raise RuntimeError("Board owner has no configured profile authority")
+        return self._profile_handle
 
     def close(self) -> None:
         if self._process.poll() is not None:

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from solver.codex import CODEX_HOME, Credential
-from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV
+from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
 from solver.credentials import NOT_SECRETS, SECRETS
 
 MARK = "[boot]"
@@ -159,6 +159,8 @@ def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None
             f"nothing. Delete the line rather than blanking it"
         )
     brokered = _broker_holdings(environ)
+    if environ.get(BOARD_BROKER_SOCKET_ENV, "").strip() and not environ.get(BOARD_PROFILE_HANDLE_ENV, "").strip():
+        raise Refusal(f"{MARK} Board-profile authority is absent")
     if missing := [name for name in REQUIRED if not environ.get(name, "").strip() and name not in brokered]:
         raise Refusal(
             f"{MARK} unset: {', '.join(missing)}. A Run cannot be pointed at a Board without both a "

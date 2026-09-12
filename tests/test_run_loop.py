@@ -28,6 +28,7 @@ BOARD = "https://board.example"
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
 WRAPPER = r"brunner\{[^}]{1,256}\}"
 CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "not valid"}}')
+PROFILE_LANDING = b'<script>window.init = {"userId": 7, "teamId": null, "userMode": "users"};</script>'
 
 RULES = Rules(
     event="offline",
@@ -97,7 +98,15 @@ class Wire:
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
         if "field=" in path:
-            return (*CONTROL_REFUSED, "")
+            return (*CONTROL_REFUSED, "", "application/json")
+        if path == "/api/v1/users/me":
+            return self._answer({"id": 7, "team_id": None})
+        if path == "/":
+            return (200, PROFILE_LANDING, "", "text/html")
+        if path == "/plugins/ctfd-chall-manager/instances":
+            return (404, b"", "", "text/html")
+        if path == "/api/v1/configs":
+            return (403, b'{"success": false}', "", "application/json")
         if path == "/api/v1/challenges/attempt":
             return self._graded(json.loads(request.data))
         if path.startswith("/api/v1/challenges/"):
@@ -111,12 +120,14 @@ class Wire:
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
         if path.startswith("/files/bb"):
-            return (200, self.twin or b"", "")
+            return (200, self.twin or b"", "", "application/octet-stream")
         if path.startswith("/files/"):
-            return (200, self.artefact, "")
+            return (200, self.artefact, "", "application/octet-stream")
         if path.endswith("/mana"):
-            return (404, b'{"success": false}', "") if self.mana is None else self._answer(self.mana)
-        return (404, b'{"success": false}', "")
+            return (
+                (404, b'{"success": false}', "", "application/json") if self.mana is None else self._answer(self.mana)
+            )
+        return (404, b'{"success": false}', "", "application/json")
 
     def described(self, found):
         """Brunner's own shape: a Challenge's prose commonly ends in a flag-format section, and
@@ -137,7 +148,7 @@ class Wire:
 
     @staticmethod
     def _answer(data):
-        return (200, json.dumps({"success": True, "data": data}).encode(), "")
+        return (200, json.dumps({"success": True, "data": data}).encode(), "", "application/json")
 
 
 def stream(*, commands=(), says=(), reported=(), failed=""):
@@ -369,8 +380,10 @@ def test_instance_recovery_opens_the_production_broker_client_with_full_binding(
             if path == "/plugins/ctfd-chall-manager/instances":
                 return (
                     200,
-                    b"<table><thead><tr><th>Challenge</th><th>Until</th></tr></thead><tbody></tbody></table>",
+                    PROFILE_LANDING
+                    + b"<table><thead><tr><th>Challenge</th><th>Until</th></tr></thead><tbody></tbody></table>",
                     "",
+                    "text/html",
                 )
             if path == "/api/v1/plugins/ctfd-chall-manager/instance":
                 return self._answer({"message": "already held"})[:2] + ("",)

@@ -23,12 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from solver.board import INSTANCE_LEDGER, Board, BoardFailure, Mana
+from solver.board import Board, Mana
 from solver.boot import MARK as BOOT
 from solver.boot import Refusal
 from solver.credentials import NOT_SECRETS, SECRETS
-from solver.instance import INSTANCED_TYPE
-from solver.intake import SETTLED_MANA
 
 MARK = "[profile]"
 
@@ -49,6 +47,10 @@ EVENT_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 CTFD_DEFAULT_INCORRECT_PER_MIN = 10
 STATED = "stated"
 ASSUMED = "assumed"
+
+ANONYMOUS_ANSWERED = "answered"
+ANONYMOUS_REFUSED = "refused"
+ANONYMOUS_UNREADABLE = "unreadable"
 
 # Whether `ctfd-chall-manager` is installed, in ADR-0008's own three words. Installed is a ledger we
 # can read and therefore a leak sweep that works; absent is a Board without the plugin, which is no
@@ -108,15 +110,18 @@ class Profile:
     rules: Rules
     chall_manager: str
     instanced_challenges: int
-    unauthenticated_read: bool
+    unauthenticated_read: str
     mana: Mana | None
+    mana_outcome: str
     submissions_per_minute: int
     submissions_per_minute_source: str
+    configs_outcome: str
     # What the Board itself says its event window is, kept beside the rules-derived one rather than
     # replacing it. The two genuinely disagree: IN-CYPHER's CTFd window runs to 22 Sep 00:00 SGT
     # while the scored Run is 10:30–16:00 that same day, so the wire value is the practice window
     # and taking it would end the Run before it started.
     board_window: dict[str, Any] = field(default_factory=dict)
+    board_window_observations: dict[str, Any] = field(default_factory=dict)
 
     @property
     def instances_reachable(self) -> bool:
@@ -139,9 +144,12 @@ class Profile:
             "mana": None
             if self.mana is None
             else {"outcome": self.mana.outcome, "used": self.mana.used, "total": self.mana.total},
+            "mana_outcome": self.mana_outcome,
             "submissions_per_minute": self.submissions_per_minute,
             "submissions_per_minute_source": self.submissions_per_minute_source,
+            "configs_outcome": self.configs_outcome,
             "board_window": self.board_window,
+            "board_window_observations": self.board_window_observations,
         }
 
 
@@ -177,59 +185,14 @@ def rules_for(url: str, directory: Path = BOARDS) -> Rules:
 
 
 def discovered(board: Board, anyone: Board, rules: Rules) -> Profile:
-    """Ask the Board everything about itself that it can answer, and refuse where it cannot.
+    """Compatibility adapter into the same qualifier the production broker owns."""
 
-    A Board that does not answer at all refuses the Run like every other missing fact, rather than
-    reaching the entry point as a traceback: at boot there is a human present and a sentence is
-    worth more to them than a stack. Mid-Run the same fault is Intake's and is handled the opposite
-    way, because by then there is a snapshot worth keeping and nobody to read a sentence.
-    """
-    try:
-        return _asked(board, anyone, rules)
-    except (BoardFailure, OSError) as unreachable:
-        raise Refusal(f"{BOOT} the Board could not be read at boot — {unreachable}") from None
+    from solver.board_profile import qualify_direct
 
-
-def _asked(board: Board, anyone: Board, rules: Rules) -> Profile:
-    """The discovery itself.
-
-    `anyone` is the same Board addressed with no token: whether an unauthenticated read is answered
-    is a profile field, and asking it needs a second address rather than a flag, because the token
-    is applied by the seam and not by the caller.
-
-    The read-contract control is asked here and **first**, unconditionally. Intake asks it only
-    where a list came back empty, which is the right rule mid-Run and the wrong one at boot: `solves`
-    and `value` ride the same LIST payload, so a Board that answers a canned success would let Order
-    rank an empty set while reporting success for five and a half hours (ADR-0016).
-    """
-    if not board.collection_endpoints_reach_ctfd():
-        raise Refusal(
-            f"{BOOT} this Board answered 200 to a query CTFd validates and must refuse, so its replies "
-            f"were not composed by CTFd and an empty collection from it means nothing. Failing this is "
-            f"not transient and is never retried into a pass (ADR-0016)"
-        )
-    _compiles(rules.flag_wrappers)
-    listed = board.challenges()
-    instanced = sum(1 for one in listed if one.get("type") == INSTANCED_TYPE)
-    chall_manager = _ledger(board)
-    if instanced and chall_manager != INSTALLED:
-        raise Refusal(
-            f"{BOOT} {instanced} Challenge(s) are {INSTANCED_TYPE} but the Instance ledger reads "
-            f"{chall_manager} — a Run that deploys what it cannot sweep leaks capacity nobody reclaims, "
-            f"because chall-manager never evicts (ADR-0007)"
-        )
-    configs = _configs(board)
-    limit, source = _submission_limit(configs)
-    return Profile(
-        rules=rules,
-        chall_manager=chall_manager,
-        instanced_challenges=instanced,
-        unauthenticated_read=_answers_anyone(anyone),
-        mana=_mana(board, chall_manager),
-        submissions_per_minute=limit,
-        submissions_per_minute_source=source,
-        board_window={key: configs[key] for key in ("start", "end") if configs.get(key) not in (None, "")},
-    )
+    decision = qualify_direct(board, anyone, rules)
+    if not decision.authoritative or decision.profile is None:
+        raise Refusal(f"{BOOT} Board profile is incompatible — {decision.reason}")
+    return decision.profile
 
 
 def _read(path: Path) -> Rules:
@@ -318,110 +281,3 @@ def _moment(path: Path, stated: Any) -> dt.datetime | None:
     if moment.tzinfo is None:
         raise Refusal(f"{BOOT} {path} states closes_at {stated!r} with no timezone offset")
     return moment
-
-
-def _compiles(wrappers: tuple[str, ...]) -> None:
-    """Every wrapper, because one that does not compile sweeps nothing and does it silently.
-
-    `solver/flag.py` records the failure as an Observation inside an Attempt already in flight,
-    which is correct there and five and a half hours too late here. **Any** one of them failing
-    refuses the Run: a profile that states two shapes wants both, and starting on one of them is
-    starting on a Board we have half-read.
-    """
-    for wrapper in wrappers:
-        try:
-            re.compile(wrapper)
-        except re.error as broken:
-            raise Refusal(
-                f"{BOOT} the Flag wrapper {wrapper!r} does not compile — {broken}. Nothing would ever be swept"
-            ) from None
-
-
-def _ledger(board: Board) -> str:
-    """Whether chall-manager's team ledger answers us, as one of three names.
-
-    A 404 is a Board without the plugin and is no kind of fault; anything else — a refusal, a
-    redirect to a login page, a socket that never answered — is a ledger we cannot read, and the two
-    are kept apart because only the second one can ever be a reason to refuse a Run.
-    """
-    try:
-        status, _raw, _location = board.request("GET", INSTANCE_LEDGER)
-    except OSError:
-        return UNREADABLE
-    if status == 404:
-        return ABSENT
-    if status != 200:
-        return UNREADABLE
-    try:
-        board.instances_held()
-    except BoardFailure:
-        return UNREADABLE
-    return INSTALLED
-
-
-def _mana(board: Board, chall_manager: str) -> Mana | None:
-    """The concurrency cap, read once, and only where there is a plugin to read it from.
-
-    An unsettled answer refuses the Run. This is ADR-0008's own named failure and the reason this
-    module exists in the shape it does: a transient 403 kept as a total reads as `total: 0`, which is
-    *mana switched off*, and a mana-limited Board would then be treated as one with no cap at all
-    for the rest of the Run.
-    """
-    if chall_manager != INSTALLED:
-        return None
-    reading = board.mana()
-    if reading.outcome not in SETTLED_MANA:
-        raise Refusal(
-            f"{BOOT} /mana answered {reading.outcome} — {reading.detail}. That is neither a total nor "
-            f"this Board saying it has no mana, and keeping it would read as the feature switched off"
-        )
-    return reading
-
-
-def _answers_anyone(anyone: Board) -> bool:
-    """Whether the Board serves its Challenge list with no token at all — a fact about the Board and
-    never a route we take: every read in a Run is authenticated, because our own submission counts
-    ride the authenticated payload."""
-    try:
-        return bool(anyone.challenges())
-    except (BoardFailure, OSError):
-        return False
-
-
-def _submission_limit(configs: dict[str, Any]) -> tuple[int, str]:
-    """The Board-wide wrong-submissions-per-minute cap, and whether it was read or assumed.
-
-    An admin-only endpoint refusing us is **absent** rather than failed — it is the Board saying we
-    may not read this, and CTFd's own default is the documented answer to that. What would be a
-    fault is the Board not answering at all, and that no longer reaches here: `discovered` turns it
-    into a Refusal. Which of the two happened is on the record either way, because a Run paced at a
-    number nobody stated and one paced at the Board's own are different Runs.
-    """
-    stated = configs.get("incorrect_submissions_per_min")
-    if stated in (None, ""):
-        return CTFD_DEFAULT_INCORRECT_PER_MIN, ASSUMED
-    try:
-        return int(stated), STATED
-    except (TypeError, ValueError):
-        return CTFD_DEFAULT_INCORRECT_PER_MIN, ASSUMED
-
-
-def _configs(board: Board) -> dict[str, Any]:
-    """`/api/v1/configs` as a mapping, read **once** — the submission limit and the Board's own
-    event window are two fields of one document, and asking twice is two round-trips for one answer.
-
-    Empty where it answered anything else. It is admin-only on every Board we hold a token for, so
-    the empty case is the rule rather than the exception, and a body that does not parse is an
-    unread config rather than a Board fault.
-    """
-    status, raw, _location = board.request("GET", "/api/v1/configs")
-    if status != 200:
-        return {}
-    try:
-        document = json.loads(raw)
-    except ValueError:
-        return {}
-    entries = document.get("data") if isinstance(document, dict) else None
-    if not isinstance(entries, list):
-        return {}
-    return {str(entry.get("key")): entry.get("value") for entry in entries if isinstance(entry, dict)}

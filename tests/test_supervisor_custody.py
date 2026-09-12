@@ -55,6 +55,8 @@ def test_supervisor_transfers_and_clears_inherited_secrets_then_probes_a_clean_e
         assert "CTFD_API_TOKEN" not in environment
         assert "TEAM_KEY" not in environment
         assert observed["environment"] == result.executor_environment
+        assert "INCYPHER_BOARD_PROFILE_HANDLE" not in result.executor_environment
+        assert result.profile_handles[Broker.BOARD]
         records = [
             event.payload
             for event in EventStore(tmp_path, run_id="run-1").events()

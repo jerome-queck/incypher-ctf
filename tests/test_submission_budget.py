@@ -28,7 +28,7 @@ from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.run import Run, Steps
 from solver.schedule import Dials, Scheduler, Window
-from test_run_loop import BOARD, CONTROL_REFUSED, WRAPPER, Canned, Clock, stream
+from test_run_loop import BOARD, CONTROL_REFUSED, PROFILE_LANDING, WRAPPER, Canned, Clock, stream
 
 RULES = Rules(event="offline", url=BOARD, flag_wrappers=(WRAPPER,), window_seconds=1200, prohibitions=())
 
@@ -63,7 +63,17 @@ class Wire:
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
         if "field=" in path:
-            return (*CONTROL_REFUSED, "")
+            return (*CONTROL_REFUSED, "", "application/json")
+        if path == "/api/v1/users/me":
+            return self._answer({"id": 7, "team_id": None})
+        if path == "/":
+            return (200, PROFILE_LANDING, "", "text/html")
+        if path == "/plugins/ctfd-chall-manager/instances":
+            return (404, b"", "", "text/html")
+        if path == "/api/v1/configs":
+            return (403, b'{"success": false}', "", "application/json")
+        if path.endswith("/mana"):
+            return (404, b'{"success": false}', "", "application/json")
         if path == "/api/v1/challenges/attempt":
             self.submitted.append(json.loads(request.data)["submission"])
             return self.answered()
@@ -73,7 +83,7 @@ class Wire:
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
-        return (404, b'{"success": false}', "")
+        return (404, b'{"success": false}', "", "application/json")
 
     def answered(self):
         """How this Board grades one submission, and what it costs: `incorrect` is the verdict CTFd
@@ -99,7 +109,7 @@ class Wire:
 
     @staticmethod
     def _answer(data, status: int = 200):
-        return (status, json.dumps({"success": True, "data": data}).encode(), "")
+        return (status, json.dumps({"success": True, "data": data}).encode(), "", "application/json")
 
 
 class Refusing(Wire):
@@ -130,7 +140,7 @@ class Unanswered(Wire):
     """
 
     def answered(self):
-        return (502, b"<html>bad gateway</html>", "")
+        return (502, b"<html>bad gateway</html>", "", "text/html")
 
 
 class Teammate(Wire):
@@ -150,7 +160,7 @@ class Silent(Wire):
     """
 
     def detailed(self):
-        return (500, b'{"success": false}', "") if self.submitted else super().detailed()
+        return (500, b'{"success": false}', "", "application/json") if self.submitted else super().detailed()
 
 
 class Nominating:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import socket
 import sys
@@ -69,6 +70,7 @@ def main(socket_path: Path) -> int:
                 peer_identity=local_peer_identity,
                 timestamp=timestamp,
             )
+            profile_handle = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("ascii")
             runtime = BoardBrokerRuntime(
                 state=state,
                 run_id=run_id,
@@ -78,10 +80,15 @@ def main(socket_path: Path) -> int:
                 team_key=secrets.get("TEAM_KEY", ""),
                 boot_id=boot_id,
                 timestamp=timestamp,
+                profile_required=True,
+                profile_handle=profile_handle,
             )
             service = BoardBrokerService(socket_path.with_name("board.sock"), runtime)
             service.start()
-            channel.sendall(canonical_bytes({"path": str(service.path), "status": "ready"}) + b"\n")
+            channel.sendall(
+                canonical_bytes({"path": str(service.path), "status": "ready", "profile_handle": profile_handle})
+                + b"\n"
+            )
         return 0
     except Exception as error:
         print(f"broker custody failed: {type(error).__name__}", file=sys.stderr)

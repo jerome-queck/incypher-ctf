@@ -21,7 +21,7 @@ from solver.redaction import Redactor
 from solver.flag import OBSERVED, Candidate
 from solver.run import SIGNALLED, TAIL, WINDOW_CLOSED, Pending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
-from test_run_loop import BOARD, CONTROL_REFUSED, NOON, WRAPPER, Agent, Clock, records
+from test_run_loop import BOARD, CONTROL_REFUSED, NOON, PROFILE_LANDING, WRAPPER, Agent, Clock, records
 
 RULES = Rules(event="offline", url=BOARD, flag_wrappers=(WRAPPER,), window_seconds=3600, prohibitions=())
 DIALS = Dials(knee_seconds=600.0, floor_seconds=300.0, tail_seconds=300.0)
@@ -70,7 +70,13 @@ class Wire:
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
         if "field=" in path:
-            return (*CONTROL_REFUSED, "")
+            return (*CONTROL_REFUSED, "", "application/json")
+        if path == "/api/v1/users/me":
+            return self._answer({"id": 7, "team_id": None})
+        if path == "/":
+            return (200, PROFILE_LANDING, "", "text/html")
+        if path == "/api/v1/configs":
+            return (403, b'{"success": false}', "", "application/json")
         if path == "/api/v1/challenges/attempt":
             sent = json.loads(request.data)
             self.submitted.append((sent["challenge_id"], sent["submission"]))
@@ -78,12 +84,12 @@ class Wire:
             return self._answer({"status": "correct" if right else "incorrect", "message": ""})
         if path.startswith("/api/v1/plugins/ctfd-chall-manager") or path == "/plugins/ctfd-chall-manager/instances":
             if not self.plugin:
-                return (404, b'{"success": false}', "")
+                return (404, b'{"success": false}', "", "application/json")
             if path == "/plugins/ctfd-chall-manager/instances":
                 self.ledger_reads += 1
                 if self.ledger_breaks_after is not None and self.ledger_reads > self.ledger_breaks_after:
-                    return (500, b"", "")
-                return (200, self._ledger(), "")
+                    return (500, b"", "", "text/html")
+                return (200, self._ledger(), "", "text/html")
             if path.endswith("/mana"):
                 return self._answer({"used": len(self.deployed), "total": 8})
             return self._instance(request, path)
@@ -102,13 +108,13 @@ class Wire:
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
-        return (404, b'{"success": false}', "")
+        return (404, b'{"success": false}', "", "application/json")
 
     def _instance(self, request, path):
         challenge_id = int((json.loads(request.data) if request.data else {}).get("challengeId") or path.split("=")[-1])
         if request.get_method() == "DELETE":
             if not self.terminates:
-                return (429, b"", "")
+                return (429, b"", "", "application/json")
             self.terminated.append(challenge_id)
             self.deployed.pop(challenge_id, None)
             return self._answer({})
@@ -119,12 +125,13 @@ class Wire:
     def _ledger(self):
         rows = "".join(f"<tr><td>challenge-{one}</td><td>later</td></tr>" for one in self.deployed)
         return (
-            f"<table><thead><tr><th>Challenge</th><th>Until</th></tr></thead><tbody>{rows}</tbody></table>"
+            PROFILE_LANDING.decode()
+            + f"<table><thead><tr><th>Challenge</th><th>Until</th></tr></thead><tbody>{rows}</tbody></table>"
         ).encode()
 
     @staticmethod
     def _answer(data):
-        return (200, json.dumps({"success": True, "data": data}).encode(), "")
+        return (200, json.dumps({"success": True, "data": data}).encode(), "", "application/json")
 
 
 def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):

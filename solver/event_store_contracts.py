@@ -726,6 +726,12 @@ def event_contract(event_type: str):
     from solver.attempt_executor_contracts import AttemptEnvelopeRecorded
     from solver.attempt_process_contracts import ATTEMPT_PROCESS_RECORDED, AttemptProcessRecorded
     from solver.board_broker_contracts import BOARD_BROKER_RECORDED, BoardBrokerRecorded
+    from solver.board_profile_contracts import (
+        BOARD_PROFILE_OBSERVATION_RECORDED,
+        BOARD_PROFILE_PHASE_RECORDED,
+        BoardProfileObservationRecorded,
+        BoardProfilePhaseRecorded,
+    )
     from solver.lead_contracts import LEAD_ENGAGEMENT_RECORDED, LeadEngagementRecorded
     from solver.storage_governor_contracts import STORAGE_GOVERNOR_RECORDED, StorageGovernorRecorded
 
@@ -737,6 +743,8 @@ def event_contract(event_type: str):
         ATTEMPT_ENVELOPE_RECORDED: AttemptEnvelopeRecorded,
         ATTEMPT_PROCESS_RECORDED: AttemptProcessRecorded,
         BOARD_BROKER_RECORDED: BoardBrokerRecorded,
+        BOARD_PROFILE_OBSERVATION_RECORDED: BoardProfileObservationRecorded,
+        BOARD_PROFILE_PHASE_RECORDED: BoardProfilePhaseRecorded,
         LEAD_ENGAGEMENT_RECORDED: LeadEngagementRecorded,
         STORAGE_GOVERNOR_RECORDED: StorageGovernorRecorded,
     }
