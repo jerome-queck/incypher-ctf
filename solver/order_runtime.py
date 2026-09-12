@@ -31,6 +31,8 @@ from solver.record import Recorder
 from solver.schedule import WINDOW, Dials, Ended, Pick, Window
 from solver.triage import JUDGED, UNJUDGED, Judge, judgeable_ids, parse_judged_tiers, triage, unasked
 from solver.triage_judgement_contracts import TRIAGE_JUDGEMENT_RECORDED, TriageJudgementRecorded
+from solver.triage_judge import TriageJudgeController, evidence_digest as triage_evidence_digest
+from solver.triage_judge_contracts import TriageEvidence, TriageJudgeRequest, TriageProposal
 
 
 class CanonicalScheduler:
@@ -45,6 +47,7 @@ class CanonicalScheduler:
         dials: Dials = Dials(),
         judge: Judge = unasked,
         now: Callable[[], dt.datetime] | None = None,
+        triage_judge: TriageJudgeController | None = None,
     ) -> None:
         self.window = window
         self.dials = dials
@@ -52,6 +55,7 @@ class CanonicalScheduler:
         self._authority = authority
         self._judge = judge
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
+        self._triage_judge = triage_judge
         state = Path(recorder.run_dir).parents[1]
         self._journal = OrderJournal(
             state,
@@ -227,7 +231,35 @@ class CanonicalScheduler:
             answers.append((prompt, answer))
             return answer
 
-        judgements = triage(arrived, recorder=self._recorder, judge=observed_judge)
+        if self._triage_judge is not None:
+            typed_evidence = tuple(
+                TriageEvidence(
+                    "challenge-arrival",
+                    str(item.challenge_id),
+                    digest_bytes(canonical_bytes({"challenge_id": str(item.challenge_id)})),
+                    f"{item.name[:200]} | {item.category[:80]} | solves={item.solves}",
+                )
+                for item in arrived
+            )
+            digest = triage_evidence_digest(typed_evidence)
+            batch_id = f"triage-arrivals:{digest}"
+            outcome = self._triage_judge.evaluate(
+                TriageJudgeRequest(
+                    batch_id,
+                    digest,
+                    typed_evidence,
+                    TriageProposal("triage", "", 1.0, "deterministic-v1"),
+                    (self._now() + dt.timedelta(minutes=1)).isoformat(),
+                )
+            )
+
+            def accepted_triage_judgement(prompt):
+                answers.append((prompt, outcome.proposal.value))
+                return outcome.proposal.value
+
+            judgements = triage(arrived, recorder=self._recorder, judge=accepted_triage_judgement)
+        else:
+            judgements = triage(arrived, recorder=self._recorder, judge=observed_judge)
         evidence = [
             event.event_digest
             for event in self._recorder.event_store.events()

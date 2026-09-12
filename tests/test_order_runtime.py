@@ -1,6 +1,7 @@
 """Production adapter: canonical Order first, v1 Pick only as projection."""
 
 import datetime as dt
+import json
 
 from solver.intake import Sighting, Snapshot
 from solver.instance import Terms
@@ -23,6 +24,8 @@ from solver.order_runtime import CanonicalScheduler, record_admission_facts
 from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.schedule import Dials, Ended, Window
+from solver.triage_judge import TriageJudgeController
+from solver.triage_judge_contracts import MeasuredTriageJudgement, TriageJudgeMeasure, TriageProposal
 
 
 UTC = dt.timezone.utc
@@ -131,6 +134,55 @@ def test_canonical_order_publishes_before_projecting_one_exact_v1_pick(tmp_path)
     assert recorder.acquire_order_generation(pick) == generation
 
     scheduler.release(Ended(42, "flag", 20, 0))
+
+
+def test_production_triage_arrival_batch_accepts_once_and_replays_after_restart(tmp_path):
+    recorder = Recorder(tmp_path, "run-1", Redactor({}), now=lambda: NOW)
+    calls = []
+
+    def model(evidence):
+        calls.append(evidence)
+        return MeasuredTriageJudgement(
+            TriageProposal("triage", "42 4", 0.9, "native-codex"),
+            TriageJudgeMeasure("native-codex", "fake", 5, 10, 2, True, NOW.isoformat()),
+        )
+
+    boundary = TriageJudgeController(tmp_path, "run-1", Redactor({}), model)
+    scheduler = CanonicalScheduler(
+        _window(tmp_path), recorder, _canonical_authority(tmp_path), now=lambda: NOW, triage_judge=boundary
+    )
+    crowdless = Snapshot(
+        NOW,
+        1,
+        challenges=(Sighting(42, "answer", "web", "", 500, 0, 1, "", 0, None, False, Terms(42, "standard")),),
+    )
+
+    assert scheduler.acquire(crowdless) is not None
+    assert len(calls) == 1
+    durable = next(
+        json.loads(event.body)
+        for event in recorder.event_store.events()
+        if event.event_type == "order-input.recorded" and event.payload["record"] == "durable-tiers"
+    )
+    assert durable["tiers"] == [{"challenge_id": {"type": "integer", "value": "42"}, "provenance": "judged", "tier": 4}]
+    restarted = TriageJudgeController(
+        tmp_path, "run-1", Redactor({}), lambda _evidence: (_ for _ in ()).throw(AssertionError())
+    )
+    recorded = next(event for event in recorder.event_store.events() if event.event_type == "triage-judge.recorded")
+    assert restarted.evaluate(boundary_request(recorded)).accepted_source == "model"
+
+
+def boundary_request(recorded):
+    from solver.triage_judge_contracts import TriageEvidence, TriageJudgeRequest, TriageProposal
+
+    evidence = tuple(TriageEvidence(**item) for item in json.loads(recorded.body)["evidence"])
+    return TriageJudgeRequest(
+        recorded.payload["batch_id"],
+        recorded.payload["evidence_digest"],
+        evidence,
+        TriageProposal("triage", "", 1.0, "deterministic-v1"),
+        (NOW + dt.timedelta(minutes=1)).isoformat(),
+    )
 
 
 def test_caller_lease_and_solve_hints_cannot_override_canonical_intake_or_generation_sources(tmp_path):
