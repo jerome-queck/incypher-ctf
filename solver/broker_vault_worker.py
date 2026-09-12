@@ -11,10 +11,10 @@ import datetime as dt
 import hashlib
 from pathlib import Path
 
-from solver.board_broker import BoardBrokerRuntime, BoardBrokerService, local_peer_identity
+from solver.board_broker import BoardBrokerRuntime, BoardBrokerService
 from solver.broker_contracts import Broker, transfer_digest
 from solver.broker_contracts import BrokerReceipt
-from solver.capability import CapabilityAuthority
+from solver.capability import CapabilityAuthority, local_peer_identity
 from solver.codex_control import CodexControl, CodexControlServer, CodexControlService
 from solver.codex_control_contracts import CodexCatalogueEntry
 from solver.codex_control_custody import establish_service_custody

@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import json
 import socket
-import struct
 import threading
 import urllib.parse
 from collections.abc import Callable
@@ -57,6 +56,7 @@ from solver.capability import (
     CapabilityBinding,
     CapabilityRefused,
     PeerAuthenticationUnavailable,
+    local_peer_identity,
 )
 from solver.event_store import EventStore
 from solver.event_store_storage import canonical_bytes
@@ -1083,20 +1083,6 @@ def _ipc_request(path: Path, request: dict[str, object]) -> dict[str, object]:
         return response
     finally:
         connection.close()
-
-
-def local_peer_identity(connection: socket.socket):
-    """Use full Linux identity in production and a uid-bound local identity in Darwin tests."""
-
-    from solver.capability import LinuxPeerIdentity, PeerIdentity
-
-    if hasattr(socket, "SO_PEERCRED") and Path("/proc").is_dir():
-        return LinuxPeerIdentity()(connection)
-    if not hasattr(socket, "LOCAL_PEERCRED"):
-        raise PeerAuthenticationUnavailable("local peer credentials are unavailable")
-    raw = connection.getsockopt(0, socket.LOCAL_PEERCRED, 12)
-    uid = struct.unpack_from("I", raw, 4)[0]
-    return PeerIdentity(uid, uid, uid, "local-peer", "darwin-local-socket")
 
 
 def denied_probe(path: Path, fixture: bytes) -> bytes:

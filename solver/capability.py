@@ -86,6 +86,18 @@ class LinuxPeerIdentity:
         return PeerIdentity(pid=pid, uid=uid, gid=gid, started=suffix[19], cgroup=cgroup)
 
 
+def local_peer_identity(connection: socket.socket) -> PeerIdentity:
+    """Use full Linux identity in production and a uid-bound local identity in Darwin tests."""
+
+    if hasattr(socket, "SO_PEERCRED") and Path("/proc").is_dir():
+        return LinuxPeerIdentity()(connection)
+    if not hasattr(socket, "LOCAL_PEERCRED"):
+        raise PeerAuthenticationUnavailable("local peer credentials are unavailable")
+    raw = connection.getsockopt(0, socket.LOCAL_PEERCRED, 12)
+    uid = struct.unpack_from("I", raw, 4)[0]
+    return PeerIdentity(uid, uid, uid, "local-peer", "darwin-local-socket")
+
+
 @dataclass(frozen=True)
 class CapabilityBinding:
     """Trusted execution identity attached to a handle, never supplied in a request."""

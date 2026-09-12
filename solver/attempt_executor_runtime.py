@@ -52,7 +52,7 @@ class TargetBroker(Protocol):
     def revoke_generation(self, generation_id: str) -> None: ...
 
 
-class TargetService(Protocol):
+class BrokerService(Protocol):
     path: Path
 
     def start(self) -> None: ...
@@ -61,7 +61,19 @@ class TargetService(Protocol):
 
 
 class TargetServiceFactory(Protocol):
-    def __call__(self, path: Path, runtime: TargetBroker) -> TargetService: ...
+    def __call__(self, path: Path, runtime: TargetBroker) -> BrokerService: ...
+
+
+class ResearchBroker(Protocol):
+    boot_id: str
+
+    def prepare_attempt(self, binding: CapabilityBinding) -> None: ...
+
+    def revoke_generation(self, generation_id: str) -> None: ...
+
+
+class ResearchServiceFactory(Protocol):
+    def __call__(self, path: Path, runtime: ResearchBroker) -> BrokerService: ...
 
 
 class RuntimeInput(Protocol):
@@ -108,6 +120,8 @@ class AttemptRuntime:
         gate: Callable[[socket.socket, str, float], int] | None = None,
         target_broker: TargetBroker | None = None,
         target_service_factory: TargetServiceFactory | None = None,
+        research_broker: ResearchBroker | None = None,
+        research_service_factory: ResearchServiceFactory | None = None,
     ) -> None:
         self.pool = pool
         self.clock = clock
@@ -118,11 +132,14 @@ class AttemptRuntime:
         self.gate = gate or self._await_gated
         self.target_broker = target_broker
         self._target_service_factory = target_service_factory or _target_service
+        self.research_broker = research_broker
+        self._research_service_factory = research_service_factory or _research_service
         self._cancelled: set[str] = set()
         self._cancel_lock = threading.Lock()
         self._reservations: dict[str, tuple[AttemptSlot, Path, int, str]] = {}
-        self._target_services: dict[str, TargetService] = {}
-        self._target_socket_inodes: dict[Path, int] = {}
+        self._target_services: dict[str, BrokerService] = {}
+        self._research_services: dict[str, BrokerService] = {}
+        self._broker_socket_inodes: dict[Path, set[int]] = {}
 
     def prepare(self, envelope_id: str, incoming: RuntimeInput) -> RuntimeReservation:
         """Reserve and configure a childless envelope before canonical launch records."""
@@ -164,7 +181,7 @@ class AttemptRuntime:
                 incoming.request.attempt_id,
                 incoming.request.step_id,
             )
-            service: TargetService | None = None
+            service: BrokerService | None = None
             try:
                 self.target_broker.prepare_attempt(binding)
                 service = self._target_service_factory(slot.work_path / ".target.sock", self.target_broker)
@@ -173,13 +190,37 @@ class AttemptRuntime:
                 # traverse the directory, so the pathname itself need not retain controller ownership.
                 service.path.chmod(0o666)
                 self._target_services[envelope_id] = service
-                self._target_socket_inodes[slot.work_path] = service.path.stat().st_ino
+                self._broker_socket_inodes.setdefault(slot.work_path, set()).add(service.path.stat().st_ino)
             except (OSError, RuntimeError, ValueError) as error:
                 if service is not None:
                     service.close()
                 self.target_broker.revoke_generation(binding.generation_id)
                 self.pool.release(slot)
                 raise RuntimeUnavailable(f"Target broker preparation failed: {error}") from error
+        if self.research_broker is not None:
+            binding = CapabilityBinding(
+                incoming.run_id,
+                self.research_broker.boot_id,
+                incoming.request.generation_id,
+                incoming.request.lane_id,
+                incoming.request.attempt_id,
+                incoming.request.step_id,
+            )
+            service = None
+            try:
+                self.research_broker.prepare_attempt(binding)
+                service = self._research_service_factory(slot.work_path / ".research.sock", self.research_broker)
+                service.start()
+                service.path.chmod(0o666)
+                self._research_services[envelope_id] = service
+                self._broker_socket_inodes.setdefault(slot.work_path, set()).add(service.path.stat().st_ino)
+            except (OSError, RuntimeError, ValueError) as error:
+                if service is not None:
+                    service.close()
+                self.research_broker.revoke_generation(binding.generation_id)
+                self._close_target(envelope_id)
+                self.pool.release(slot)
+                raise RuntimeUnavailable(f"Research broker preparation failed: {error}") from error
         self._reservations[envelope_id] = slot, cgroup, baseline_bytes, nonce
         return RuntimeReservation(str(cgroup), slot.uid, nonce)
 
@@ -205,6 +246,8 @@ class AttemptRuntime:
                         "filesystem_bytes": request.envelope.filesystem_bytes,
                         "target_socket": "/work/.target.sock" if envelope_id in self._target_services else "",
                         "target_generation": request.generation_id if envelope_id in self._target_services else "",
+                        "research_socket": "/work/.research.sock" if envelope_id in self._research_services else "",
+                        "research_generation": request.generation_id if envelope_id in self._research_services else "",
                     }
                 )
             )
@@ -234,13 +277,27 @@ class AttemptRuntime:
             )
         finally:
             self._close_target(envelope_id)
+            self._close_research(envelope_id)
             self._finish(envelope_id)
 
     def _close_target(self, envelope_id: str) -> None:
         service = self._target_services.pop(envelope_id, None)
         if service is not None:
-            self._target_socket_inodes.pop(service.path.parent, None)
+            self._discard_broker_inode(service)
             service.close()
+
+    def _close_research(self, envelope_id: str) -> None:
+        service = self._research_services.pop(envelope_id, None)
+        if service is not None:
+            self._discard_broker_inode(service)
+            service.close()
+
+    def _discard_broker_inode(self, service: BrokerService) -> None:
+        inodes = self._broker_socket_inodes.get(service.path.parent)
+        if inodes is not None:
+            inodes.discard(service.path.stat().st_ino)
+            if not inodes:
+                self._broker_socket_inodes.pop(service.path.parent, None)
 
     def reconcile(self, unresolved: tuple[dict[str, object], ...]) -> tuple[RuntimeObservation, ...]:
         return tuple(self._reconcile_one(state) for state in unresolved)
@@ -355,7 +412,7 @@ class AttemptRuntime:
         snapshot = self._cgroup_counters(cgroup)
         filesystem_bytes, unsafe = _workspace_usage(
             slot.work_path,
-            allowed_socket_inode=self._target_socket_inodes.get(slot.work_path),
+            allowed_socket_inodes=self._broker_socket_inodes.get(slot.work_path, set()),
         )
         return ResourceSample(
             counters=snapshot,
@@ -847,7 +904,7 @@ def _materialize_workspace(
             os.close(descriptor)
 
 
-def _workspace_usage(path: Path, *, allowed_socket_inode: int | None = None) -> tuple[int, bool]:
+def _workspace_usage(path: Path, *, allowed_socket_inodes: set[int] | None = None) -> tuple[int, bool]:
     total = 0
     unsafe = False
     try:
@@ -863,10 +920,10 @@ def _workspace_usage(path: Path, *, allowed_socket_inode: int | None = None) -> 
                 total += entry.stat().st_size
             elif not stat.S_ISDIR(mode):
                 allowed = (
-                    allowed_socket_inode is not None
-                    and entry.name == ".target.sock"
+                    allowed_socket_inodes is not None
+                    and entry.name in {".target.sock", ".research.sock"}
                     and stat.S_ISSOCK(mode)
-                    and entry.lstat().st_ino == allowed_socket_inode
+                    and entry.lstat().st_ino in allowed_socket_inodes
                 )
                 unsafe = unsafe or not allowed
         except OSError:
@@ -923,10 +980,16 @@ def _nonnegative_int(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
-def _target_service(path: Path, runtime: TargetBroker) -> TargetService:
+def _target_service(path: Path, runtime: TargetBroker) -> BrokerService:
     from solver.target_broker_ipc import TargetBrokerService
 
     return TargetBrokerService(path, runtime)
+
+
+def _research_service(path: Path, runtime: ResearchBroker) -> BrokerService:
+    from solver.research_broker_ipc import ResearchBrokerService
+
+    return ResearchBrokerService(path, runtime)  # type: ignore[arg-type]
 
 
 __all__ = ["AttemptRuntime", "RuntimeUnavailable"]
