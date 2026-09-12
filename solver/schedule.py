@@ -148,6 +148,10 @@ class Dials:
     # varies it never: ADR-0014 gives a Run one brain, switching on exhaustion alone.
     reasoning_effort: str = Invocation.reasoning_effort
 
+    def __post_init__(self) -> None:
+        if self.concurrency not in {1, 2}:
+            raise ValueError("the supported Lane topology is exactly one or two")
+
 
 @dataclass(frozen=True)
 class Window:
@@ -357,6 +361,25 @@ class Scheduler:
             exploring=exploring,
         )
         return self._held[chosen.challenge_id]
+
+    def lane_order(self, snapshot, *, excluded, envelopes, leases, solved=()):
+        """Adapt freshly recomputed Order to the typed Lane-capacity port without storing a queue."""
+
+        from solver.lane_topology_contracts import WorkCandidate
+
+        ranked = self.order(snapshot, leased=leases.keys(), solved=solved)
+        return tuple(
+            WorkCandidate(
+                work_id=str(item.challenge_id),
+                order_rank=item.rank,
+                budget_seconds=item.budget_s,
+                resource_units=1,
+                lease=leases[item.challenge_id],
+                envelope=envelopes[item.challenge_id],
+            )
+            for item in ranked
+            if str(item.challenge_id) not in excluded and item.challenge_id in leases and item.challenge_id in envelopes
+        )
 
     def out_of_time(self) -> bool:
         """Whether the clock can no longer buy an Attempt over the tail — the **one** thing that
