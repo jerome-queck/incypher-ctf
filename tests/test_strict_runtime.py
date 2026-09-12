@@ -122,6 +122,26 @@ def test_attempt_resource_probe_mounts_only_its_disposable_state(tmp_path: Path)
     ]
 
 
+def test_tool_handle_probe_runs_the_catalogued_fixture_in_the_strict_image(tmp_path: Path) -> None:
+    command = strict_runtime.tool_handle_probe_command(
+        image_binding(),
+        tmp_path,
+        "fixture.identity",
+    )
+
+    assert ["--mount", f"type=bind,source={tmp_path},target=/state"] in [
+        command[index : index + 2] for index in range(len(command) - 1)
+    ]
+    assert command[-6:] == [
+        "--entrypoint",
+        "python3",
+        IMAGE_ID,
+        "-m",
+        "solver.tool_handle_probe",
+        "fixture.identity",
+    ]
+
+
 class Runner:
     def __init__(
         self,
