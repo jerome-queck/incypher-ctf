@@ -149,6 +149,33 @@ def attempt_resource_probe_command(
     return command
 
 
+def tool_handle_probe_command(
+    binding: RuntimeBinding,
+    state: Path,
+    component_id: str,
+) -> list[str]:
+    """Exercise one catalogued component through its production Tool handle."""
+
+    command = container_command(
+        binding.image_id,
+        env_file=None,
+        state=None,
+        preflight_only=True,
+        binding=binding,
+    )
+    command[-5:] = [
+        "--mount",
+        f"type=bind,source={state},target=/state",
+        "--entrypoint",
+        "python3",
+        binding.image_id,
+        "-m",
+        "solver.tool_handle_probe",
+        component_id,
+    ]
+    return command
+
+
 def _check_result(result: Any, command: list[str]) -> None:
     returncode = getattr(result, "returncode", None)
     if returncode not in (None, 0):
