@@ -14,8 +14,7 @@ import socket
 import time
 from pathlib import Path
 
-from solver.board_broker import local_peer_identity
-from solver.capability import PeerIdentity
+from solver.capability import PeerIdentity, local_peer_identity
 from solver.cpa_contracts import (
     CPAConfig,
     CPAHarnessRecorded,

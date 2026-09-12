@@ -12,8 +12,7 @@ from pathlib import Path
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
-from solver.board_broker import local_peer_identity
-from solver.capability import CapabilityAuthority, CapabilityBinding, CapabilityRefused
+from solver.capability import CapabilityAuthority, CapabilityBinding, CapabilityRefused, local_peer_identity
 from solver.event_store_storage import canonical_bytes
 from solver.event_store import EventStore
 from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED

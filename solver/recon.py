@@ -163,6 +163,8 @@ def recon(
     generation_id: str = "",
     executor: Any | None = None,
     tool_runtime: Any | None = None,
+    research_urls: Sequence[str] = (),
+    research: Any | None = None,
 ) -> Recon:
     """Work a Challenge's prose and its files, and return what was observed.
 
@@ -187,6 +189,10 @@ def recon(
         tool_runtime=tool_runtime,
     )
     cascade.read(description)
+    if research_urls and research is None:
+        raise ValueError("Research URLs require the broker compatibility adapter")
+    for url in research_urls:
+        cascade.research(url, research)
     for artefact in artefacts:
         cascade.work(Path(artefact))
     return Recon(tuple(cascade.probes), tuple(cascade.pictures[:PICTURES]))
@@ -245,6 +251,11 @@ class _Cascade:
         self._floor(subject, artefact)
         for command in _branch_for(mime):
             self._command(subject, (*command, str(artefact)))
+
+    def research(self, url: str, adapter: Any) -> None:
+        """Read one controller-selected public URL through the typed Research capability."""
+
+        self._probe(url, f"{MARK} public research — {url}", "research", lambda _budget: adapter.read(url))
 
     def _dispatch(self, subject: str, artefact: Path) -> str:
         """What `file` said, read from its own bytes rather than from the record's rendering of

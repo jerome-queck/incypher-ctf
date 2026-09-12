@@ -198,6 +198,28 @@ def target_broker_probe_command(binding: RuntimeBinding, state: Path) -> list[st
     return command
 
 
+def research_broker_probe_command(binding: RuntimeBinding, state: Path) -> list[str]:
+    """Exercise brokered public Research and raw-egress denial in the strict image."""
+
+    command = container_command(
+        binding.image_id,
+        env_file=None,
+        state=None,
+        preflight_only=True,
+        binding=binding,
+    )
+    command[-5:] = [
+        "--mount",
+        f"type=bind,source={state},target=/state",
+        "--entrypoint",
+        "python3",
+        binding.image_id,
+        "-m",
+        "solver.research_broker_probe",
+    ]
+    return command
+
+
 def _check_result(result: Any, command: list[str]) -> None:
     returncode = getattr(result, "returncode", None)
     if returncode not in (None, 0):
