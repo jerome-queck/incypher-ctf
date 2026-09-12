@@ -162,6 +162,7 @@ def recon(
     first_step: int = 1,
     generation_id: str = "",
     executor: Any | None = None,
+    tool_runtime: Any | None = None,
 ) -> Recon:
     """Work a Challenge's prose and its files, and return what was observed.
 
@@ -183,6 +184,7 @@ def recon(
         first_step - 1,
         generation_id=generation_id,
         executor=executor,
+        tool_runtime=tool_runtime,
     )
     cascade.read(description)
     for artefact in artefacts:
@@ -204,6 +206,7 @@ class _Cascade:
         *,
         generation_id: str = "",
         executor: Any | None = None,
+        tool_runtime: Any | None = None,
     ) -> None:
         self._recorder = recorder
         self._attempt_id = attempt_id
@@ -213,6 +216,7 @@ class _Cascade:
         self._step = spent
         self._generation_id = generation_id
         self._executor = executor
+        self._tool_runtime = tool_runtime
         self.probes: list[Probe] = []
         self.pictures: list[Path] = []
 
@@ -256,7 +260,30 @@ class _Cascade:
     def _executor_command(self, subject: str, artefact: Path) -> tuple[int | None, bytes]:
         argv = (*DISPATCH, artefact.name)
 
+        envelope = EnvelopeSpec(
+            cpu_seconds=self._limits.command_seconds,
+            cpu_quota_us=100_000,
+            memory_bytes=DISPATCH_MEMORY_BYTES,
+            pids=DISPATCH_PIDS,
+            filesystem_bytes=DISPATCH_FILESYSTEM_BYTES,
+            network=NetworkPolicy.DENY,
+            wall_seconds=self._limits.command_seconds,
+            cleanup_seconds=DISPATCH_CLEANUP_SECONDS,
+        )
+
         def execute(_budget: float) -> tuple[int | None, bytes]:
+            if self._tool_runtime is not None:
+                from solver.tool_control import ToolInvocation
+
+                result = self._tool_runtime.invoke(
+                    generation_id=self._generation_id,
+                    attempt_id=self._attempt_id,
+                    step_id=f"{self._attempt_id}:step-{self._step}",
+                    workspace=artefact.parent,
+                    envelope=envelope,
+                    invocation=ToolInvocation("recon.mime", argv),
+                )
+                return result.exit_code, result.output
             result = self._executor.start(
                 AttemptRequest(
                     generation_id=self._generation_id,
@@ -264,16 +291,7 @@ class _Cascade:
                     step_id=f"{self._attempt_id}:step-{self._step}",
                     argv=argv,
                     workspace=artefact.parent,
-                    envelope=EnvelopeSpec(
-                        cpu_seconds=self._limits.command_seconds,
-                        cpu_quota_us=100_000,
-                        memory_bytes=DISPATCH_MEMORY_BYTES,
-                        pids=DISPATCH_PIDS,
-                        filesystem_bytes=DISPATCH_FILESYSTEM_BYTES,
-                        network=NetworkPolicy.DENY,
-                        wall_seconds=self._limits.command_seconds,
-                        cleanup_seconds=DISPATCH_CLEANUP_SECONDS,
-                    ),
+                    envelope=envelope,
                 )
             ).result()
             if result.outcome is ResourceOutcome.EXITED:

@@ -16,6 +16,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import signal
 import sys
@@ -27,9 +28,10 @@ from pathlib import Path
 from solver import boot, profile
 from solver.attempt_executor import AttemptExecutor
 from solver.attempt_executor_contracts import RuntimeBinding
-from solver.attempt_executor_pool import POOL_ENV, attach_attempt_pool
+from solver.attempt_executor_pool import ATTEMPT_UID, POOL_ENV, attach_attempt_pool
 from solver.attempt_executor_runtime import AttemptRuntime
 from solver.board import Board
+from solver.capability import CapabilityAuthority, PeerIdentity
 from solver.board_broker import BoardCompatibilityClient, BoardProfileClient
 from solver.coherent_intake import BrokerIntakeSource, CoherentIntake, contract_from_profile_receipt
 from solver.board_broker_contracts import BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
@@ -48,6 +50,7 @@ from solver.replay import verify_and_materialize_run_state
 from solver.run import WORK_ROOT, Ending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 from solver.order_runtime import CanonicalScheduler
+from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
@@ -225,6 +228,7 @@ def _run_admitted(
     # rules the rest of it obeys (ADR-0014).
     judge = asking(held.chain[0], recorder=recorder, workdir=run_state / JUDGE_WORKDIR, web_search=rules.web_search)
     attempt_executor = None
+    tool_runtime = None
     if POOL_ENV in environ:
         binding = RuntimeBinding(
             image_id=environ.get(STRICT_IMAGE_ENV, ""),
@@ -240,6 +244,46 @@ def _run_admitted(
             generation_fence=recorder.generations,
             runtime=AttemptRuntime(attach_attempt_pool(environ)),
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+        tool_peer = PeerIdentity(
+            pid=os.getpid(),
+            uid=ATTEMPT_UID,
+            gid=ATTEMPT_UID,
+            started=boot_id,
+            cgroup="attempt-executor-pool",
+        )
+        tool_authority = CapabilityAuthority(
+            state=run_state,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            redactor=Redactor.for_declared_secrets(environ),
+            peer_identity=lambda _connection: tool_peer,
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+        file_digest = "sha256:" + hashlib.sha256(Path("/usr/bin/file").read_bytes()).hexdigest()
+        tool_controller = ToolController(
+            state=run_state,
+            run_id=held.run_id,
+            authority=tool_authority,
+            image_digest=binding.image_manifest_digest,
+            components=(
+                ToolComponent(
+                    capability_id="recon.mime",
+                    component_id="file",
+                    version=file_digest,
+                    profiles=("resident",),
+                    max_arguments=4,
+                    max_output_bytes=8 * 1024,
+                ),
+            ),
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+        tool_runtime = AttemptToolRuntime(
+            controller=tool_controller,
+            executor=attempt_executor,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            peer=tool_peer,
         )
     run = Run(
         profile=discovered,
@@ -264,6 +308,7 @@ def _run_admitted(
         invocation=Invocation(reasoning_effort=dials.reasoning_effort, web_search=rules.web_search),
         work_root=run_state / ATTEMPT_WORKDIRS,
         attempt_executor=attempt_executor,
+        tool_runtime=tool_runtime,
         board_broker_path=board_broker_path,
         board_broker_boot_id=boot_id,
     )
