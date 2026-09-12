@@ -12,6 +12,7 @@ import pytest
 from solver.attempt_executor_contracts import AttemptRequest, EnvelopeSpec, NetworkPolicy, ResourceOutcome
 from solver.attempt_executor_pool import AttemptPool, AttemptSlot, _fixed_worker_command
 from solver.attempt_executor_runtime import AttemptRuntime, _first_cause
+from solver.attempt_executor_worker import _network_breach
 
 
 class FakeCgroup:
@@ -179,6 +180,26 @@ def test_live_network_breach_terminates_and_drains_the_worker_result(tmp_path: P
         parent.recv(1_000_000)
     parent.close()
     worker.close()
+
+
+def test_only_the_fixed_target_unix_port_is_exempt_from_raw_egress_detection() -> None:
+    allowed = "\n".join(
+        (
+            "1 socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0) = 3",
+            '1 connect(3, {sa_family=AF_UNIX, sun_path="/work/.target.sock"}, 110) = 0',
+            '1 sendto(3, "request", 7, 0, NULL, 0) = 7',
+        )
+    )
+    assert not _network_breach(allowed, "/work/.target.sock")
+    assert _network_breach("1 socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3", "/work/.target.sock")
+    assert _network_breach(
+        '1 connect(3, {sa_family=AF_UNIX, sun_path="/run/control.sock"}, 110) = 0',
+        "/work/.target.sock",
+    )
+    assert _network_breach(
+        '1 sendto(3, "request", 7, 0, {sa_family=AF_INET, sin_port=htons(443)}, 16) = 7',
+        "/work/.target.sock",
+    )
 
 
 def test_result_terms_the_adopted_tree_then_kills_and_reaps_the_survivor(tmp_path: Path) -> None:

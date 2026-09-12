@@ -218,6 +218,48 @@ class CapabilityAuthority:
             issued.revoked = True
             self._record(CapabilityRecord.REVOKED, issued, issued.peer, reason=reason)
 
+    def reconcile_restart(self, scope: str) -> tuple[str, ...]:
+        """Durably revoke prior-Boot handles before replacement authority is issued."""
+
+        with self._lock:
+            latest: dict[str, dict[str, object]] = {}
+            for event in self._store.events():
+                if event.event_type != "capability-custody.recorded":
+                    continue
+                payload = event.payload
+                if payload.get("scope") == scope and payload.get("handle_digest"):
+                    latest[str(payload["handle_digest"])] = payload
+            stale = [
+                payload
+                for payload in latest.values()
+                if payload.get("boot_id") != self._boot_id
+                and payload.get("record") not in {CapabilityRecord.REVOKED.value, CapabilityRecord.DENIED.value}
+            ]
+            for payload in stale:
+                self._audit_serial += 1
+                self._store.append(
+                    CapabilityCustodyRecorded(
+                        event_id=self._event_id(),
+                        fact=HandleDecision(
+                            record=CapabilityRecord.REVOKED,
+                            handle_digest=str(payload["handle_digest"]),
+                            run_id=str(payload["run_id"]),
+                            boot_id=str(payload["boot_id"]),
+                            generation_id=str(payload["generation_id"]),
+                            lane_id=str(payload["lane_id"]),
+                            attempt_id=str(payload["attempt_id"]),
+                            step_id=str(payload["step_id"]),
+                            scope=scope,
+                            peer_uid=int(payload["peer_uid"]),
+                            peer_identity_digest=str(payload["peer_identity_digest"]),
+                            reason="restart-reconciled",
+                        ),
+                        ts=self._timestamp(),
+                    ),
+                    body=b"",
+                )
+            return tuple(str(payload["generation_id"]) for payload in stale)
+
     def _record_denied(self, handle_digest: str, peer: PeerIdentity, reason: str) -> None:
         self._audit_serial += 1
         self._store.append(

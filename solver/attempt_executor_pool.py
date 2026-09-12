@@ -21,6 +21,7 @@ POOL_NAME = "attempt-executor"
 MAX_SLOTS = 2
 ATTEMPT_UID = 20_000
 WORKER_SOURCE = Path("/opt/solver/solver/attempt_executor_worker.py")
+TARGET_CLIENT_SOURCE = Path("/opt/solver/solver/target_broker_worker_client.py")
 BROKER_SOURCE = Path("/opt/solver/solver/attempt_executor_broker.py")
 REQUIRED_CONTROLLERS = ("cpu", "memory", "pids")
 POOL_ENV = "INCYPHER_ATTEMPT_POOL"
@@ -151,6 +152,9 @@ def _fixed_worker_command(work: Path, control_fd: int = 3, seccomp_fd: int = 4, 
         "--ro-bind",
         str(WORKER_SOURCE),
         "/attempt-worker.py",
+        "--ro-bind",
+        str(TARGET_CLIENT_SOURCE),
+        "/target-client.py",
         "--dir",
         "/run",
         "--dir",

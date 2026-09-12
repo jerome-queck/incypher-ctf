@@ -50,7 +50,7 @@ def _hardening() -> None:
         signal.signal(caught, signal.SIG_IGN)
 
 
-def _validated(request: dict[str, object]) -> tuple[str, tuple[str, ...], int]:
+def _validated(request: dict[str, object]) -> tuple[str, tuple[str, ...], int, str, str]:
     nonce = request.get("nonce")
     argv = request.get("argv")
     filesystem_bytes = request.get("filesystem_bytes")
@@ -69,7 +69,13 @@ def _validated(request: dict[str, object]) -> tuple[str, tuple[str, ...], int]:
         raise ValueError("argv is invalid")
     if isinstance(filesystem_bytes, bool) or not isinstance(filesystem_bytes, int) or filesystem_bytes <= 0:
         raise ValueError("filesystem limit is invalid")
-    return nonce, tuple(argv), filesystem_bytes
+    target_socket = request.get("target_socket", "")
+    target_generation = request.get("target_generation", "")
+    if target_socket not in {"", "/work/.target.sock"} or not isinstance(target_generation, str):
+        raise ValueError("Target port binding is invalid")
+    if bool(target_socket) != bool(target_generation):
+        raise ValueError("Target port binding is incomplete")
+    return nonce, tuple(argv), filesystem_bytes, target_socket, target_generation
 
 
 def _gate(connection: socket.socket, nonce: str) -> None:
@@ -84,7 +90,7 @@ def _trace_bytes(trace: int) -> bytes:
 
 
 def _capture(
-    process: subprocess.Popen[bytes], trace: int, connection: socket.socket, nonce: str
+    process: subprocess.Popen[bytes], trace: int, connection: socket.socket, nonce: str, target_socket: str = ""
 ) -> tuple[bytes, bool, bytes, int]:
     assert process.stdout is not None
     descriptor = process.stdout.fileno()
@@ -113,7 +119,7 @@ def _capture(
             elif chunk:
                 truncated = True
         traced = _trace_bytes(trace)
-        if not network_reported and any(marker.encode() in traced for marker in NETWORK_MARKERS):
+        if not network_reported and _network_breach(traced.decode("utf-8", errors="replace"), target_socket):
             connection.send(
                 encode_frame(
                     {
@@ -154,7 +160,7 @@ def _terminate_descendants(proc_root: str = "/proc") -> tuple[int, ...]:
 
 
 def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, object]:
-    nonce, argv, filesystem_bytes = _validated(request)
+    nonce, argv, filesystem_bytes, target_socket, target_generation = _validated(request)
     trace = os.memfd_create("attempt-network-trace", flags=getattr(os, "MFD_CLOEXEC", 0))
 
     def before_exec() -> None:
@@ -164,10 +170,16 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
 
     command = [STRACE, "-f", "-qq", "-e", "trace=network", "-o", f"/proc/self/fd/{trace}", "--", *argv]
     try:
+        environment = {"HOME": "/home/attempt", "PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/work"}
+        if target_socket:
+            environment.update(
+                INCYPHER_TARGET_SOCKET=target_socket,
+                INCYPHER_TARGET_GENERATION=target_generation,
+            )
         process = subprocess.Popen(
             command,
             cwd="/work",
-            env={"HOME": "/home/attempt", "PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/work"},
+            env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -175,10 +187,10 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
             pass_fds=(connection.fileno(), trace),
             preexec_fn=before_exec,
         )
-        output, truncated, traced_bytes, total = _capture(process, trace, connection, nonce)
+        output, truncated, traced_bytes, total = _capture(process, trace, connection, nonce, target_socket)
         process.wait()
         traced = traced_bytes.decode("utf-8", errors="replace")
-        network_breach = any(marker in traced for marker in NETWORK_MARKERS)
+        network_breach = _network_breach(traced, target_socket)
         return {
             "type": "result",
             "exit_code": process.returncode,
@@ -190,6 +202,27 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
         }
     finally:
         os.close(trace)
+
+
+def _network_breach(trace: str, target_socket: str) -> bool:
+    network = [line for line in trace.splitlines() if any(marker in line for marker in NETWORK_MARKERS)]
+    if not network:
+        return False
+    if not target_socket:
+        return True
+    return any(not _allowed_target_socket_call(line, target_socket) for line in network)
+
+
+def _allowed_target_socket_call(line: str, target_socket: str) -> bool:
+    if "socket(AF_UNIX" in line or "socket(AF_LOCAL" in line:
+        return True
+    if "connect(" in line:
+        return target_socket in line
+    if "sendto(" in line:
+        return line.rstrip().endswith("NULL, 0) = 0") or ", NULL, 0) = " in line
+    if "sendmsg(" in line:
+        return "msg_name=NULL" in line
+    return False
 
 
 def serve(connection: socket.socket) -> int:

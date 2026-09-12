@@ -745,6 +745,7 @@ def event_contract(event_type: str):
     from solver.storage_governor_contracts import STORAGE_GOVERNOR_RECORDED, StorageGovernorRecorded
     from solver.triage_judgement_contracts import TRIAGE_JUDGEMENT_RECORDED, TriageJudgementRecorded
     from solver.tool_control_contracts import TOOL_CONTROL_RECORDED, ToolControlRecorded
+    from solver.target_broker_contracts import TARGET_EXCHANGE_RECORDED, TargetBrokerRecorded
 
     contracts = {
         OBSERVATION_RECORDED: ObservationRecorded,
@@ -765,6 +766,7 @@ def event_contract(event_type: str):
         STORAGE_GOVERNOR_RECORDED: StorageGovernorRecorded,
         TRIAGE_JUDGEMENT_RECORDED: TriageJudgementRecorded,
         TOOL_CONTROL_RECORDED: ToolControlRecorded,
+        TARGET_EXCHANGE_RECORDED: TargetBrokerRecorded,
     }
     return contracts.get(event_type)
 
