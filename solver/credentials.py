@@ -28,6 +28,7 @@ SECRETS = (
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CTFD_API_TOKEN",
     "OPENAI_API_KEY",
+    "CPA_TOKEN",
     "TEAM_KEY",
 )
 

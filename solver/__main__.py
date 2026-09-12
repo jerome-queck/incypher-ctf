@@ -22,6 +22,7 @@ import signal
 import sys
 from collections.abc import Mapping
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 
@@ -39,6 +40,9 @@ from solver.boot import Refusal
 from solver.codex import Invocation, asking
 from solver.codex_control_contracts import CODEX_CONTROL_SOCKET_ENV
 from solver.event_store import EventStoreDamage
+from solver.cpa_contracts import CPAConfig
+from solver.cpa_responses import CPAResponsesModel
+from solver.cpa_service import CPA_CREDENTIAL_FD_ENV, CPA_RESPONSES_URL_ENV, CPALeadPort, CPAService
 from solver.flag import Flags, Pace
 from solver.instance import Instances
 from solver.intake import Intake
@@ -51,6 +55,8 @@ from solver.replay import verify_and_materialize_run_state
 from solver.run import WORK_ROOT, Ending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
 from solver.order_runtime import CanonicalScheduler
+from solver.lead_controller import LeadController
+from solver.lead_v1_adapter import V1LeadAdapter
 from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
@@ -83,6 +89,12 @@ REFUSED_AT_BOOT = "refused-at-boot"
 
 # Tests may inject the retired direct transport explicitly. Production never assigns this seam.
 TEST_DIRECT_BOARD_FACTORY: Callable[[str, str], Board] | None = None
+CPA_ROUTE_ENV = "INCYPHER_INFERENCE_ROUTE"
+CPA_ROUTE = "private-cpa"
+
+
+def _deny_cpa_tool(_name, _arguments):
+    raise PermissionError("production CPA Tool profile admits proposal tools only")
 
 
 def main(environ: Mapping[str, str], *, run_state: Path = RUN_STATE, boards: Path = profile.BOARDS) -> int:
@@ -286,6 +298,8 @@ def _run_admitted(
             boot_id=boot_id,
             peer=tool_peer,
         )
+    stack = ExitStack()
+    lead_adapter = _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack)
     run = Run(
         profile=discovered,
         recorder=recorder,
@@ -313,13 +327,55 @@ def _run_admitted(
         board_broker_path=board_broker_path,
         board_broker_boot_id=boot_id,
         codex_control_path=Path(environ[CODEX_CONTROL_SOCKET_ENV]) if environ.get(CODEX_CONTROL_SOCKET_ENV) else None,
+        lead_adapter=lead_adapter,
     )
     _on_signal(run)
     try:
         return run.work()
     finally:
+        stack.close()
         if attempt_executor is not None:
             attempt_executor.close()
+
+
+def _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack):
+    credential_fd = environ.get(CPA_CREDENTIAL_FD_ENV, "")
+    if not credential_fd:
+        return None
+    descriptor = int(credential_fd)
+    try:
+        credential = os.read(descriptor, 64 * 1024).decode()
+    finally:
+        os.close(descriptor)
+    endpoint = environ.get(CPA_RESPONSES_URL_ENV, "")
+    if not endpoint:
+        raise Refusal(f"{boot.MARK} CPA custody is present but its Responses endpoint is absent")
+    cpa_service = stack.enter_context(
+        CPAService(
+            endpoint=Path("/tmp/incypher-cpa") / held.run_id / boot_id / "cpa.sock",
+            config=CPAConfig(max_turns=1, max_tools=0, allowed_tools=(), model=held.model),
+            credential=credential,
+            model=CPAResponsesModel(endpoint, held.model),
+            execute_tool=_deny_cpa_tool,
+            state=run_state,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            redactor=Redactor.for_declared_secrets(environ),
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+    )
+    credential = ""
+    if environ.get(CPA_ROUTE_ENV, "native-codex") != CPA_ROUTE:
+        return None
+    lead = LeadController(
+        run_state,
+        held.run_id,
+        Redactor.for_declared_secrets(environ),
+        lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        CPALeadPort(cpa_service),
+        fence=recorder.generations,
+    )
+    return V1LeadAdapter(lead, harness=CPA_ROUTE, route=CPA_ROUTE)
 
 
 def _on_signal(run: Run) -> None:

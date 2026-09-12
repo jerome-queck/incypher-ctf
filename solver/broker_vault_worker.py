@@ -58,6 +58,18 @@ def main(socket_path: Path) -> int:
             if command == "close":
                 break
             request = json.loads(command)
+            if owner is Broker.CPA and request.get("command") == "claim-secret":
+                name = request.get("name")
+                material = vault.pop(name, None) if isinstance(name, str) else None
+                if material is None:
+                    raise ValueError("CPA secret is absent or already transferred")
+                channel.sendall(canonical_bytes({"status": "ready", "bytes": len(material)}) + b"\n")
+                if receive_line(channel, failure="CPA transfer was not accepted") != "ready":
+                    raise ValueError("CPA transfer was not accepted")
+                channel.sendall(material)
+                for index in range(len(material)):
+                    material[index] = 0
+                continue
             if service is not None:
                 raise ValueError("unsupported broker command")
             state = Path(str(request["state"]))

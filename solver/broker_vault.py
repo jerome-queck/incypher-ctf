@@ -16,7 +16,7 @@ from pathlib import Path
 from solver.broker_contracts import Broker, BrokerReceipt, transfer_digest
 from solver.credentials import CHILD_ENVIRONMENT
 from solver.event_store_storage import canonical_bytes
-from solver.local_ipc import receive_line
+from solver.local_ipc import receive_exact, receive_line
 
 
 class BrokerVaultProcess:
@@ -123,6 +123,21 @@ class BrokerVaultProcess:
             self._process.wait(timeout=5)
         self._channel.close()
         self._cleanup_runtime()
+
+    def claim_secret(self, name: str) -> bytearray:
+        """Move one CPA secret to the Supervisor exactly once."""
+
+        if self.owner is not Broker.CPA or not name:
+            raise ValueError("only the CPA owner exposes its one-way transfer")
+        self._channel.sendall(canonical_bytes({"command": "claim-secret", "name": name}) + b"\n")
+        response = json.loads(receive_line(self._channel, failure="CPA owner did not acknowledge its transfer"))
+        if not isinstance(response, dict) or set(response) != {"bytes", "status"} or response["status"] != "ready":
+            raise RuntimeError("CPA owner returned an invalid transfer acknowledgement")
+        length = response["bytes"]
+        if not isinstance(length, int) or isinstance(length, bool) or length <= 0 or length > 64 * 1024:
+            raise RuntimeError("CPA owner returned an invalid transfer length")
+        self._channel.sendall(b"ready\n")
+        return receive_exact(self._channel, length, failure="CPA owner transfer was incomplete")
 
     def poll(self) -> int | None:
         return self._process.poll()
