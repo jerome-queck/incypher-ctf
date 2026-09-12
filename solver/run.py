@@ -35,12 +35,21 @@ from solver.capability import CapabilityBinding
 from solver.carry import Boundary, label
 from solver.codex import ADAPTER, CLAIM, COMMAND, STOPPED, Credential, Invocation
 from solver.codex_control import CodexControlClient
-from solver.codex_control_native import V1CodexControlAdapter
+from solver.codex_control_native import NativeControlFailure, V1CodexControlAdapter
+from solver.event_store_storage import digest_bytes
 from solver.flag import Candidate, Flags, Outcome, Slots
 from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
 from solver.lead_contracts import CandidateProposal
 from solver.lead_v1_adapter import V1LeadTurn
+from solver.route_and_quota import (
+    InferenceRoute,
+    QuotaObservation,
+    RouteAndQuotaController,
+    RouteAndQuotaPolicy,
+    RouteTransportFailure,
+    write_receipt as write_route_receipt,
+)
 from solver.profile import Profile
 from solver.prompt import APPROACH
 from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder, generation_disposition
@@ -222,6 +231,7 @@ class Run:
         board_broker_boot_id: str = "",
         lead_adapter=None,
         codex_control_path: Path | None = None,
+        inference_route: str = "native-codex",
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -246,6 +256,9 @@ class Run:
         self._board_broker_boot_id = board_broker_boot_id
         self._lead_adapter = lead_adapter
         self._codex_control_path = Path(codex_control_path) if codex_control_path else None
+        self._route_controller = RouteAndQuotaController(
+            RouteAndQuotaPolicy(primary=InferenceRoute(inference_route)), authority=recorder.write_authority
+        )
         self._boundaries: dict[int | str, Boundary] = {}
         self._pending: dict[int | str, Pending] = {}
         # Every candidate already put to the submission gate, per Challenge. Turns of one Attempt
@@ -300,6 +313,14 @@ class Run:
         except Exception as broken:
             self._stopping = CRASHED
             self._crashed = f"{type(broken).__name__}: {broken}"
+        observations = self._route_controller.observations()
+        if observations and self._stopping != CRASHED:
+            write_route_receipt(
+                self._recorder.run_dir.parents[1],
+                self._recorder.run_id,
+                self._route_controller.policy,
+                observations,
+            )
         return self._tail()
 
     def _loop(self) -> None:
@@ -483,66 +504,127 @@ class Run:
             budget_s=held.pick.budget_s,
             lease=held.lease,
         )
-        if self._codex_control_path is not None:
+        if self._codex_control_path is not None or self._lead_adapter is not None:
             turn_index = held.turns + 1
             request_id = f"{held.attempt_id}:turn:{turn_index}"
-            binding = CapabilityBinding(
-                self._recorder.run_id,
-                self._board_broker_boot_id,
-                held.generation_id,
-                "lane-1",
-                held.attempt_id,
-                request_id,
-            )
-            client = CodexControlClient.open(self._codex_control_path, binding)
-            try:
-                measured = V1CodexControlAdapter(
-                    client,
-                    self._chain[0].model,
-                    self._invocation.reasoning_effort,
-                ).turn(
-                    text,
-                    request_id=request_id,
-                    turn_id=request_id,
-                    workdir=held.workdir,
-                    attempt_id=held.attempt_id,
-                    deadline=held.deadline.at,
-                    first_step=self._steps.next_index(),
+            transports = {}
+            quota_observations = ()
+            if self._codex_control_path is not None:
+                quota_binding = CapabilityBinding(
+                    self._recorder.run_id,
+                    self._board_broker_boot_id,
+                    held.generation_id,
+                    "lane-1",
+                    held.attempt_id,
+                    request_id + ":quota",
                 )
-                if measured.text:
-                    said.append(measured.text)
-                for item in measured.stream:
-                    step_index = int(item["step_index"])
-                    self._steps.reached(step_index)
-                    if item["kind"] == COMMAND and item["tool"] != ADAPTER:
-                        observed += 1
-                        watch.observed(
-                            str(item["command"]),
-                            exit_code=item["exit_code"],
-                            digest=str(item["digest"]),
+                quota_client = CodexControlClient.open(self._codex_control_path, quota_binding)
+                try:
+                    quota_observations = tuple(
+                        QuotaObservation(
+                            index,
+                            digest_bytes(f"{item.limit_id}:{item.observed_at}:{item.source}".encode()),
+                            InferenceRoute.NATIVE,
+                            item.limit_id,
+                            item.used_percent,
+                            item.source,
                         )
-            finally:
-                client.close()
-        elif self._lead_adapter is not None:
-            outcome = self._lead_adapter(
-                V1LeadTurn(
-                    prompt=text,
-                    boundary=held.boundary,
-                    chain=self._chain,
-                    invocation=self._invocation,
-                    run_id=self._recorder.run_id,
-                    boot_id=self._board_broker_boot_id,
-                    generation_id=held.generation_id,
-                    lane_id="lane-1",
-                    attempt_id=held.attempt_id,
-                    work_id=str(challenge.challenge_id),
-                    budget_seconds=int(held.pick.budget_s),
-                    started_at=held.began,
-                    deadline=held.deadline.at,
-                )
+                        for index, item in enumerate(quota_client.limits(), 1)
+                    )
+                finally:
+                    quota_client.close()
+
+                def native_turn():
+                    binding = CapabilityBinding(
+                        self._recorder.run_id,
+                        self._board_broker_boot_id,
+                        held.generation_id,
+                        "lane-1",
+                        held.attempt_id,
+                        request_id,
+                    )
+                    client = CodexControlClient.open(self._codex_control_path, binding)
+                    try:
+                        adapter = V1CodexControlAdapter(client, self._chain[0].model, self._invocation.reasoning_effort)
+                        measured = adapter.turn(
+                            text,
+                            request_id=request_id,
+                            turn_id=request_id,
+                            workdir=held.workdir,
+                            attempt_id=held.attempt_id,
+                            deadline=held.deadline.at,
+                            first_step=self._steps.next_index(),
+                        )
+                    except NativeControlFailure as failure:
+                        evidence = digest_bytes(failure.outcome.encode())
+                        raise RouteTransportFailure.classified(
+                            failure.outcome, InferenceRoute.NATIVE, evidence
+                        ) from failure
+                    finally:
+                        client.close()
+                    quota = [
+                        {
+                            "observation_id": digest_bytes(
+                                f"{item.limit_id}:{item.observed_at}:{item.source}".encode()
+                            ),
+                            "route": InferenceRoute.NATIVE.value,
+                            "limit_id": item.limit_id,
+                            "used_percent": item.used_percent,
+                            "source": item.source,
+                        }
+                        for item in adapter.last_limits
+                    ]
+                    return {
+                        "said": [measured.text] if measured.text else [],
+                        "stream": list(measured.stream),
+                        "quota": quota,
+                    }
+
+                transports[InferenceRoute.NATIVE] = native_turn
+            if self._lead_adapter is not None:
+
+                def cpa_turn():
+                    outcome = self._lead_adapter(
+                        V1LeadTurn(
+                            prompt=text,
+                            boundary=held.boundary,
+                            chain=self._chain,
+                            invocation=self._invocation,
+                            run_id=self._recorder.run_id,
+                            boot_id=self._board_broker_boot_id,
+                            generation_id=held.generation_id,
+                            lane_id="lane-1",
+                            attempt_id=held.attempt_id,
+                            work_id=str(challenge.challenge_id),
+                            budget_seconds=int(held.pick.budget_s),
+                            started_at=held.began,
+                            deadline=held.deadline.at,
+                        )
+                    )
+                    status = self._lead_adapter.transport_status
+                    if status and status != "proposed":
+                        evidence = digest_bytes(status.encode())
+                        raise RouteTransportFailure.classified(status, InferenceRoute.CPA, evidence)
+                    values = [outcome.proposal.value] if isinstance(outcome.proposal, CandidateProposal) else []
+                    return {"said": values, "stream": [], "quota": []}
+
+                transports[InferenceRoute(self._lead_adapter.route)] = cpa_turn
+            routed = self._route_controller.execute(
+                request_id=request_id,
+                generation_id=held.generation_id,
+                payload_digest=digest_bytes(text.encode()),
+                observations=quota_observations,
+                transports=transports,
+                encode=lambda value: value,
+                decode=dict,
             )
-            if isinstance(outcome.proposal, CandidateProposal):
-                said.append(outcome.proposal.value)
+            said.extend(str(value) for value in routed["said"])
+            for item in routed["stream"]:
+                step_index = int(item["step_index"])
+                self._steps.reached(step_index)
+                if item["kind"] == COMMAND and item["tool"] != ADAPTER:
+                    observed += 1
+                    watch.observed(str(item["command"]), exit_code=item["exit_code"], digest=str(item["digest"]))
         else:
             for taken in codex.run_attempt(
                 text,

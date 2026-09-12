@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import datetime as dt
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
@@ -40,6 +41,10 @@ class NativeTransport(Protocol):
 
 class ObservedExhaustion(RuntimeError):
     """Native control positively observed an applicable exhausted limit."""
+
+    def __init__(self, observation: LimitObservation | None = None) -> None:
+        super().__init__("observed subscription exhaustion")
+        self.observation = observation
 
 
 class CodexControl:
@@ -94,8 +99,10 @@ class CodexControl:
                 return CodexControlResult("auth-failure")
             except InterruptedError:
                 return CodexControlResult("cancelled")
-            except ObservedExhaustion:
-                return CodexControlResult("observed-exhaustion")
+            except ObservedExhaustion as exhausted:
+                if exhausted.observation is not None:
+                    self._limits[exhausted.observation.limit_id] = exhausted.observation
+                return CodexControlResult("observed-exhaustion", limits=self.limits())
             except (ValueError, TypeError):
                 return CodexControlResult("malformed-stream")
             turn = response.turn
@@ -125,6 +132,26 @@ class CodexControl:
 
     def limit(self, limit_id: str) -> LimitObservation | None:
         return self._limits.get(limit_id)
+
+    def limits(self) -> tuple[LimitObservation, ...]:
+        now = dt.datetime.now(dt.timezone.utc)
+        fresh = []
+        for observation in self._limits.values():
+            reset = observation.resets_at
+            try:
+                elapsed = bool(reset) and dt.datetime.fromisoformat(str(reset)).astimezone(dt.timezone.utc) <= now
+            except ValueError:
+                elapsed = False
+            fresh.append(
+                LimitObservation(
+                    observation.limit_id,
+                    0.0 if elapsed else observation.used_percent,
+                    observation.resets_at,
+                    observation.source,
+                    now.isoformat() if elapsed else observation.observed_at,
+                )
+            )
+        return tuple(fresh)
 
     def record_attempt_probe(self, probe: ExecutorProbeResult) -> None:
         checks = dict(probe.checks)
@@ -194,6 +221,8 @@ class CodexControlServer:
             operation = document.get("operation", "request")
             if operation == "cancel":
                 result = self._control.cancel(str(document.get("request_id", "")), origin="run-controller")
+            elif operation == "limits":
+                result = CodexControlResult("limits", limits=self._control.limits())
             else:
                 request = CodexRequest(**document["request"])
                 result = self._control.request(request, origin="run-controller")
@@ -240,6 +269,12 @@ class CodexControlClient:
 
     def close(self) -> None:
         self._channel.close()
+
+    def limits(self) -> tuple[LimitObservation, ...]:
+        document = {"operation": "limits", "handle": self._handle}
+        self._channel.sendall(json.dumps(document, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+        response = json.loads(receive_line(self._channel, failure="malformed Codex Control response"))
+        return tuple(LimitObservation(**item) for item in response.get("limits", ()))
 
     def cancel(self, request_id: str) -> CodexControlResult:
         document = {"operation": "cancel", "handle": self._handle, "request_id": request_id}
