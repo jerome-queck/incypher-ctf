@@ -650,7 +650,12 @@ class Flags:
         mismatched pair somebody eventually expresses.
         """
         if lease is not None and self._instances is not None:
-            self._instances.terminate(challenge_id, attempt_id=attempt_id, after_flag=True)
+            self._instances.terminate(
+                challenge_id,
+                attempt_id=attempt_id,
+                after_flag=True,
+                generation_id=lease.generation_id,
+            )
 
     def _record(self, tool: str, command: str, output: bytes, attempt_id: str, *, ok: bool) -> str:
         """One Step per thing this module did, as a `step-begin` / `step-end` pair like any other."""

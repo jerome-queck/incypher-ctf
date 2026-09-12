@@ -39,6 +39,9 @@ from solver.board_broker import BoardBrokerClient
 from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger
 from solver.board_broker_contracts import BoardOutcome
 from solver.record import NO_MODEL, Recorder
+from solver.instance_lease import LeaseCoordinator
+from solver.instance_lease_contracts import LeaseCloseCause, LeaseIdentity, LeasePhase
+from solver.work_generation import GenerationIdentity
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
 # gives: a reader of a stream can tell what the Solver said from what a tool said, and never takes
@@ -173,6 +176,10 @@ class Lease:
     until: dt.datetime | None
     terms: Terms
     reserves: Reserves = field(default_factory=Reserves)
+    identity: LeaseIdentity | None = None
+    epoch: int = 0
+    attempt_id: str = ""
+    generation_id: str = ""
 
     def attempt_deadline(self, budget_deadline: dt.datetime) -> dt.datetime:
         """The earlier of the Attempt's own budget and what the Instance leaves us, minus the
@@ -235,6 +242,11 @@ def affordable(terms: Terms, mana: Mana) -> bool:
     return terms.mana_cost <= mana.total - mana.used
 
 
+def _work_id(challenge_id: int | str) -> str:
+    kind = "integer" if isinstance(challenge_id, int) else "string"
+    return f"{kind}:{challenge_id}"
+
+
 def submission_shape(verdict: Mapping[str, Any]) -> str:
     """Name what a rejected submission said about the Instance, or nothing where it said nothing.
 
@@ -268,6 +280,7 @@ class Instances:
         step_numbers: Callable[[], int] | None = None,
         ledger_identity: AuthenticatedIdentity | None = None,
         ledger_broker: object | None = None,
+        coordinator: LeaseCoordinator | None = None,
     ) -> None:
         self._board = board
         self._recorder = recorder
@@ -279,6 +292,7 @@ class Instances:
         self._step_numbers = step_numbers or itertools.count(1).__next__
         self._ledger_identity = ledger_identity
         self._ledger_broker = ledger_broker
+        self._coordinator = coordinator
 
     def deploy(
         self,
@@ -286,6 +300,7 @@ class Instances:
         *,
         attempt_id: str,
         recovery_reader: BoardBrokerClient | None = None,
+        generation_id: str = "",
     ) -> Answer:
         """Take a Lease on this Challenge, at the start of the Attempt that will work it.
 
@@ -299,6 +314,28 @@ class Instances:
                 f"no deploy — {terms.challenge_type!r} is not {INSTANCED_TYPE}, so it is attempted as static",
                 attempt_id,
             )
+        if self._coordinator is not None:
+            generation = GenerationIdentity(generation_id, _work_id(terms.challenge_id), attempt_id)
+            grant = self._coordinator.acquire(terms.challenge_id, generation=generation)
+            if grant.phase is not LeasePhase.ATTEMPT_BOUND:
+                return self._answer(
+                    "deploy",
+                    f"{DEPLOY_REFUSED_TRANSIENT} — Lease create remains {grant.phase.value}",
+                    attempt_id,
+                    shape=DEPLOY_REFUSED_TRANSIENT,
+                )
+            lease = Lease(
+                terms.challenge_id,
+                grant.target,
+                grant.until,
+                terms,
+                self._reserves,
+                grant.identity,
+                grant.epoch,
+                attempt_id,
+                grant.generation_id,
+            )
+            return self._answer("deploy", f"deployed at {grant.target}", attempt_id, lease=lease)
         reply = self._board.deploy_instance(terms.challenge_id)
         if reply.outcome == ANSWERED and reply.connection_info:
             return self._leased("deploy", terms, reply, attempt_id)
@@ -315,7 +352,7 @@ class Instances:
             shape=DEPLOY_REFUSED_TRANSIENT,
         )
 
-    def renew(self, lease: Lease, *, attempt_id: str) -> Answer:
+    def renew(self, lease: Lease, *, attempt_id: str, generation_id: str = "") -> Answer:
         """Push the deadline out, and compute the new one rather than reading it back.
 
         The PATCH response carries no `until`; `update_instance` sets it to `now + timeout`, so the
@@ -325,6 +362,23 @@ class Instances:
         """
         if not lease.terms.renewable:
             return self._answer("renew", "not renewed — the Challenge defines no timeout", attempt_id, lease=lease)
+        if self._coordinator is not None and lease.identity is not None:
+            asked_at = self._now()
+            until = asked_at + dt.timedelta(seconds=int(lease.terms.timeout or 0))
+            generation = GenerationIdentity(generation_id, _work_id(lease.challenge_id), attempt_id)
+            grant = self._coordinator.renew(lease.identity, lease.epoch, generation=generation, until=until)
+            renewed = Lease(
+                lease.challenge_id,
+                grant.target,
+                grant.until,
+                lease.terms,
+                lease.reserves,
+                grant.identity,
+                grant.epoch,
+                attempt_id,
+                grant.generation_id,
+            )
+            return self._answer("renew", f"renewed under Lease epoch {grant.epoch}", attempt_id, lease=renewed)
         # Read before the call rather than after it: the `now` chall-manager used is the moment it
         # processed the PATCH, so a clock sampled on the reply puts the deadline one round-trip
         # later than the Board's own — which is the direction that submits a Flag after expiry.
@@ -346,10 +400,25 @@ class Instances:
             lease=lease,
         )
 
-    def terminate(self, challenge_id: int | str, *, attempt_id: str, after_flag: bool = False) -> Answer:
+    def terminate(
+        self, challenge_id: int | str, *, attempt_id: str, after_flag: bool = False, generation_id: str = ""
+    ) -> Answer:
         """Release the hold. **A 404 is success** — `destroy_on_flag` may already have done it, and
         reading that field to decide whether to bother is a branch that gets it wrong when the
         field is absent."""
+        if self._coordinator is not None and (grant := self._coordinator.active(challenge_id)) is not None:
+            generation = GenerationIdentity(
+                generation_id or grant.generation_id,
+                _work_id(challenge_id),
+                attempt_id if generation_id else grant.attempt_id,
+            )
+            closed = self._coordinator.release(grant.identity, grant.epoch, generation=generation)
+            return self._answer(
+                "terminate",
+                f"released challenge {challenge_id}",
+                attempt_id,
+                released=closed.close_cause is LeaseCloseCause.TERMINATED,
+            )
         reply = self._board.terminate_instance(challenge_id)
         if reply.outcome == ABSENT:
             shape = INSTANCE_DESTROYED_ON_FLAG if after_flag else ""
