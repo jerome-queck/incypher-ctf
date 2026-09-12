@@ -218,7 +218,18 @@ class Standing:
 # `Board`'s one edge to the network: it is handed a request with every transport rule already
 # applied, and answers with the status, the body and any `Location`. Injectable because that is
 # the honest place to stand a test — above it are this module's rules, below it is a socket.
-Transport = Callable[[urllib.request.Request], tuple[int, bytes, str]]
+TransportResult = tuple[int, bytes, str] | tuple[int, bytes, str, str]
+Transport = Callable[[urllib.request.Request], TransportResult]
+
+
+@dataclass(frozen=True)
+class BoardDocument:
+    """One raw Board answer where profile qualification needs response metadata."""
+
+    status: int
+    body: bytes
+    location: str
+    content_type: str
 
 
 class BoardFailure(Exception):
@@ -266,6 +277,14 @@ class Board:
     def request(
         self, method: str, path: str, body: dict[str, Any] | None = None, *, json_content_type: bool = True
     ) -> tuple[int, bytes, str]:
+        answer = self.inspect(method, path, body, json_content_type=json_content_type)
+        return answer.status, answer.body, answer.location
+
+    def inspect(
+        self, method: str, path: str, body: dict[str, Any] | None = None, *, json_content_type: bool = True
+    ) -> BoardDocument:
+        """Return the metadata needed to distinguish a contract from a same-status catch-all."""
+
         payload = json.dumps(body).encode() if body is not None else None
         url = path if path.startswith("http") else f"{self.url}{path}"
         request = urllib.request.Request(url, data=payload, method=method)
@@ -278,7 +297,13 @@ class Board:
         request.add_header("Accept", "application/json")
         if json_content_type:
             request.add_header("Content-Type", "application/json")
-        return self._transport(request)
+        result = self._transport(request)
+        if len(result) == 3:
+            status, raw, location = result
+            content_type = ""
+        else:
+            status, raw, location, content_type = result
+        return BoardDocument(status, raw, location, content_type)
 
     def json(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         status, raw, location = self.request(method, path, body)
@@ -394,10 +419,10 @@ class Board:
         status, raw, location = self.request("GET", INSTANCE_LEDGER)
         if status != 200:
             raise BoardFailure(_answered("GET", INSTANCE_LEDGER, status, location))
-        rows = _LedgerTable.rows_of(raw.decode("utf-8", "replace"))
+        rows = instance_ledger_rows(raw)
         if rows is None:
             raise BoardFailure("the instance ledger carried no table — a login page reads as an empty ledger")
-        return tuple(Held(name) for name in rows)
+        return rows
 
     def _instance_call(self, method: str, query: str, body: dict[str, Any] | None = None) -> Reply:
         outcome, data, detail = self._plugin_call(method, f"{CHALL_MANAGER}/instance{query}", body)
@@ -527,6 +552,13 @@ class _LedgerTable(HTMLParser):
             self._row = None
 
 
+def instance_ledger_rows(raw: bytes) -> tuple[Held, ...] | None:
+    """Parse the authenticated ledger's structural contract without trusting its rows yet."""
+
+    rows = _LedgerTable.rows_of(raw.decode("utf-8", "replace"))
+    return None if rows is None else tuple(Held(name) for name in rows)
+
+
 def _standing(rank: Any, row: dict[str, Any]) -> Standing | None:
     """One scoreboard row, out of a payload whose shape CTFd changes by endpoint.
 
@@ -602,12 +634,17 @@ def _over_the_network(fetch_bytes: int = MAX_FETCH_BYTES) -> Transport:
     """
     opener = urllib.request.build_opener(_NoRedirect)
 
-    def fetch(request: urllib.request.Request) -> tuple[int, bytes, str]:
+    def fetch(request: urllib.request.Request) -> TransportResult:
         try:
             with opener.open(request, timeout=30) as response:
-                return response.status, response.read(fetch_bytes + 1), response.headers.get("Location", "")
+                return (
+                    response.status,
+                    response.read(fetch_bytes + 1),
+                    response.headers.get("Location", ""),
+                    response.headers.get("Content-Type", ""),
+                )
         except urllib.error.HTTPError as error:
-            return error.code, error.read(), error.headers.get("Location", "")
+            return error.code, error.read(), error.headers.get("Location", ""), error.headers.get("Content-Type", "")
 
     return fetch
 

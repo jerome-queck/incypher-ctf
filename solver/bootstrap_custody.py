@@ -121,6 +121,7 @@ class BootstrapResult:
     brokers: dict[Broker, BrokerVaultProcess]
     receipts: dict[Broker, BrokerReceipt]
     endpoints: dict[Broker, Path] = field(default_factory=dict)
+    profile_handles: dict[Broker, str] = field(default_factory=dict)
 
     @property
     def holdings(self) -> dict[Broker, tuple[str, ...]]:

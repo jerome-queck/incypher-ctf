@@ -286,7 +286,7 @@ def test_a_board_that_fails_the_read_contract_control_refuses_the_run(capsys, mo
     code = main(env(), run_state=tmp_path / "state", boards=boards)
 
     assert code == REFUSED
-    assert "not composed by CTFd" in capsys.readouterr().err
+    assert "not a CTFd field refusal" in capsys.readouterr().err
 
 
 def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_read(
@@ -306,7 +306,10 @@ def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_re
 
     def falls_over_after_the_profile(request):
         answered = wire.transport(request)
-        if request.full_url.endswith("/api/v1/challenges"):
+        if (
+            request.full_url.endswith("/api/v1/challenges")
+            and sum(path == "/api/v1/challenges" for path in wire.asked) == 4
+        ):
             wire.listed, wire.control = [], CONTROL_AGREEABLE
         return answered
 

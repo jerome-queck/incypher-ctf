@@ -11,7 +11,7 @@ import datetime as dt
 import pytest
 from solver import boot
 from solver.boot import ABSENT, EMPTY, SET, Refusal, holdings_of, lasting, setup
-from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV
+from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
 from solver.credentials import NOT_SECRETS, SECRETS
 
 BOARD = "https://board.example"
@@ -49,6 +49,7 @@ def test_controller_accepts_only_the_board_owner_endpoint_and_holdings_metadata(
             "RUN_ID": "gate-1",
             BOARD_BROKER_SOCKET_ENV: "/tmp/board.sock",
             BOARD_BROKER_HOLDINGS_ENV: "CTFD_API_TOKEN,TEAM_KEY",
+            BOARD_PROFILE_HANDLE_ENV: "profile-authority",
         },
         homes=homes,
     )
@@ -56,6 +57,19 @@ def test_controller_accepts_only_the_board_owner_endpoint_and_holdings_metadata(
     assert read.token == ""
     assert read.holdings["CTFD_API_TOKEN"] == SET
     assert read.holdings["TEAM_KEY"] == SET
+
+
+def test_brokered_controller_without_profile_authority_refuses(homes):
+    with pytest.raises(Refusal, match="Board-profile authority"):
+        setup(
+            {
+                "CTFD_URL": BOARD,
+                "RUN_ID": "gate-1",
+                BOARD_BROKER_SOCKET_ENV: "/tmp/board.sock",
+                BOARD_BROKER_HOLDINGS_ENV: "CTFD_API_TOKEN",
+            },
+            homes=homes,
+        )
 
 
 @pytest.mark.parametrize("name", ["CTFD_URL", "CTFD_API_TOKEN"])

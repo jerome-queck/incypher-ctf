@@ -15,6 +15,7 @@ from solver.event_store_contracts import InvalidEventError
 BOARD_BROKER_RECORDED = "board-broker.recorded"
 BOARD_BROKER_SOCKET_ENV = "INCYPHER_BOARD_BROKER_SOCKET"
 BOARD_BROKER_HOLDINGS_ENV = "INCYPHER_BOARD_BROKER_HOLDINGS"
+BOARD_PROFILE_HANDLE_ENV = "INCYPHER_BOARD_PROFILE_HANDLE"
 SCHEMA_VERSION = 1
 
 
@@ -373,6 +374,7 @@ __all__ = [
     "BOARD_BROKER_RECORDED",
     "BOARD_BROKER_HOLDINGS_ENV",
     "BOARD_BROKER_SOCKET_ENV",
+    "BOARD_PROFILE_HANDLE_ENV",
     "BoardBrokerRecorded",
     "BoardBrokerResult",
     "BoardProvenance",

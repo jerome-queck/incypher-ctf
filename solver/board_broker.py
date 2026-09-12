@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import hmac
 import json
 import socket
 import struct
@@ -11,6 +12,10 @@ import threading
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from solver.board_profile import ProfileCycle, ProfileDecision, ProfileDocument
 
 from solver.board import (
     Board,
@@ -42,6 +47,8 @@ from solver.board_broker_contracts import (
     decode_result,
     encode_result,
 )
+from solver.board_profile_phase import ProfilePhaseWriter
+from solver.board_profile_contracts import BoardProfileObservationRecorded
 from solver.capability import (
     CapabilityAuthority,
     CapabilityBinding,
@@ -120,9 +127,12 @@ class BoardBrokerRuntime:
         transport: Transport | None = None,
         timestamp: Callable[[], str],
         sealed_response_bytes: int = MAX_SEALED_RESPONSE_BYTES,
+        profile_required: bool = False,
+        profile_handle: str = "",
     ) -> None:
         if not token or not boot_id or sealed_response_bytes <= 0:
             raise ValueError("Board broker needs a token, Boot identity and response bound")
+        self._state = Path(state)
         self._run_id = run_id
         self._boot_id = boot_id
         self._authority = authority
@@ -135,22 +145,160 @@ class BoardBrokerRuntime:
         self._sealed_response_bytes = sealed_response_bytes
         self._wire_local = threading.local()
         self._serial_lock = threading.Lock()
+        self._profile_lock = threading.Lock()
+        self._profile_phase = ProfilePhaseWriter(self._state, run_id, self._redactor, timestamp)
+        self._profile_required = profile_required
+        self._profile_handle_digest = hashlib.sha256(profile_handle.encode()).digest() if profile_handle else b""
+        self._profile_peer_digest = ""
+        self._profile_session_opened = False
 
         bounded_transport = transport or network_transport()
 
         def observed(request):
             wire = self._wire()
             try:
-                status, raw, location = bounded_transport(request)
+                result = bounded_transport(request)
             except OSError as error:
                 wire.append((0, b"", "", type(error).__name__))
                 raise
+            if len(result) == 3:
+                status, raw, location = result
+                content_type = ""
+            else:
+                status, raw, location, content_type = result
             path = urllib.parse.urlparse(request.full_url).path
             wire.append((status, raw, path, ""))
-            return status, raw, location
+            return status, raw, location, content_type
 
         self._board = Board(url, token, observed)
         self._public_board = Board(url, "", observed)
+
+    def qualify_profile(self, connection: object, profile_handle: str, rules, rules_source: str) -> ProfileDecision:
+        """Run one Boot-owned, peer-authenticated profile probe behind credential custody."""
+
+        from solver.board_profile import ProfileProbe, decision_from_document, qualify, rules_document
+        from solver.board_profile_receipt import verify_receipt as verify_profile_receipt
+        from solver.board_profile_receipt import write_receipt as write_profile_receipt
+
+        peer = self._authority.peer_identity(connection)
+        rules_digest = hashlib.sha256(canonical_bytes(rules_document(rules))).hexdigest()
+        with self._profile_lock:
+            self._authorize_profile(profile_handle, peer)
+            phase = self._profile_phase.state()
+            if phase.decision:
+                if phase.rules_digest != rules_digest:
+                    raise ValueError("canonical Board profile belongs to different tracked Rules")
+                receipt_path = self._state / "runs" / self._run_id / "canonical" / "board-profile.receipt.json"
+                if hashlib.sha256(receipt_path.read_bytes()).hexdigest() != phase.receipt_digest:
+                    raise ValueError("canonical Board-profile receipt digest disagrees with its decision")
+                receipt_path = verify_profile_receipt(receipt_path)
+                receipt = json.loads(receipt_path.read_text())
+                if receipt["rules"]["source"] != rules_source:
+                    raise ValueError("canonical Board profile belongs to a different Rules source")
+                return decision_from_document(receipt["decision"], rules)
+            probe_id = self._profile_phase.next_probe_id()
+            self._profile_phase.start(probe_id, rules_digest, peer.digest)
+            probe = ProfileProbe(
+                probe_id,
+                rules_source,
+                tuple(self._profile_cycle(probe_id, index) for index in (1, 2)),
+            )
+            decision = qualify(probe, rules)
+            receipt_path = write_profile_receipt(self._state, self._run_id, probe, rules, decision)
+            self._profile_phase.decide(
+                probe_id,
+                rules_digest,
+                decision.authoritative,
+                hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+            )
+            return decision
+
+    def open_profiled_operations(self, connection: object, profile_handle: str) -> None:
+        peer = self._authority.peer_identity(connection)
+        with self._profile_lock:
+            self._authorize_profile(profile_handle, peer)
+            self._profile_phase.open_operations()
+            self._profile_session_opened = True
+
+    def _authorize_profile(self, profile_handle: str, peer) -> None:
+        supplied = hashlib.sha256(profile_handle.encode()).digest()
+        if not self._profile_handle_digest or not hmac.compare_digest(supplied, self._profile_handle_digest):
+            raise PermissionError("Board-profile authority refused")
+        phase = self._profile_phase.state()
+        expected = self._profile_peer_digest or (phase.peer_identity_digest if not phase.decision else "")
+        if expected and expected != peer.digest:
+            raise PermissionError("Board-profile authority refused")
+        self._profile_peer_digest = peer.digest
+
+    def _profile_cycle(self, probe_id: str, cycle: int) -> ProfileCycle:
+        from solver.board_profile import collect_cycle
+
+        def reader(board):
+            def read(request_id, endpoint, json_content_type):
+                document = self._profile_document(
+                    board,
+                    request_id,
+                    endpoint,
+                    json_content_type=json_content_type,
+                )
+                name = request_id.rsplit(":", 1)[-1].replace("-", "_")
+                self._record_profile_observation(probe_id, cycle, name, document)
+                return document
+
+            return read
+
+        return collect_cycle(probe_id, cycle, reader(self._board), reader(self._public_board))
+
+    def _profile_document(
+        self,
+        board: Board,
+        request_id: str,
+        endpoint: str,
+        *,
+        json_content_type: bool = True,
+    ) -> ProfileDocument:
+        from solver.board_profile import ProfileDocument
+
+        try:
+            answer = board.inspect("GET", endpoint, json_content_type=json_content_type)
+        except OSError:
+            return ProfileDocument(request_id, endpoint, 0, "", b"")
+        body = self._redactor.redact(answer.body)
+        if len(body) > self._sealed_response_bytes:
+            return ProfileDocument(
+                request_id,
+                endpoint,
+                answer.status,
+                answer.content_type,
+                body[: self._sealed_response_bytes],
+                len(body),
+                False,
+            )
+        return ProfileDocument(request_id, endpoint, answer.status, answer.content_type, body, len(body), True)
+
+    def _record_profile_observation(
+        self,
+        probe_id: str,
+        cycle: int,
+        document_name: str,
+        document: ProfileDocument,
+    ) -> None:
+        self._store.append(
+            BoardProfileObservationRecorded(
+                event_id=f"board-profile-observation:{probe_id}:{cycle}:{document_name}",
+                probe_id=probe_id,
+                cycle=cycle,
+                document_name=document_name,
+                request_id=document.request_id,
+                endpoint=document.endpoint,
+                http_status=document.status,
+                content_type=document.content_type,
+                original_bytes=document.original_bytes,
+                complete=document.complete,
+                ts=self._timestamp(),
+            ),
+            body=document.body,
+        )
 
     def execute(self, connection: object, handle: str, operation: BoardOperation, **arguments) -> BoardBrokerResult:
         operation = BoardOperation(operation)
@@ -175,6 +323,8 @@ class BoardBrokerRuntime:
             return BoardBrokerResult(operation, BoardOutcome.RESERVATION_REFUSED)
         scope = _SCOPE[operation]
         if grant.scope != scope:
+            return BoardBrokerResult(operation, BoardOutcome.CAPABILITY_REFUSED)
+        if not self._profile_allows_operations():
             return BoardBrokerResult(operation, BoardOutcome.CAPABILITY_REFUSED)
         request_digest = _request_digest(operation, arguments)
         request_id = self._next_id()
@@ -265,6 +415,8 @@ class BoardBrokerRuntime:
         *,
         authenticated: bool,
     ) -> BoardBrokerResult:
+        if not self._profile_allows_operations():
+            return BoardBrokerResult(operation, BoardOutcome.CAPABILITY_REFUSED)
         self._wire().clear()
         value = None
         try:
@@ -300,6 +452,13 @@ class BoardBrokerRuntime:
             self._typed(operation, value) if outcome is BoardOutcome.ANSWERED else None,
             provenance,
         )
+
+    def _profile_allows_operations(self) -> bool:
+        if self._profile_session_opened:
+            return True
+        if self._profile_phase.state().probe_id:
+            return False
+        return not self._profile_required
 
     def revoke(self, handle: str, reason: str) -> None:
         self._authority.revoke(handle, reason)
@@ -516,6 +675,39 @@ class BoardCompatibilityClient:
         return result.value
 
 
+class BoardProfileClient:
+    """Boot-owned profile client; no Work-generation identity is fabricated."""
+
+    def __init__(self, socket_path: Path, profile_handle: str) -> None:
+        self._socket_path = Path(socket_path)
+        self._profile_handle = profile_handle
+
+    def qualify(self, rules, rules_source: str) -> ProfileDecision:
+        from solver.board_profile import decision_from_document, rules_document
+
+        response = _ipc_request(
+            self._socket_path,
+            {
+                "command": "profile-probe",
+                "profile_handle": self._profile_handle,
+                "rules": rules_document(rules),
+                "rules_source": rules_source,
+            },
+        )
+        decision = response.get("decision")
+        if not isinstance(decision, dict):
+            raise BoardFailure("Board-profile broker refused the probe")
+        return decision_from_document(decision, rules)
+
+    def open_operations(self) -> None:
+        response = _ipc_request(
+            self._socket_path,
+            {"command": "open-profiled-operations", "profile_handle": self._profile_handle},
+        )
+        if response.get("status") != "opened":
+            raise BoardFailure("Board-profile operation gate remained closed")
+
+
 class BoardBrokerService:
     """Peer-authenticated pathname listener hosted only by the Board owner process."""
 
@@ -614,6 +806,23 @@ class BoardBrokerService:
                 authenticated=bool(request.get("authenticated", True)),
             )
             return _result_response(result)
+        if command == "profile-probe":
+            from solver.board_profile import decision_document, rules_from_document
+
+            rules = request.get("rules")
+            if not isinstance(rules, dict):
+                raise ValueError("Board-profile rules are absent")
+            parsed_rules = rules_from_document(rules)
+            decision = self._runtime.qualify_profile(
+                connection,
+                str(request.get("profile_handle", "")),
+                parsed_rules,
+                str(request.get("rules_source", "")),
+            )
+            return {"status": "decided", "decision": decision_document(decision)}, b""
+        if command == "open-profiled-operations":
+            self._runtime.open_profiled_operations(connection, str(request.get("profile_handle", "")))
+            return {"status": "opened"}, b""
         raise ValueError("unsupported Board broker command")
 
 
@@ -748,6 +957,7 @@ __all__ = [
     "BoardBrokerRuntime",
     "BoardBrokerService",
     "BoardCompatibilityClient",
+    "BoardProfileClient",
     "MAX_SEALED_RESPONSE_BYTES",
     "denied_probe",
     "local_peer_identity",

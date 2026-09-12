@@ -65,6 +65,7 @@ class SupervisorCustody:
                     boot_id=boot_id,
                     url=self._environment.get("CTFD_URL", ""),
                 )
+                result.profile_handles[Broker.BOARD] = board.profile_handle
             probe_result = self._probe_executor(result, fixtures)
             evidence = CapabilityEvidence(
                 self._state,

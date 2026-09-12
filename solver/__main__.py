@@ -29,8 +29,8 @@ from solver.attempt_executor_contracts import RuntimeBinding
 from solver.attempt_executor_pool import POOL_ENV, attach_attempt_pool
 from solver.attempt_executor_runtime import AttemptRuntime
 from solver.board import Board
-from solver.board_broker import BoardCompatibilityClient
-from solver.board_broker_contracts import BOARD_BROKER_SOCKET_ENV
+from solver.board_broker import BoardCompatibilityClient, BoardProfileClient
+from solver.board_broker_contracts import BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
 from solver.boot import Refusal
 from solver.codex import Invocation, asking
 from solver.event_store import EventStoreDamage
@@ -112,6 +112,8 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
         run_state=run_state,
         held=held,
         rules=rules,
+        rules_source=str(Path(boards) / f"{rules.event}{profile.SUFFIX}"),
+        profile_handle=environ.get(BOARD_PROFILE_HANDLE_ENV, ""),
         board_broker_path=Path(environ[BOARD_BROKER_SOCKET_ENV]) if environ.get(BOARD_BROKER_SOCKET_ENV) else None,
         boot_id=environ.get("SUPERVISOR_BOOT_ID", ""),
     )
@@ -123,20 +125,26 @@ def _run_admitted(
     run_state: Path,
     held: boot.Setup,
     rules: profile.Rules,
+    rules_source: str = "",
+    profile_handle: str = "",
     board_broker_path: Path | None = None,
     boot_id: str = "",
 ) -> Ending:
     """Keep capability IPC live beside every admitted v1 Board and inference call."""
 
-    board = BoardCompatibilityClient(board_broker_path) if board_broker_path else Board(held.url, held.token)
-    # The same Board addressed by nobody. Whether an unauthenticated read is answered is a profile
-    # field, and asking it needs a second address rather than a flag — the token is applied by the
-    # seam and not by its caller.
     held.must_hold(rules.requires)
-    public_board = (
-        BoardCompatibilityClient(board_broker_path, authenticated=False) if board_broker_path else Board(held.url, "")
-    )
-    discovered = profile.discovered(board, public_board, rules)
+    if board_broker_path:
+        profiler = BoardProfileClient(board_broker_path, profile_handle)
+        decision = profiler.qualify(rules, rules_source or f"{rules.event}{profile.SUFFIX}")
+        if not decision.authoritative or decision.profile is None:
+            raise Refusal(f"{boot.MARK} Board profile is incompatible — {decision.reason}")
+        profiler.open_operations()
+        discovered = decision.profile
+        board = BoardCompatibilityClient(board_broker_path)
+    else:
+        board = Board(held.url, held.token)
+        # Compatibility-only direct transport; production credentials stay behind the Board broker.
+        discovered = profile.discovered(board, Board(held.url, ""), rules)
 
     now = dt.datetime.now(dt.timezone.utc)
     try:

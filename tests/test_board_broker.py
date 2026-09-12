@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from solver.board_broker import BoardBrokerClient, BoardBrokerRuntime, BoardBrokerService, BoardCompatibilityClient
+from solver.board_broker import (
+    BoardBrokerClient,
+    BoardBrokerRuntime,
+    BoardBrokerService,
+    BoardCompatibilityClient,
+    BoardProfileClient,
+)
 from solver.board import MAX_FETCH_BYTES
 from solver.board_broker_contracts import (
     BoardBrokerResult,
@@ -31,10 +37,12 @@ from solver.event_store_contracts import LifecycleRecorded, RunClosed, TerminalD
 from solver.redaction import Redactor
 from solver.local_ipc import receive_line
 from solver.work_generation import GenerationFence
+from solver.profile import Rules
 
 
 PEER = PeerIdentity(101, 1000, 1000, "11", "0::/controller\n")
 OTHER = PeerIdentity(202, 20000, 20000, "22", "0::/executor\n")
+PROFILE_HANDLE = "boot-profile-authority"
 
 
 def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc(tmp_path: Path) -> None:
@@ -42,10 +50,47 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
 
     class BoardEndpoint(BaseHTTPRequestHandler):
         def do_GET(self):
-            observed["authorization"] = self.headers.get("Authorization")
-            self.send_response(403)
+            observed.setdefault("authorizations", []).append(self.headers.get("Authorization"))
+            body = b""
+            content_type = "application/json"
+            if self.path == "/api/v1/users/me":
+                body = b'{"success":true,"data":{"id":7,"team_id":null}}'
+                status = 200
+            elif self.path == "/":
+                body = b'<script>window.init = {"userId":7,"teamId":null,"userMode":"users"};</script>'
+                content_type = "text/html"
+                status = 200
+            elif "field=intake-is-not-a-field" in self.path:
+                body = b'{"success":false,"message":"invalid field"}'
+                status = 403
+            elif self.path == "/api/v1/challenges":
+                if self.headers.get("Authorization"):
+                    body = b'{"success":true,"data":[]}'
+                    status = 200
+                else:
+                    content_type = "text/html"
+                    status = 302
+            elif self.path == "/plugins/ctfd-chall-manager/instances":
+                body = (
+                    b'<script>window.init = {"userId":7,"teamId":null,"userMode":"users"};</script>'
+                    b"<table><thead><tr><th>Challenge</th></tr></thead><tbody></tbody></table>"
+                )
+                content_type = "text/html"
+                status = 200
+            elif self.path.endswith("/mana"):
+                body = b'{"success":true,"data":{"used":0,"total":0}}'
+                status = 200
+            elif self.path == "/api/v1/configs":
+                body = b'{"success":true,"data":[]}'
+                status = 200
+            else:
+                status = 404
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            if status == 302:
+                self.send_header("Location", "/login")
             self.end_headers()
-            self.wfile.write(b'{"success":false,"message":"invalid field"}')
+            self.wfile.write(body)
 
         def log_message(self, *_args):
             pass
@@ -66,6 +111,18 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
             boot_id="boot-000001",
             url=f"http://127.0.0.1:{endpoint.server_port}",
         )
+        profiler = BoardProfileClient(socket_path, owner.profile_handle)
+        decision = profiler.qualify(
+            Rules(
+                event="fixture",
+                url=f"http://127.0.0.1:{endpoint.server_port}",
+                flag_wrappers=(r"flag\{[^}]+\}",),
+                window_seconds=1,
+            ),
+            "fixture.board.json",
+        )
+        assert decision.authoritative is True
+        profiler.open_operations()
         binding = CapabilityBinding(
             "run-1",
             "boot-000001",
@@ -85,7 +142,7 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
         assert result.value == ReadContractValue(reaches_ctfd=True)
         assert result.provenance.endpoint == "/api/v1/challenges"
         assert result.provenance.response_digest
-        assert observed == {"authorization": "Token board-token"}
+        assert "Token board-token" in observed["authorizations"]
     finally:
         owner.close()
         endpoint.shutdown()
@@ -129,6 +186,7 @@ def _broker(tmp_path: Path, transport, *, sealed_response_bytes: int = 4096, sco
         transport=transport,
         timestamp=timestamp,
         sealed_response_bytes=sealed_response_bytes,
+        profile_handle=PROFILE_HANDLE,
     )
     return state, authority, binding, handle, runtime
 
