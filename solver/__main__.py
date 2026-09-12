@@ -37,6 +37,7 @@ from solver.coherent_intake import BrokerIntakeSource, CoherentIntake, contract_
 from solver.board_broker_contracts import BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
 from solver.boot import Refusal
 from solver.codex import Invocation, asking
+from solver.codex_control_contracts import CODEX_CONTROL_SOCKET_ENV
 from solver.event_store import EventStoreDamage
 from solver.flag import Flags, Pace
 from solver.instance import Instances
@@ -311,6 +312,7 @@ def _run_admitted(
         tool_runtime=tool_runtime,
         board_broker_path=board_broker_path,
         board_broker_boot_id=boot_id,
+        codex_control_path=Path(environ[CODEX_CONTROL_SOCKET_ENV]) if environ.get(CODEX_CONTROL_SOCKET_ENV) else None,
     )
     _on_signal(run)
     try:

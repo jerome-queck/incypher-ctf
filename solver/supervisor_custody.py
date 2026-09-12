@@ -67,6 +67,15 @@ class SupervisorCustody:
                 )
                 result.profile_handles[Broker.BOARD] = board.profile_handle
             probe_result = self._probe_executor(result, fixtures)
+            codex = result.brokers.get(Broker.CODEX)
+            if codex is not None:
+                result.endpoints[Broker.CODEX] = codex.configure_codex(
+                    state=self._state,
+                    run_id=self._run_id,
+                    boot_id=boot_id,
+                    model=self._environment.get("CODEX_MODEL", "") or boot.DEFAULT_MODEL,
+                    probe=probe_result,
+                )
             evidence = CapabilityEvidence(
                 self._state,
                 self._run_id,
@@ -94,11 +103,15 @@ class SupervisorCustody:
             _zero(fixtures)
 
     def _sources(self) -> list[SecretSource]:
-        return [
+        sources = [
             SecretSource.from_environment(self._environment, name, _OWNER_BY_ENV_NAME[name])
             for name in SECRETS
             if name in _OWNER_BY_ENV_NAME and self._environment.get(name, "")
         ]
+        codex_home = self._state / "codex"
+        if (codex_home / "auth.json").is_file() and not any(source.owner is Broker.CODEX for source in sources):
+            sources.append(SecretSource("CODEX_HOME", Broker.CODEX, bytearray(str(codex_home).encode())))
+        return sources
 
     def _probe_executor(
         self,
