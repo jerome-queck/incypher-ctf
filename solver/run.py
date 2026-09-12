@@ -50,6 +50,8 @@ from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
 from solver.lead_contracts import CandidateProposal
 from solver.lead_v1_adapter import V1LeadTurn
+from solver.lane_topology import LaneController
+from solver.lane_topology_contracts import LaneBinding, LaneCycleResult, LaneOutcome, WorkCandidate
 from solver.route_and_quota import (
     InferenceRoute,
     QuotaObservation,
@@ -240,6 +242,9 @@ class Run:
         lead_adapter=None,
         codex_control_path: Path | None = None,
         inference_route: str = "native-codex",
+        lane_controller: LaneController | None = None,
+        lane_order: Callable[[object, frozenset[str]], tuple[WorkCandidate, ...]] | None = None,
+        lane_execute: Callable[[Sighting, LaneBinding], LaneOutcome] | None = None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -302,6 +307,11 @@ class Run:
         self._in_flight: Deadline | None = None
         self._stopping = ""
         self._crashed = ""
+        self._lane_controller = lane_controller
+        self._lane_order = lane_order
+        self._lane_execute = lane_execute
+        if self._scheduler.dials.concurrency == 2 and None in (lane_controller, lane_order, lane_execute):
+            raise ValueError("the two-Lane profile requires its controller, Order adapter, and Attempt executor")
 
     def stop(self, why: str = SIGNALLED) -> None:
         """End the Run at the next boundary, and bring the turn in flight forward to now.
@@ -339,6 +349,9 @@ class Run:
         return self._tail()
 
     def _loop(self) -> None:
+        if self._lane_controller is not None:
+            self._lane_loop()
+            return
         while not self._stopping:
             if self._intake.due():
                 self._intake.sync()
@@ -381,6 +394,33 @@ class Run:
                 self._close_generation(held.generation_id, held.cause)
             if backoff := self._breaker.backoff():
                 self._sleep(backoff)
+
+    def _lane_loop(self) -> None:
+        """Production entry for a selected Lane profile; the legacy path remains one-Lane compatible."""
+
+        assert self._lane_controller is not None and self._lane_order is not None and self._lane_execute is not None
+        while not self._stopping:
+            if self._intake.due():
+                self._intake.sync()
+            if not getattr(self._intake, "available", True):
+                if self._scheduler.out_of_time():
+                    return
+                self._sleep(self._idle_seconds)
+                continue
+            by_id = {str(item.challenge_id): item for item in self._intake.snapshot.unsolved}
+
+            def order(excluded):
+                return self._lane_order(self._intake.snapshot, frozenset(excluded))
+
+            def execute(binding):
+                return self._lane_execute(by_id[binding.work_id], binding)
+
+            result: LaneCycleResult = self._lane_controller.run_cycle(order, execute)
+            self._attempts += len(result.timelines)
+            if not result.timelines:
+                if self._scheduler.out_of_time():
+                    return
+                self._sleep(self._idle_seconds)
 
     def _attempt(self, pick: Pick) -> _Held:
         """One Attempt: open it with recon, take turns until something ends it, close it.
