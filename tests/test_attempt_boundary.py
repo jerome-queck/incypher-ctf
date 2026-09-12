@@ -49,6 +49,9 @@ MOVED = "\n".join(
         '{"type":"item.completed","item":{"id":"c2","type":"command_execution","command":'
         '"/bin/zsh -lc \'curl -s http://target/admin\'","aggregated_output":"the admin panel\\n","exit_code":0,'
         '"status":"completed"}}',
+        '{"type":"item.completed","item":{"id":"c3","type":"command_execution","command":'
+        '"/bin/zsh -lc \'curl -s http://target/admin\'","aggregated_output":"the admin panel\\n","exit_code":0,'
+        '"status":"completed"}}',
         "",
     ]
 ).encode()
@@ -157,6 +160,7 @@ def test_the_tried_list_clears_whenever_a_new_checkpoint_lands():
         watching(repeats=99),
         ("curl -s http://target/", 22, "refused"),
         ("curl -s http://target/", 0, "a-page"),
+        ("curl -s http://target/", 0, "a-page"),
     )
     boundary.closed(moved, approach="y", cause=CUT_NOVELTY)
 
@@ -178,6 +182,7 @@ def test_a_checkpoint_crosses_with_the_command_that_re_verifies_it():
     moved = spend(
         watching(repeats=99),
         ("curl -s http://target/admin", 22, "forbidden"),
+        ("curl -s http://target/admin", 0, "the-panel"),
         ("curl -s http://target/admin", 0, "the-panel"),
     )
 

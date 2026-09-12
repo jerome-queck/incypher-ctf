@@ -29,6 +29,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from solver import codex, prompt, recon
+from solver.attempt_progress import ProgressController
+from solver.attempt_progress_contracts import (
+    EvidenceArtifact,
+    EvidenceClassification,
+    JudgeSource,
+    ProgressRequest,
+    ProgressStatus,
+)
 from solver.board import BoardFailure
 from solver.board_broker import BoardBrokerClient
 from solver.capability import CapabilityBinding
@@ -55,7 +63,7 @@ from solver.prompt import APPROACH
 from solver.record import CUT_BUDGET, FLAG, NO_MODEL, Recorder, generation_disposition
 from solver.schedule import Ended, Pick, Scheduler
 from solver.staging import Staged
-from solver.stall import Breaker, Deadline, Watch
+from solver.stall import Breaker, Checkpoint, Confirmation, Deadline, Thresholds, Watch
 
 MARK = "[run]"
 
@@ -258,6 +266,13 @@ class Run:
         self._codex_control_path = Path(codex_control_path) if codex_control_path else None
         self._route_controller = RouteAndQuotaController(
             RouteAndQuotaPolicy(primary=InferenceRoute(inference_route)), authority=recorder.write_authority
+        )
+        self._progress = ProgressController(
+            recorder.run_dir.parents[1],
+            recorder.run_id,
+            recorder.redactor,
+            lambda: self._now().isoformat(),
+            fence=recorder.generations,
         )
         self._boundaries: dict[int | str, Boundary] = {}
         self._pending: dict[int | str, Pending] = {}
@@ -487,7 +502,51 @@ class Run:
         trajectory and a turn that re-orients itself is not the same trajectory, while the workdir
         and the five carried things are the Challenge's and outlive both.
         """
-        watch = Watch(deadline=held.deadline, steps=held.counted)
+
+        carried_progress = self._progress.carry(held.generation_id)
+        if len(carried_progress.checkpoints) > held.checkpoints:
+            held.counted = 0
+            held.checkpoints = len(carried_progress.checkpoints)
+        held.deadline.apply_epochs(
+            len(carried_progress.checkpoints),
+            Thresholds().extension_seconds,
+            cap=Thresholds().extensions,
+        )
+        carried_replays = {checkpoint.replay for checkpoint in held.boundary.checkpoints}
+        for carried in carried_progress.checkpoints:
+            if carried.replay not in carried_replays:
+                held.boundary.checkpoints.append(Checkpoint(carried.moved, carried.replay, carried.sealed_digest))
+
+        def confirm(checkpoint):
+            evidence_digest = checkpoint.evidence_digest
+            outcome = self._progress.confirm(
+                ProgressRequest(
+                    held.generation_id,
+                    held.attempt_id,
+                    f"checkpoint-{held.checkpoints + 1:06d}",
+                    held.checkpoints,
+                    self._now().isoformat(),
+                    self._now().isoformat(),
+                    EvidenceArtifact(
+                        digest_bytes(f"{checkpoint.replay}:{evidence_digest}".encode()),
+                        evidence_digest,
+                        JudgeSource.DETERMINISTIC,
+                        EvidenceClassification.CONFIRMED,
+                        checkpoint.moved,
+                        checkpoint.replay,
+                    ),
+                )
+            )
+            if outcome.status in {ProgressStatus.ACCEPTED, ProgressStatus.REPEATED}:
+                held.deadline.apply_epochs(
+                    outcome.epoch_after,
+                    watch.thresholds.extension_seconds,
+                    cap=watch.thresholds.extensions,
+                )
+            accepted = outcome.status is ProgressStatus.ACCEPTED
+            return Confirmation(accepted, accepted)
+
+        watch = Watch(deadline=held.deadline, steps=held.counted, _confirms=confirm)
         said: list[str] = []
         # What the *model* observed, counted apart from `watch.steps`. The Watch is seeded with the
         # Attempt's Steps so far because recon **is** the opening of an Attempt and its probes are
@@ -658,7 +717,7 @@ class Run:
                     held.deadline.shorten(self._now())
         held.turns += 1
         held.counted = watch.steps
-        held.checkpoints += len(watch.checkpoints)
+        held.checkpoints = len(self._progress.carry(held.generation_id).evidence_ids)
         held.approach = label(named) if (named := _approach(said)) else held.approach
         # The breaker is told about every turn, not only the ones no counter ended — a turn that
         # spent the whole budget and observed nothing is the dead-adapter shape it exists for. Its

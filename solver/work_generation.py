@@ -401,6 +401,12 @@ class GenerationFence:
             decision, grant = self._authorize(generation_id, authority, evidence)
             return decision, commit(grant) if grant is not None else None
 
+    def inspect_current(self, generation_id: str, inspect: Callable[[], _T]) -> _T | None:
+        """Read a current generation projection atomically with respect to closure."""
+        with self._authority_lock:
+            state = _state_for(self.projection(), generation_id)
+            return inspect() if state.active else None
+
     def reconcile_restart(self) -> tuple[str, ...]:
         active = tuple(state.generation_id for state in self.projection().generations if state.active)
         for generation_id in active:
