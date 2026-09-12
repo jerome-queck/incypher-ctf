@@ -39,6 +39,14 @@ class V1LeadAdapter:
         self._bindings: dict[str, LeadBinding] = {}
         self._turns: dict[str, int] = {}
 
+    @property
+    def route(self) -> str:
+        return self._route or self._harness
+
+    @property
+    def transport_status(self) -> str | None:
+        return self._controller.model_status
+
     def __call__(self, incoming: V1LeadTurn) -> LeadOutcome:
         if not incoming.chain:
             raise ValueError("Lead adapter requires a selected model route")

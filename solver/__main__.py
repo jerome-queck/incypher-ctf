@@ -317,6 +317,7 @@ def _run_admitted(
         board_broker_boot_id=boot_id,
         codex_control_path=Path(environ[CODEX_CONTROL_SOCKET_ENV]) if environ.get(CODEX_CONTROL_SOCKET_ENV) else None,
         lead_adapter=lead_adapter,
+        inference_route=environ.get(CPA_ROUTE_ENV, "native-codex"),
     )
     _on_signal(run)
     try:
@@ -354,8 +355,6 @@ def _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack):
         )
     )
     credential = ""
-    if environ.get(CPA_ROUTE_ENV, "native-codex") != CPA_ROUTE:
-        return None
     lead = LeadController(
         run_state,
         held.run_id,

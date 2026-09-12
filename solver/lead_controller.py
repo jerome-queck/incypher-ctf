@@ -65,6 +65,10 @@ class LeadController:
         if self._fence.run_id != run_id:
             raise ValueError("Lead controller and generation fence name different Runs")
 
+    @property
+    def model_status(self) -> str | None:
+        return getattr(self._model, "last_status", None)
+
     def handle(self, request: LeadRequest) -> LeadOutcome:
         self._validate_request(request)
         binding_rejection = self._binding_rejection(request.binding)

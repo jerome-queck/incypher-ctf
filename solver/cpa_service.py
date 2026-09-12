@@ -331,9 +331,11 @@ class CPAService:
 class CPALeadPort:
     def __init__(self, service: CPAService, *, turn_seconds: float = 30.0) -> None:
         self._service, self._turn_seconds = service, turn_seconds
+        self.last_status: str | None = None
 
     def __call__(self, request: LeadRequest):
         outcome = self._service.execute(request, deadline=time.monotonic() + self._turn_seconds)
+        self.last_status = outcome.status.value
         return outcome.turn if outcome.status is CPAStatus.PROPOSED else outcome
 
 

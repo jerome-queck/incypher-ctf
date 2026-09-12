@@ -100,6 +100,7 @@ class V1CodexControlAdapter:
 
     def __init__(self, client: CodexControlClient, model: str, effort: str) -> None:
         self._client, self._model, self._effort = client, model, effort
+        self.last_limits = ()
 
     def turn(
         self,
@@ -126,11 +127,18 @@ class V1CodexControlAdapter:
             )
         )
         if result.outcome != "answered" or result.turn is None:
-            raise RuntimeError(f"native Codex Control {result.outcome}")
+            raise NativeControlFailure(result.outcome)
+        self.last_limits = result.limits
         return result.turn
 
     def cancel(self, request_id: str) -> bool:
         return self._client.cancel(request_id).outcome == "cancelled"
+
+
+class NativeControlFailure(RuntimeError):
+    def __init__(self, outcome: str) -> None:
+        super().__init__(f"native Codex Control {outcome}")
+        self.outcome = outcome
 
 
 class OwnerNativeTransport:
@@ -174,4 +182,4 @@ def _turn_usage(recorder: Recorder, taken: Sequence[Taken]) -> tuple[int, int]:
     return tokens_in, tokens_out
 
 
-__all__ = ["ControlledNativeProbe", "OwnerNativeTransport", "V1CodexControlAdapter"]
+__all__ = ["ControlledNativeProbe", "NativeControlFailure", "OwnerNativeTransport", "V1CodexControlAdapter"]
