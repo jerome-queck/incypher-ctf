@@ -255,9 +255,27 @@ class _Cascade:
             exit_code, answered = self._executor_command(subject, artefact)
         if exit_code != 0 or not answered.strip():
             return ""
-        return answered.decode("utf-8", "replace").strip().splitlines()[0]
+        lines = answered.decode("utf-8", "replace").strip().splitlines()
+        if self._tool_runtime is not None:
+            return next((line.removeprefix("mime=") for line in lines if line.startswith("mime=")), "")
+        return lines[0]
 
     def _executor_command(self, subject: str, artefact: Path) -> tuple[int | None, bytes]:
+        if self._tool_runtime is not None:
+
+            def execute_resident(_budget: float) -> tuple[int | None, bytes]:
+                result = self._tool_runtime.invoke_resident(
+                    generation_id=self._generation_id,
+                    attempt_id=self._attempt_id,
+                    step_id=f"{self._attempt_id}:step-{self._step}",
+                    workspace=artefact.parent,
+                    capability_id="recon.mime",
+                    input_path=artefact,
+                )
+                return result.exit_code, result.output
+
+            return self._probe(subject, f"recon.mime {artefact.name}", "file", execute_resident)
+
         argv = (*DISPATCH, artefact.name)
 
         envelope = EnvelopeSpec(
@@ -272,18 +290,6 @@ class _Cascade:
         )
 
         def execute(_budget: float) -> tuple[int | None, bytes]:
-            if self._tool_runtime is not None:
-                from solver.tool_control import ToolInvocation
-
-                result = self._tool_runtime.invoke(
-                    generation_id=self._generation_id,
-                    attempt_id=self._attempt_id,
-                    step_id=f"{self._attempt_id}:step-{self._step}",
-                    workspace=artefact.parent,
-                    envelope=envelope,
-                    invocation=ToolInvocation("recon.mime", argv),
-                )
-                return result.exit_code, result.output
             result = self._executor.start(
                 AttemptRequest(
                     generation_id=self._generation_id,

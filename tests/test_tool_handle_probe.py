@@ -12,6 +12,7 @@ from solver.isolation import (
     IsolationReceipt,
 )
 from solver.tool_handle_probe import qualify
+from solver.attempt_executor_contracts import RuntimeObservation
 from test_attempt_executor import IMAGE_ID, ImmediateRuntime
 
 
@@ -30,8 +31,28 @@ def admitted() -> IsolationReceipt:
     )
 
 
-def test_catalogued_fixture_runs_through_a_verified_tool_handle(tmp_path: Path) -> None:
-    output = b"application/octet-stream\n"
+def test_each_catalogued_capability_gets_its_own_handle_assertion(tmp_path: Path) -> None:
+    outputs = {name: f"{name}\n".encode() for name in ("recon.mime", "recon.bytes")}
+    inputs = {}
+    for name in outputs:
+        path = tmp_path / f"{name}.txt"
+        path.write_text(name)
+        inputs[name] = path
+
+    class CapabilityRuntime(ImmediateRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self._outputs = iter(outputs.values())
+
+        def launch(self, envelope_id, incoming):
+            super().launch(envelope_id, incoming)
+            return RuntimeObservation.exited(
+                exit_code=0,
+                output=next(self._outputs),
+                cgroup_path=f"/run/cgroup-parent/container/executors/{envelope_id}",
+                executor_uid=20000,
+            )
+
     inventory = tmp_path / "inventory.json"
     inventory.write_text(
         json.dumps(
@@ -39,11 +60,45 @@ def test_catalogued_fixture_runs_through_a_verified_tool_handle(tmp_path: Path) 
                 "components": [
                     {
                         "component_id": "fixture.identity",
-                        "entrypoint": "file",
+                        "capability_ids": list(outputs),
+                        "entrypoint": "/usr/local/bin/fixture",
+                        "interpreter": "/bin/dash",
                         "version": "1.0.0",
+                        "profiles": ["resident"],
+                        "packages": [
+                            {"name": "file", "version": "1"},
+                            {"name": "xxd", "version": "1"},
+                        ],
+                        "files": [
+                            {
+                                "destination": "/usr/local/bin/fixture",
+                                "sha256": "a" * 64,
+                            }
+                        ],
+                        "capability_policies": {
+                            name: {
+                                "argv": ["/bin/dash", "/usr/local/bin/fixture", name, "{input}"],
+                                "cpu_seconds": 5,
+                                "filesystem_bytes": 1024 * 1024,
+                                "input_kind": "file",
+                                "max_input_bytes": 1024,
+                                "max_output_bytes": 1024,
+                                "memory_bytes": 1024 * 1024,
+                                "network": "deny",
+                                "output_schema": "",
+                                "pids": 8,
+                                "wall_seconds": 5,
+                            }
+                            for name in outputs
+                        },
                         "fixture": {
                             "argv": ["sample"],
-                            "expected_stdout_sha256": hashlib.sha256(output).hexdigest(),
+                            "capability_argv": {name: [str(inputs[name])] for name in outputs},
+                            "capability_expected_facts": {name: [name] for name in outputs},
+                            "expected_stdout_sha256": hashlib.sha256(b"family\n").hexdigest(),
+                            "capability_stdout_sha256": {
+                                name: hashlib.sha256(output).hexdigest() for name, output in outputs.items()
+                            },
                             "timeout_seconds": 5,
                         },
                     }
@@ -64,12 +119,14 @@ def test_catalogued_fixture_runs_through_a_verified_tool_handle(tmp_path: Path) 
         state=tmp_path / "state",
         inventory_path=inventory,
         preflight=lambda *_args, **_kwargs: admitted(),
-        runtime=ImmediateRuntime(),
+        runtime=CapabilityRuntime(),
     )
 
     receipt = json.loads(path.read_bytes())
-    assert receipt["invocations"][0]["capability_id"] == "fixture.identity"
-    assert receipt["invocations"][0]["component_id"] == "file"
-    assert receipt["invocations"][0]["version"] == "1.0.0"
-    assert receipt["invocations"][0]["image_digest"] == IMAGE_ID
-    assert receipt["invocations"][0]["output_digest"] == hashlib.sha256(output).hexdigest()
+    assert [item["capability_id"] for item in receipt["invocations"]] == list(outputs)
+    assert {item["component_id"] for item in receipt["invocations"]} == {"/bin/dash"}
+    assert {item["version"] for item in receipt["invocations"]} == {"1.0.0"}
+    assert {item["image_digest"] for item in receipt["invocations"]} == {IMAGE_ID}
+    assert {item["output_digest"] for item in receipt["invocations"]} == {
+        hashlib.sha256(output).hexdigest() for output in outputs.values()
+    }

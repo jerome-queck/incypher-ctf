@@ -70,6 +70,8 @@ def _material_bytes(record: Mapping[str, Any], label: str) -> bytes:
 def _inventory_projection(component: Mapping[str, Any], profile_id: str) -> dict[str, Any]:
     projected = json.loads(json.dumps(component))
     projected["profiles"] = [profile_id]
+    if "capability_ids" in projected:
+        projected["capability_ids"] = sorted(projected["capability_ids"])
     projected["platforms"] = sorted(projected["platforms"])
     projected["packages"] = sorted(projected["packages"], key=lambda item: item["name"])
     projected["files"] = sorted(projected["files"], key=lambda item: item["destination"])
@@ -93,7 +95,8 @@ def _validate_document(document: Mapping[str, Any]) -> None:
         "isolation",
         "materials",
         "sbom",
-        "semantic_fixture",
+        "component_admission",
+        "handle_solve",
         "identity",
     }
     if set(document) != required:
@@ -291,10 +294,10 @@ def _validate_sbom(document: Mapping[str, Any], evidence: _BuildEvidence) -> tup
     return entrypoint, entrypoint_digest, version
 
 
-def _validate_semantic(
+def _validate_admission(
     document: Mapping[str, Any], entrypoint: str, entrypoint_digest: str, version: str, expected_stdout: str
 ) -> None:
-    semantic = _mapping(document["semantic_fixture"], "semantic_fixture")
+    semantic = _mapping(document["component_admission"], "component_admission")
     if set(semantic) != {
         "entrypoint",
         "entrypoint_sha256",
@@ -328,7 +331,20 @@ def validate_receipt(receipt: Mapping[str, object], *, expected_image_manifest_d
     evidence = _BuildEvidence(component, closure)
     expected_stdout = _validate_authorities(materials, component, closure)
     entrypoint, entrypoint_digest, version = _validate_sbom(document, evidence)
-    _validate_semantic(document, entrypoint, entrypoint_digest, version, expected_stdout)
+    _validate_admission(document, entrypoint, entrypoint_digest, version, expected_stdout)
+    if document["profile_id"] == "resident":
+        from solver.resident_handle_receipt import validate_receipt as validate_handle_receipt
+
+        closure_by_source = {str(record["source"]): content for record, content in closure.values()}
+        validate_handle_receipt(
+            _mapping(document["handle_solve"], "handle_solve"),
+            component,
+            _material_bytes(_mapping(materials["inventory"], "materials.inventory"), "inventory"),
+            closure_by_source,
+            expected_image=_mapping(document["image"], "image"),
+        )
+    elif document["handle_solve"] is not None:
+        raise ReceiptInvalid("non-resident receipt must not claim resident Handle Solve evidence")
     identity = _digest(document["identity"], "identity", prefixed=True)
     expected_identity = "sha256:" + hashlib.sha256(canonical_receipt_bytes(document, without_identity=True)).hexdigest()
     if identity != expected_identity:
@@ -390,6 +406,7 @@ def create_receipt(
     inventory: bytes,
     supply_receipt: bytes,
     source_root: Path,
+    handle_solve: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Bind a strict-image observation to the exact locked and embedded build materials."""
 
@@ -426,7 +443,8 @@ def create_receipt(
             },
         },
         "sbom": observation["sbom"],
-        "semantic_fixture": observation["semantic_fixture"],
+        "component_admission": observation["semantic_fixture"],
+        "handle_solve": dict(handle_solve) if handle_solve is not None else None,
         "identity": "",
     }
     receipt["identity"] = "sha256:" + _sha(canonical_receipt_bytes(receipt, without_identity=True))

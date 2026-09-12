@@ -56,31 +56,51 @@ class FixtureLock:
     input_file: str
     expected_stdout_sha256: str
     timeout_seconds: int
+    capability_stdout_sha256: dict[str, str] | None = None
+    capability_argv: dict[str, tuple[str, ...]] | None = None
+    capability_input_files: dict[str, tuple[str, ...]] | None = None
+    capability_expected_facts: dict[str, tuple[str, ...]] | None = None
 
 
 @dataclass(frozen=True)
 class ComponentLock:
     component_id: str
+    capability_ids: tuple[str, ...]
     version: str
     license_expression: str
     license_classification: str
     source: SourceLock
     license: LicenseLock
     entrypoint: str
+    interpreter: str | None
     version_argv: tuple[str, ...]
     fixture: FixtureLock
     platforms: tuple[str, ...]
     packages: tuple[PackageLock, ...]
     files: tuple[FileLock, ...]
     profile_id: str
+    capability_policies: dict[str, dict[str, object]] | None = None
 
     def inventory_record(self) -> dict[str, object]:
         record = asdict(self)
         record["platforms"] = list(self.platforms)
+        record["capability_ids"] = list(self.capability_ids)
         record["packages"] = [asdict(package) for package in self.packages]
         record["files"] = [asdict(declared_file) for declared_file in self.files]
         record["version_argv"] = list(self.version_argv)
+        if self.interpreter is None:
+            record.pop("interpreter")
         record["fixture"]["argv"] = list(self.fixture.argv)
+        if self.fixture.capability_stdout_sha256 is None:
+            record["fixture"].pop("capability_stdout_sha256")
+        for name in ("capability_argv", "capability_input_files", "capability_expected_facts"):
+            value = getattr(self.fixture, name)
+            if value is None:
+                record["fixture"].pop(name)
+            else:
+                record["fixture"][name] = {key: list(items) for key, items in value.items()}
+        if self.capability_policies is None:
+            record.pop("capability_policies")
         record["profiles"] = [record.pop("profile_id")]
         return record
 
@@ -109,7 +129,11 @@ class AssemblyPlan:
 
     def package_input(self) -> bytes:
         packages = sorted(
-            {f"{package.name}={package.version}" for component in self.components for package in component.packages}
+            {
+                f"{package.name}={re.sub(r'\+b\d+$', '*', package.version)}"
+                for component in self.components
+                for package in component.packages
+            }
         )
         return ("\n".join(packages) + ("\n" if packages else "")).encode()
 
@@ -184,27 +208,40 @@ def parse_file(value: object, profile_id: str) -> FileLock:
 
 
 def parse_component(value: object, profile_id: str) -> ComponentLock:
-    item = object_with_keys(
-        value,
-        {
-            "component_id",
-            "version",
-            "license_expression",
-            "license_classification",
-            "source",
-            "license",
-            "entrypoint",
-            "version_argv",
-            "fixture",
-            "platforms",
-            "packages",
-            "files",
-        },
-        f"component in {profile_id}",
-    )
+    required_fields = {
+        "component_id",
+        "capability_ids",
+        "version",
+        "license_expression",
+        "license_classification",
+        "source",
+        "license",
+        "entrypoint",
+        "version_argv",
+        "fixture",
+        "platforms",
+        "packages",
+        "files",
+    }
+    optional_fields = {"interpreter", "capability_policies"}
+    if (
+        not isinstance(value, Mapping)
+        or not required_fields <= set(value)
+        or not set(value) - required_fields <= optional_fields
+    ):
+        raise ValueError(f"component in {profile_id} has unknown or missing fields")
+    item = cast(Mapping[str, object], value)
     component_id = item["component_id"]
     if not isinstance(component_id, str) or not ID_PATTERN.fullmatch(component_id):
         raise ValueError(f"invalid component_id: {component_id}")
+    capability_ids = item["capability_ids"]
+    if (
+        not isinstance(capability_ids, list)
+        or not capability_ids
+        or any(not isinstance(value, str) or not ID_PATTERN.fullmatch(value) for value in capability_ids)
+        or len(capability_ids) != len(set(capability_ids))
+    ):
+        raise ValueError(f"invalid capability_ids: {component_id}")
     version = exact_version(item["version"], "component", component_id)
     license_expression = item["license_expression"]
     if not isinstance(license_expression, str) or not license_expression:
@@ -246,21 +283,40 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
     entrypoint = item["entrypoint"]
     if not isinstance(entrypoint, str) or entrypoint not in files_by_destination:
         raise ValueError(f"entrypoint is not in the locked component closure: {component_id}")
-    if not files_by_destination[entrypoint].mode.endswith(("5", "7")):
+    interpreter = item.get("interpreter")
+    if interpreter is not None and interpreter != "/bin/dash":
+        raise ValueError(f"unsupported component interpreter: {component_id}={interpreter}")
+    if interpreter is None and not files_by_destination[entrypoint].mode.endswith(("5", "7")):
         raise ValueError(f"entrypoint is not executable: {component_id}")
+    if interpreter is not None and files_by_destination[entrypoint].mode != "0444":
+        raise ValueError(f"interpreted entrypoint must be read-only: {component_id}")
     version_argv = item["version_argv"]
     if not isinstance(version_argv, list) or not version_argv or any(not isinstance(arg, str) for arg in version_argv):
         raise ValueError(f"invalid version argv: {component_id}")
-    fixture_record = object_with_keys(
-        item["fixture"],
-        {"fixture_id", "argv", "input_file", "expected_stdout_sha256", "timeout_seconds"},
-        f"fixture in {component_id}",
-    )
+    fixture_fields = {"fixture_id", "argv", "input_file", "expected_stdout_sha256", "timeout_seconds"}
+    capability_fixture_fields = {
+        "capability_stdout_sha256",
+        "capability_argv",
+        "capability_input_files",
+        "capability_expected_facts",
+    }
+    fixture_value = item["fixture"]
+    if (
+        not isinstance(fixture_value, Mapping)
+        or not fixture_fields <= set(fixture_value)
+        or not set(fixture_value) - fixture_fields <= capability_fixture_fields
+    ):
+        raise ValueError(f"fixture in {component_id} has unknown or missing fields")
+    fixture_record = cast(Mapping[str, object], fixture_value)
     fixture_id = fixture_record["fixture_id"]
     fixture_argv = fixture_record["argv"]
     input_file = fixture_record["input_file"]
     expected_stdout = fixture_record["expected_stdout_sha256"]
     timeout_seconds = fixture_record["timeout_seconds"]
+    capability_stdout = fixture_record.get("capability_stdout_sha256")
+    capability_argv = fixture_record.get("capability_argv")
+    capability_input_files = fixture_record.get("capability_input_files")
+    capability_expected_facts = fixture_record.get("capability_expected_facts")
     if not isinstance(fixture_id, str) or not ID_PATTERN.fullmatch(fixture_id):
         raise ValueError(f"invalid fixture_id: {component_id}")
     if not isinstance(fixture_argv, list) or any(not isinstance(arg, str) for arg in fixture_argv):
@@ -274,14 +330,105 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
         raise ValueError(f"invalid fixture expected output: {component_id}")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or not 1 <= timeout_seconds <= 60:
         raise ValueError(f"invalid fixture timeout: {component_id}")
+    if capability_stdout is not None and (
+        not isinstance(capability_stdout, Mapping)
+        or set(capability_stdout) != set(capability_ids)
+        or any(
+            not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value) for value in capability_stdout.values()
+        )
+    ):
+        raise ValueError(f"invalid capability fixture outputs: {component_id}")
+    capability_maps = (capability_argv, capability_input_files, capability_expected_facts)
+    if any(value is not None for value in capability_maps):
+        if any(not isinstance(value, Mapping) or set(value) != set(capability_ids) for value in capability_maps):
+            raise ValueError(f"incomplete capability fixtures: {component_id}")
+        assert isinstance(capability_argv, Mapping)
+        assert isinstance(capability_input_files, Mapping)
+        assert isinstance(capability_expected_facts, Mapping)
+        for capability_id in capability_ids:
+            argv = capability_argv[capability_id]
+            sources = capability_input_files[capability_id]
+            facts = capability_expected_facts[capability_id]
+            if (
+                not isinstance(argv, list)
+                or len(argv) != 1
+                or not isinstance(argv[0], str)
+                or not argv[0].startswith("/")
+            ):
+                raise ValueError(f"invalid capability argv: {component_id}/{capability_id}")
+            if (
+                not isinstance(sources, list)
+                or not sources
+                or any(not isinstance(source, str) or source not in files_by_source for source in sources)
+            ):
+                raise ValueError(f"invalid capability inputs: {component_id}/{capability_id}")
+            root = PurePosixPath(argv[0])
+            if any(not PurePosixPath(files_by_source[source].destination).is_relative_to(root) for source in sources):
+                raise ValueError(f"capability input escapes its argument: {component_id}/{capability_id}")
+            if (
+                not isinstance(facts, list)
+                or not facts
+                or any(not isinstance(fact, str) or not fact or len(fact.encode()) > 1024 for fact in facts)
+            ):
+                raise ValueError(f"invalid capability facts: {component_id}/{capability_id}")
+    policies_value = item.get("capability_policies")
+    policies: dict[str, dict[str, object]] | None = None
+    if policies_value is not None:
+        if not isinstance(policies_value, Mapping) or set(policies_value) != set(capability_ids):
+            raise ValueError(f"incomplete capability policies: {component_id}")
+        policy_fields = {
+            "argv",
+            "input_kind",
+            "max_input_bytes",
+            "max_output_bytes",
+            "cpu_seconds",
+            "memory_bytes",
+            "filesystem_bytes",
+            "pids",
+            "wall_seconds",
+            "network",
+            "output_schema",
+        }
+        policies = {}
+        for capability_id in capability_ids:
+            policy = object_with_keys(
+                policies_value[capability_id], policy_fields, f"policy in {component_id}/{capability_id}"
+            )
+            command = (
+                [interpreter, entrypoint, capability_id, "{input}"]
+                if interpreter
+                else [entrypoint, capability_id, "{input}"]
+            )
+            if policy["argv"] != command:
+                raise ValueError(f"capability policy has an unsafe argv template: {component_id}/{capability_id}")
+            if policy["input_kind"] not in {"file", "directory", "file-or-directory"}:
+                raise ValueError(f"capability policy has an invalid input kind: {component_id}/{capability_id}")
+            if policy["network"] not in {"deny", "target-broker"}:
+                raise ValueError(f"capability policy has an invalid network class: {component_id}/{capability_id}")
+            if not isinstance(policy["output_schema"], str) or not policy["output_schema"].startswith("resident."):
+                raise ValueError(f"capability policy has an invalid output schema: {component_id}/{capability_id}")
+            for limit in (
+                "max_input_bytes",
+                "max_output_bytes",
+                "cpu_seconds",
+                "memory_bytes",
+                "filesystem_bytes",
+                "pids",
+                "wall_seconds",
+            ):
+                if not isinstance(policy[limit], int) or isinstance(policy[limit], bool) or policy[limit] <= 0:
+                    raise ValueError(f"capability policy has an invalid limit: {component_id}/{capability_id}/{limit}")
+            policies[capability_id] = dict(policy)
     return ComponentLock(
         component_id=component_id,
+        capability_ids=tuple(sorted(capability_ids)),
         version=version,
         license_expression=license_expression,
         license_classification=cast(str, classification),
         source=SourceLock(cast(str, source_uri), cast(str, source_file)),
         license=LicenseLock(cast(str, license_authority), cast(str, license_file)),
         entrypoint=entrypoint,
+        interpreter=cast(str | None, interpreter),
         version_argv=tuple(cast(list[str], version_argv)),
         fixture=FixtureLock(
             fixture_id=fixture_id,
@@ -289,6 +436,18 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
             input_file=input_file,
             expected_stdout_sha256=expected_stdout,
             timeout_seconds=timeout_seconds,
+            capability_stdout_sha256=dict(sorted(capability_stdout.items()))
+            if isinstance(capability_stdout, Mapping)
+            else None,
+            capability_argv={key: tuple(value) for key, value in sorted(capability_argv.items())}
+            if isinstance(capability_argv, Mapping)
+            else None,
+            capability_input_files={key: tuple(value) for key, value in sorted(capability_input_files.items())}
+            if isinstance(capability_input_files, Mapping)
+            else None,
+            capability_expected_facts={key: tuple(value) for key, value in sorted(capability_expected_facts.items())}
+            if isinstance(capability_expected_facts, Mapping)
+            else None,
         ),
         platforms=tuple(sorted(cast(list[str], platforms))),
         packages=tuple(
@@ -296,6 +455,7 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
         ),
         files=parsed_files,
         profile_id=profile_id,
+        capability_policies=policies,
     )
 
 

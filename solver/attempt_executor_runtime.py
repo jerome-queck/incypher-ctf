@@ -839,7 +839,10 @@ def _materialize_workspace(
             effective = (mode & 0o700) | ((mode & 0o700) >> 3) if hostile_uid is not None else mode & 0o777
             os.fchmod(descriptor, effective)
             if hostile_uid is not None and os.geteuid() == 0:
-                os.fchown(descriptor, hostile_uid, hostile_uid)
+                # The strict launcher deliberately starts without CAP_CHOWN. Root keeps
+                # ownership; the pre-admitted hostile supplementary group gets only the
+                # mirrored owner mode needed inside its isolated workspace.
+                os.fchown(descriptor, 0, hostile_uid)
         finally:
             os.close(descriptor)
 

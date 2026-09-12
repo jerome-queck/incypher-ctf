@@ -27,6 +27,7 @@ def write_sample_fragment(source: Path) -> None:
                 "components": [
                     {
                         "component_id": "fixture.identity",
+                        "capability_ids": ["fixture.identity"],
                         "version": "1.0.0",
                         "license_expression": "MIT",
                         "license_classification": "free-redistributable",
@@ -213,6 +214,20 @@ def test_a_floating_package_version_fails_before_assembly(tmp_path: Path):
 
     assert result.returncode != 0
     assert "floating package version: fixture.identity/fixture-package=*" in result.stderr
+
+
+def test_architecture_local_binary_revisions_share_one_exact_source_lock(tmp_path: Path):
+    source = tmp_path / "tool-supply"
+    write_sample_fragment(source)
+    lock_path = source / "locks" / "resident.json"
+    lock = json.loads(lock_path.read_text())
+    lock["components"][0]["packages"] = [{"name": "fixture-package", "version": "1.0-1+b2"}]
+    lock_path.write_text(json.dumps(lock) + "\n")
+
+    result = assemble(source, tmp_path / "assembled")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "assembled" / "apt-packages.txt").read_text() == "fixture-package=1.0-1*\n"
 
 
 def test_an_unknown_lock_schema_fails_before_assembly(tmp_path: Path):

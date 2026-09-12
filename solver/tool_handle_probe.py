@@ -1,4 +1,4 @@
-"""Exercise one catalogued semantic fixture through the production Tool handle."""
+"""Exercise one catalogued component through production Tool handles."""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shutil
+import socket
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -15,10 +18,13 @@ from solver.attempt_executor_contracts import EnvelopeSpec, NetworkPolicy, Runti
 from solver.attempt_executor_pool import AttemptPool, close_attempt_pool, prepare_attempt_pool
 from solver.attempt_executor_runtime import AttemptRuntime
 from solver.capability import CapabilityAuthority, PeerIdentity
+from solver.capability import CapabilityBinding
 from solver.isolation import IMAGE_ID, IsolationReceipt, strict_preflight
 from solver.isolation_receipt import write_receipt as write_isolation_receipt
 from solver.redaction import Redactor
-from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController, ToolInvocation
+from solver.target_broker import TargetBrokerRuntime
+from solver.target_broker_contracts import TargetCandidateBinding, TargetEndpoint, TargetLimits, TargetProtocol
+from solver.tool_control import AttemptToolRuntime, ToolController, ToolInvocation, resident_components
 from solver.tool_control_receipt import verify_receipt, write_receipt
 from solver.work_generation import GenerationDisposition, GenerationFence
 
@@ -39,10 +45,81 @@ def _binding(environ: Mapping[str, str]) -> RuntimeBinding:
 def _component(document: Mapping[str, object], component_id: str) -> Mapping[str, object]:
     try:
         components = document["components"]
-        component = next(item for item in components if item["component_id"] == component_id)  # type: ignore[union-attr]
+        return next(item for item in components if item["component_id"] == component_id)  # type: ignore[union-attr]
     except (KeyError, StopIteration, TypeError) as error:
         raise ValueError(f"component is absent from the built-image catalogue: {component_id}") from error
-    return component
+
+
+def _copy_input(source: Path, workspace: Path, capability_id: str) -> tuple[Path, str]:
+    root = workspace / "inputs" / capability_id
+    root.mkdir(parents=True)
+    destination = root / source.name
+    if source.is_dir() and not source.is_symlink():
+        shutil.copytree(source, destination)
+    elif source.is_file() and not source.is_symlink():
+        shutil.copy2(source, destination)
+    else:
+        raise ValueError("Tool-handle fixture input is unsafe")
+    return destination, f"/work/{destination.relative_to(workspace).as_posix()}"
+
+
+def _target(protocol: TargetProtocol) -> tuple[socket.socket, threading.Thread]:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def serve() -> None:
+        connection, _address = listener.accept()
+        with connection:
+            request = connection.recv(4096)
+            if protocol is TargetProtocol.HTTP and request.startswith(b"GET /resident-fixture "):
+                connection.sendall(b"HTTP/1.0 200 OK\r\nContent-Length: 25\r\n\r\nresident fixture payload\n")
+            elif protocol is TargetProtocol.TCP and request == b"ping":
+                connection.sendall(b"pong")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return listener, thread
+
+
+class _QualificationTargets:
+    """Route each network fixture generation to its declared protocol broker."""
+
+    def __init__(self, brokers: Mapping[str, TargetBrokerRuntime]) -> None:
+        self._brokers = dict(brokers)
+        first = next(iter(self._brokers.values()))
+        self._default = first
+        self.boot_id = first.boot_id
+        self.candidate = first.candidate
+        self._generation_brokers: dict[str, TargetBrokerRuntime] = {}
+        self._handle_brokers: dict[str, TargetBrokerRuntime] = {}
+
+    def prepare_attempt(self, binding: CapabilityBinding) -> None:
+        broker = self._brokers.get(binding.step_id, self._default)
+        broker.prepare_attempt(binding)
+        self._generation_brokers[binding.generation_id] = broker
+
+    def claim(self, connection: socket.socket, generation_id: str) -> str:
+        broker = self._generation_brokers[generation_id]
+        handle = broker.claim(connection, generation_id)
+        self._handle_brokers[handle] = broker
+        return handle
+
+    def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
+        return self._handle_brokers[handle].exchange(connection, handle, request)
+
+    def revoke(self, handle: str) -> None:
+        broker = self._handle_brokers.pop(handle, None)
+        if broker is not None:
+            broker.revoke(handle)
+
+    def revoke_generation(self, generation_id: str) -> None:
+        broker = self._generation_brokers.pop(generation_id, None)
+        if broker is not None:
+            broker.revoke_generation(generation_id)
+        for handle, owner in tuple(self._handle_brokers.items()):
+            if owner is broker:
+                self._handle_brokers.pop(handle, None)
 
 
 def qualify(
@@ -54,7 +131,7 @@ def qualify(
     preflight: Callable[..., IsolationReceipt] = strict_preflight,
     runtime: object | None = None,
 ) -> Path:
-    """Return a verified Tool-handle receipt or refuse the qualification."""
+    """Return a verified receipt after every capability-specific assertion passes."""
 
     state = Path(state)
     run_root = state / "runs" / RUN_ID
@@ -71,14 +148,12 @@ def qualify(
 
     try:
         admitted = preflight(environ, prepare_attempt_runtime=prepare if runtime is None else None)
-        selected_runtime = runtime if runtime is not None else AttemptRuntime(pool)
         isolation_path = write_isolation_receipt(state, RUN_ID, admitted)
 
         def timestamp() -> str:
             return dt.datetime.now(dt.timezone.utc).isoformat()
 
         fence = GenerationFence(state, RUN_ID, Redactor({}), timestamp)
-        generation = fence.acquire("fixture", "tool-handle-qualification")
         peer = PeerIdentity(os.getpid(), os.getuid(), os.getgid(), "qualification", "/qualification")
         authority = CapabilityAuthority(
             state=state,
@@ -88,20 +163,60 @@ def qualify(
             peer_identity=lambda _connection: peer,
             timestamp=timestamp,
         )
+        capability_ids = tuple(str(item) for item in component["capability_ids"])  # type: ignore[index]
+        available = {item.capability_id: item for item in resident_components(inventory_path, require_complete=False)}
         controller = ToolController(
             state=state,
             run_id=RUN_ID,
             authority=authority,
             image_digest=binding.image_manifest_digest,
-            components=(
-                ToolComponent(
-                    component_id,
-                    str(component["entrypoint"]),
-                    str(component["version"]),
-                    ("resident",),
-                ),
-            ),
+            components=tuple(available[capability_id] for capability_id in capability_ids),
             timestamp=timestamp,
+        )
+        workspace = state / "qualification-work"
+        workspace.mkdir()
+        fixture = component["fixture"]  # type: ignore[index]
+        policies = component["capability_policies"]  # type: ignore[index]
+        capability_argv = fixture["capability_argv"]  # type: ignore[index]
+        expected_outputs = fixture["capability_stdout_sha256"]  # type: ignore[index]
+        expected_facts = fixture["capability_expected_facts"]  # type: ignore[index]
+        if any(
+            set(value) != set(capability_ids) for value in (policies, capability_argv, expected_outputs, expected_facts)
+        ):
+            raise ValueError("Tool-handle fixture lacks one assertion per capability")
+
+        listeners: list[socket.socket] = []
+        target_threads: list[threading.Thread] = []
+        brokers: dict[str, TargetBrokerRuntime] = {}
+        if runtime is None:
+            for capability_id in capability_ids:
+                if policies[capability_id]["network"] != "target-broker":
+                    continue
+                protocol = TargetProtocol.HTTP if capability_id == "network.http" else TargetProtocol.TCP
+                listener, target_thread = _target(protocol)
+                listeners.append(listener)
+                target_threads.append(target_thread)
+                brokers[f"fixture:{capability_id}"] = TargetBrokerRuntime(
+                    state=state,
+                    run_id=RUN_ID,
+                    boot_id="boot-qualification",
+                    challenge_id=f"fixture:{capability_id}",
+                    candidate=TargetCandidateBinding(
+                        binding.image_id,
+                        binding.image_manifest_digest,
+                        binding.image_config_digest,
+                        binding.platform,
+                        admitted.profile_digest,
+                    ),
+                    endpoint=TargetEndpoint(protocol, "127.0.0.1", listener.getsockname()[1]),
+                    limits=TargetLimits(1, 4096, 4096, 2),
+                    timestamp=timestamp,
+                    request_namespace=capability_id,
+                )
+        selected_runtime = (
+            runtime
+            if runtime is not None
+            else AttemptRuntime(pool, target_broker=_QualificationTargets(brokers) if brokers else None)
         )
         executor = AttemptExecutor(
             state=state,
@@ -112,39 +227,58 @@ def qualify(
             runtime=selected_runtime,  # type: ignore[arg-type]
             timestamp=timestamp,
         )
-        workspace = state / "qualification-work"
-        workspace.mkdir()
-        fixture = component["fixture"]  # type: ignore[index]
-        argv = (str(component["entrypoint"]), *(str(item) for item in fixture["argv"]))  # type: ignore[index]
+        if brokers:
+            executor.add_generation_revocation(selected_runtime.target_broker.revoke_generation)  # type: ignore[union-attr]
         try:
-            result = AttemptToolRuntime(
-                controller=controller,
-                executor=executor,
-                run_id=RUN_ID,
-                boot_id="boot-qualification",
-                peer=peer,
-            ).invoke(
-                generation_id=generation.generation_id,
-                attempt_id=generation.attempt_id,
-                step_id="fixture:solve",
-                workspace=workspace,
-                envelope=EnvelopeSpec(
-                    cpu_seconds=2.0,
-                    cpu_quota_us=100_000,
-                    memory_bytes=64 * 1024 * 1024,
-                    pids=16,
-                    filesystem_bytes=1024 * 1024,
-                    network=NetworkPolicy.DENY,
-                    wall_seconds=float(fixture["timeout_seconds"]),  # type: ignore[index]
-                    cleanup_seconds=1.0,
-                ),
-                invocation=ToolInvocation(component_id, argv),
-            )
-            if hashlib.sha256(result.output).hexdigest() != fixture["expected_stdout_sha256"]:  # type: ignore[index]
-                raise RuntimeError("catalogued fixture output did not match")
+            for capability_id in capability_ids:
+                policy = policies[capability_id]
+                supplied_argv = capability_argv[capability_id]
+                if not isinstance(supplied_argv, list) or len(supplied_argv) != 1:
+                    raise ValueError("Tool-handle capability fixture must name one input")
+                _input, virtual_input = _copy_input(Path(str(supplied_argv[0])), workspace, capability_id)
+                generation = fence.acquire(f"fixture:{capability_id}", f"qualification:{capability_id}")
+                try:
+                    argv = tuple(virtual_input if item == "{input}" else str(item) for item in policy["argv"])
+                    result = AttemptToolRuntime(
+                        controller=controller,
+                        executor=executor,
+                        run_id=RUN_ID,
+                        boot_id="boot-qualification",
+                        peer=peer,
+                    ).invoke(
+                        generation_id=generation.generation_id,
+                        attempt_id=generation.attempt_id,
+                        step_id=f"fixture:{capability_id}",
+                        workspace=workspace,
+                        envelope=EnvelopeSpec(
+                            cpu_seconds=float(policy["cpu_seconds"]),
+                            cpu_quota_us=100_000,
+                            memory_bytes=int(policy["memory_bytes"]),
+                            pids=int(policy["pids"]),
+                            filesystem_bytes=int(policy["filesystem_bytes"]),
+                            network=NetworkPolicy.DENY,
+                            wall_seconds=float(policy["wall_seconds"]),
+                            cleanup_seconds=1.0,
+                        ),
+                        invocation=ToolInvocation(
+                            capability_id,
+                            argv,
+                            resource_request=available[capability_id].resource_limits,
+                        ),
+                    )
+                    if any(str(fact).encode() not in result.output for fact in expected_facts[capability_id]):
+                        raise RuntimeError(f"catalogued fixture fact did not match: {capability_id}")
+                    observed_digest = hashlib.sha256(result.output).hexdigest()
+                    if observed_digest != expected_outputs[capability_id]:
+                        raise RuntimeError(f"catalogued fixture output did not match: {capability_id}")
+                finally:
+                    executor.close_generation(generation.generation_id, GenerationDisposition.COMPLETE)
         finally:
-            executor.close_generation(generation.generation_id, GenerationDisposition.COMPLETE)
             executor.close()
+            for listener in listeners:
+                listener.close()
+            for target_thread in target_threads:
+                target_thread.join(1)
         return verify_receipt(write_receipt(state, RUN_ID))
     finally:
         close_attempt_pool(pool)
