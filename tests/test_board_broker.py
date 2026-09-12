@@ -49,6 +49,7 @@ from solver.redaction import Redactor
 from solver.local_ipc import receive_line
 from solver.work_generation import GenerationFence
 from solver.profile import Rules
+from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger, write_receipt, verify_receipt
 
 
 PEER = PeerIdentity(101, 1000, 1000, "11", "0::/controller\n")
@@ -208,6 +209,42 @@ def _broker(
         profile_handle=PROFILE_HANDLE,
     )
     return state, authority, binding, handle, runtime
+
+
+def test_profiled_instance_ledger_uses_the_privileged_broker_and_real_board_response(tmp_path: Path) -> None:
+    secret = "board-token"
+    payload = json.dumps(
+        {
+            "success": True,
+            "data": {
+                "page": 1,
+                "totalPages": 1,
+                "totalRows": 2,
+                "rows": [
+                    {"instanceId": "ours", "challengeId": 7, "userId": 3, "teamId": 11},
+                    {"instanceId": "foreign", "challengeId": 8, "userId": 4, "teamId": 12},
+                ],
+            },
+        }
+    ).encode()
+    state, _authority, _binding, handle, runtime = _broker(
+        tmp_path,
+        lambda request: (200, payload, "", "application/json"),
+        scope="board.instance.read",
+    )
+
+    class Broker:
+        def instance_ledger_page(self, page):
+            return runtime.execute(object(), handle, BoardOperation.INSTANCE_LEDGER_PAGE, page=page)
+
+    result = read_profiled_instance_ledger(AuthenticatedIdentity("teams", 3, 11), Broker())
+    receipt_path = write_receipt(state, "run-1", result)
+
+    assert result.outcome == "populated"
+    assert [row.row_id for row in result.owned] == ["ours"]
+    assert [row.row_id for row in result.foreign] == ["foreign"]
+    assert verify_receipt(receipt_path) == receipt_path
+    assert secret not in receipt_path.read_text()
 
 
 def test_authorized_current_generation_completes_typed_authenticated_read(tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ from typing import Any
 
 from solver.board import ABSENT, ANSWERED, DENIED, LOCKED, REFUSED, UNREACHABLE, Board, Mana, Reply
 from solver.board_broker import BoardBrokerClient
+from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger
 from solver.board_broker_contracts import BoardOutcome
 from solver.record import NO_MODEL, Recorder
 
@@ -265,6 +266,8 @@ class Instances:
         now: Callable[[], dt.datetime] | None = None,
         reserves: Reserves = Reserves(),
         step_numbers: Callable[[], int] | None = None,
+        ledger_identity: AuthenticatedIdentity | None = None,
+        ledger_broker: object | None = None,
     ) -> None:
         self._board = board
         self._recorder = recorder
@@ -274,6 +277,8 @@ class Instances:
         # first — so the numbers come from whoever owns the Attempt, and two counters would put two
         # Steps at the same address.
         self._step_numbers = step_numbers or itertools.count(1).__next__
+        self._ledger_identity = ledger_identity
+        self._ledger_broker = ledger_broker
 
     def deploy(
         self,
@@ -397,7 +402,15 @@ class Instances:
         `keeping` is a challenge *name* because the ledger keys its rows by name; `known` is what
         Intake already holds, and turns those names back into the ids a terminate takes.
         """
-        held = [record.challenge_name for record in self._board.instances_held()]
+        if self._ledger_identity is not None and self._ledger_broker is not None:
+            ledger = read_profiled_instance_ledger(self._ledger_identity, self._ledger_broker)
+            if ledger.outcome not in {"empty", "populated"}:
+                told = f"the authenticated instance ledger is {ledger.outcome}: {ledger.reason}"
+                return Swept(shown=self._record("sweep", told, attempt_id, ok=False))
+            by_id = {challenge_id: name for name, challenge_id in known.items()}
+            held = [by_id.get(row.challenge_id, f"#{row.challenge_id}") for row in ledger.owned]
+        else:
+            held = [record.challenge_name for record in self._board.instances_held()]
         terminated, still_held, unresolved = [], [], []
         for name in (name for name in held if name != keeping):
             if name not in known:
