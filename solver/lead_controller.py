@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from solver.event_store import EventStore, GenerationAuthority, InvalidEventError
@@ -41,6 +42,14 @@ from solver.lead_contracts import (
 from solver.lead_projection import lead_events, primary_events, project_lead, transition_digest
 from solver.redaction import Redactor
 from solver.work_generation import GenerationFence, UnknownGeneration
+from solver.specialist_contracts import (
+    SpecialistCarry,
+    SpecialistEvidence,
+    SpecialistInvoke,
+    SpecialistResult,
+    SpecialistTask,
+)
+from solver.specialist_pool import SpecialistPool
 
 
 class LeadController:
@@ -55,6 +64,7 @@ class LeadController:
         model: LeadModel,
         *,
         fence: GenerationFence | None = None,
+        specialists: SpecialistPool | None = None,
     ) -> None:
         self._state = Path(state)
         self.store = EventStore(state, run_id=run_id, redactor=redactor)
@@ -62,8 +72,52 @@ class LeadController:
         self._timestamp = timestamp
         self._model = model
         self._fence = fence or GenerationFence(state, run_id, redactor, timestamp)
+        self._specialists = specialists
         if self._fence.run_id != run_id:
             raise ValueError("Lead controller and generation fence name different Runs")
+        if specialists is not None and (
+            specialists.run_id != run_id
+            or specialists.state.resolve() != self._state.resolve()
+            or specialists.generations is not self._fence
+        ):
+            raise ValueError("Lead controller and Specialist pool name different canonical authority")
+
+    def dispatch_specialists(
+        self,
+        tasks: tuple[SpecialistTask, ...],
+        invoke: SpecialistInvoke,
+        *,
+        cancelled: Callable[[], bool],
+        select: Callable[[SpecialistResult], bool],
+        carry: SpecialistCarry,
+        generation_id: str,
+        attempt_id: str,
+        engagement_id: str,
+    ) -> tuple[SpecialistEvidence, ...]:
+        """Dispatch Lead-authored briefs through the controller-owned bounded pool."""
+        if self._specialists is None:
+            if tasks:
+                raise ValueError("selected profile enables no Specialists")
+            return ()
+        if any(
+            task.generation_id != generation_id
+            or task.attempt_id != attempt_id
+            or task.parent_engagement_id != engagement_id
+            for task in tasks
+        ):
+            raise ValueError("Specialist batch crosses Lead Engagement ownership")
+        if not any(
+            state.generation_id == generation_id and state.attempt_id == attempt_id and state.active
+            for state in self._fence.projection().generations
+        ):
+            raise ValueError("Specialist batch names no current Lead generation")
+        batch = self._specialists.dispatch(tasks, invoke, cancelled=cancelled)
+        return carry.accept_results(
+            batch.results,
+            batch.evidence,
+            select,
+            generation_id=generation_id,
+        )
 
     @property
     def model_status(self) -> str | None:

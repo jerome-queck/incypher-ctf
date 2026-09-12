@@ -1,3 +1,3 @@
 """Reviewed proof digest, separate from its source digest to avoid a digest cycle."""
 
-CONTROLLED_PROOF_DIGEST = "f0d76654ac390b69a301b790019fb4c41f89ad706090de274fdd709652b15e38"
+CONTROLLED_PROOF_DIGEST = "2ddc1304751a8b646cd7eaecc342e90d898d3e287241ffa08c193e7878faacd7"
