@@ -159,6 +159,44 @@ class LeaseCoordinator:
     def active(self, challenge_id: int | str) -> LeaseGrant | None:
         return self._active.get(challenge_id)
 
+    def leases(self) -> tuple[LeaseGrant, ...]:
+        """Return the replay-derived Lease set for Boot reconciliation."""
+        return tuple(sorted(self._leases.values(), key=lambda grant: grant.identity.lease_seq))
+
+    def reconcile_release(self, identity: LeaseIdentity, epoch: int, *, snapshot_id: str) -> LeaseGrant:
+        """Execute one fixed cleanup proved by an authenticated reconciliation snapshot."""
+        if not snapshot_id:
+            raise ValueError("Reconciliation cleanup requires snapshot evidence")
+        with self._lock:
+            current = self._leases.get(identity)
+            if current is None or current.epoch != epoch or current.phase is LeasePhase.CLOSED:
+                raise StaleLease("Lease identity or epoch no longer owns cleanup authority")
+            proposed = LeaseGrant(
+                **{
+                    **current.__dict__,
+                    "phase": LeasePhase.RESERVED,
+                    "operation_key": self._key(identity, "release", epoch),
+                }
+            )
+            result = self._run_effect(proposed, "release", lambda: self._board.terminate_instance(current.challenge_id))
+            self._remember(result)
+            return result
+
+    def reconcile_grant_release(self, grant: LeaseGrant, *, snapshot_id: str) -> LeaseGrant:
+        """Discharge one conclusively attributed Lease, including an earlier Run's."""
+        if grant.board_id != self._board_id or grant.owner_id != self._owner_id:
+            raise StaleLease("Reconciliation evidence belongs to another Board owner")
+        if grant.identity.run_id == self._run_id:
+            return self.reconcile_release(grant.identity, grant.epoch, snapshot_id=snapshot_id)
+        proposed = LeaseGrant(
+            **{
+                **grant.__dict__,
+                "phase": LeasePhase.RESERVED,
+                "operation_key": self._key(grant.identity, "release", grant.epoch),
+            }
+        )
+        return self._run_effect(proposed, "release", lambda: self._board.terminate_instance(grant.challenge_id))
+
     def write_receipt(self, destination: Path, *, manifest_path: Path | None = None) -> Path:
         path = write_receipt(self._authority, self._run_id, self._board_id, destination)
         if manifest_path is not None and manifest_path.exists():

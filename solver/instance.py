@@ -471,6 +471,10 @@ class Instances:
         `keeping` is a challenge *name* because the ledger keys its rows by name; `known` is what
         Intake already holds, and turns those names back into the ids a terminate takes.
         """
+        if self._coordinator is not None:
+            return Swept(
+                shown=self._record("sweep", "cleanup is owned by the admitted reconciliation plan", attempt_id)
+            )
         if self._ledger_identity is not None and self._ledger_broker is not None:
             ledger = read_profiled_instance_ledger(self._ledger_identity, self._ledger_broker)
             if ledger.outcome not in {"empty", "populated"}:

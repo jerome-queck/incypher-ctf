@@ -39,14 +39,22 @@ from solver.boot import Refusal
 from solver.codex import Invocation, asking
 from solver.codex_control_contracts import CODEX_CONTROL_SOCKET_ENV
 from solver.event_store import EventStoreDamage
+from solver.event_store_storage import atomic_write
 from solver.cpa_contracts import CPAConfig
 from solver.cpa_responses import CPAResponsesModel
 from solver.cpa_service import CPA_CREDENTIAL_FD_ENV, CPA_RESPONSES_URL_ENV, CPALeadPort, CPAService
 from solver.flag import Flags, Pace
 from solver.instance import Instances
 from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger
-from solver.instance_lease_contracts import LeaseVerdict, RowCorroboration
-from solver.event_store_contracts import GenerationAuthority
+from solver.instance_ledger import write_receipt as write_instance_ledger_receipt
+from solver.instance_lease_contracts import LeasePhase, LeaseVerdict, RowCorroboration
+from solver.instance_lease_archive import persist_reconciled_close, replay_leases_across_runs
+from solver.instance_reconciliation import InstanceReconciler
+from solver.instance_reconciliation_contracts import AdmissionVerdict
+from solver.instance_reconciliation_contracts import BootOwnership
+from solver.instance_reconciliation_receipt import link_manifest as link_reconciliation_manifest
+from solver.instance_reconciliation_receipt import write_receipt as write_reconciliation_receipt
+from solver.event_store_contracts import GenerationAuthority, GenerationDisposition
 from solver.intake import Intake
 from solver.intake_qualification import NoCoherentSnapshot
 from solver.isolation import IMAGE_ID as STRICT_IMAGE_ENV
@@ -256,6 +264,34 @@ def _run_admitted(
             admit_generation=lambda generation_id, effect: _admit_lease_effect(recorder, generation_id, effect),
             generation_events=recorder.event_store.events,
         )
+        ledger = read_profiled_instance_ledger(ledger_identity, ledger_broker)
+        ledger_receipt = write_instance_ledger_receipt(run_state, held.run_id, ledger)
+        generations = recorder.generations.projection().generations
+        generations = _reconcile_interrupted_attempts(recorder, generations)
+        ownership = _boot_ownership(recorder.event_store.events(), boot_id, generations)
+        reconciliation = InstanceReconciler(
+            recorder.write_authority,
+            run_id=held.run_id,
+            board_id=held.url,
+            cleanup=lambda grant, snapshot_id: _reconcile_lease_cleanup(
+                lease_coordinator, grant, snapshot_id, run_state, held.run_id
+            ),
+            finalize=lambda grant, snapshot_id: persist_reconciled_close(run_state, grant, snapshot_id),
+        ).reconcile(
+            boot_id=boot_id,
+            ledger=ledger,
+            leases=replay_leases_across_runs(run_state, held.url),
+            generations=generations,
+            ownership=ownership,
+        )
+        reconciliation_receipt = write_reconciliation_receipt(
+            reconciliation,
+            recorder.write_authority,
+            run_state / "runs" / held.run_id / "canonical" / "instance-reconciliation.receipt.json",
+        )
+        if reconciliation.verdict is not AdmissionVerdict.OPEN:
+            recorder.run_close(cause=f"{REFUSED_AT_BOOT} — instance-reconciliation")
+            raise Refusal(f"{boot.MARK} Instance reconciliation remains unsettled")
     instances = Instances(
         board,
         recorder,
@@ -367,6 +403,18 @@ def _run_admitted(
                 canonical / "instance-lease.receipt.json",
                 manifest_path=canonical / "candidate-manifest.json",
             )
+            manifest_path = canonical / "candidate-manifest.json"
+            if manifest_path.exists():
+                from solver.manifest import canonical_manifest_bytes, parse_manifest
+
+                linked = link_reconciliation_manifest(
+                    parse_manifest(manifest_path.read_bytes()),
+                    reconciliation_receipt,
+                    recorder.write_authority,
+                    recorder.event_store.events(),
+                    ledger_receipt,
+                )
+                atomic_write(manifest_path, canonical_manifest_bytes(linked) + b"\n")
         stack.close()
         if attempt_executor is not None:
             attempt_executor.close()
@@ -382,6 +430,81 @@ def _owned_instance_row(identity, broker, challenge_id):
         return RowCorroboration(row_id=matches[0])
     foreign = any(row.challenge_id == challenge_id for row in result.foreign)
     return RowCorroboration(LeaseVerdict.FOREIGN_ROW if foreign else LeaseVerdict.UNCORROBORATED_ROW)
+
+
+def _reconcile_lease_cleanup(coordinator, grant, snapshot_id, state, current_run_id):
+    result = coordinator.reconcile_grant_release(grant, snapshot_id=snapshot_id)
+    if grant.identity.run_id != current_run_id:
+        result = persist_reconciled_close(state, result, snapshot_id)
+    return result.phase is LeasePhase.CLOSED
+
+
+def _boot_ownership(events, boot_id, generations):
+    boot_opens = [
+        event
+        for event in events
+        if event.payload.get("record") == "boot-open" and event.payload.get("boot_id") == boot_id
+    ]
+    prior_boots = {
+        str(event.payload.get("boot_id"))
+        for event in events
+        if event.payload.get("record") == "boot-open" and event.payload.get("boot_id") != boot_id
+    }
+    closed_boots = {
+        str(event.payload.get("boot_id")): event for event in events if event.payload.get("record") == "boot-close"
+    }
+    predecessor_proof = ()
+    if len(boot_opens) == 1 and prior_boots <= closed_boots.keys():
+        predecessor_proof = tuple(str(closed_boots[item].payload["event_id"]) for item in sorted(prior_boots))
+    attempt_closes = {
+        str(event.payload.get("attempt_id")): event
+        for event in events
+        if event.payload.get("record") == "attempt-close"
+    }
+    opened_attempts = {
+        str(event.payload.get("attempt_id")) for event in events if event.payload.get("record") == "attempt-open"
+    }
+    interrupted = tuple(
+        str(attempt_closes[generation.attempt_id].payload["event_id"])
+        for generation in generations
+        if generation.disposition is GenerationDisposition.INTERRUPT and generation.attempt_id in attempt_closes
+    )
+    all_attempts_closed = all(
+        not generation.active
+        and (generation.attempt_id not in opened_attempts or generation.attempt_id in attempt_closes)
+        for generation in generations
+    )
+    return BootOwnership(
+        predecessor_proof,
+        interrupted,
+        len(boot_opens) == 1 and all_attempts_closed,
+        prior_boots <= closed_boots.keys(),
+    )
+
+
+def _reconcile_interrupted_attempts(recorder, generations):
+    events = recorder.event_store.events()
+    opened = {str(event.payload.get("attempt_id")) for event in events if event.payload.get("record") == "attempt-open"}
+    closed = {
+        str(event.payload.get("attempt_id")) for event in events if event.payload.get("record") == "attempt-close"
+    }
+    for generation in generations:
+        if not generation.active:
+            continue
+        if generation.attempt_id not in opened:
+            recorder.interrupt_generation(generation.generation_id)
+            continue
+        if generation.attempt_id not in closed:
+            recorder.attempt_close(
+                attempt_id=generation.attempt_id,
+                cause="crashed",
+                approach_label="reconciled-after-boot-loss",
+                solves_at_close=0,
+                extensions_granted=0,
+                flag=None,
+                generation_id=generation.generation_id,
+            )
+    return recorder.generations.projection().generations
 
 
 def _admit_lease_effect(recorder, generation_id, effect):
