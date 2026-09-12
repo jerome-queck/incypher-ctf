@@ -215,6 +215,7 @@ class Run:
         now: Callable[[], dt.datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         attempt_executor=None,
+        tool_runtime=None,
         board_broker_path: Path | None = None,
         board_broker_boot_id: str = "",
         lead_adapter=None,
@@ -237,6 +238,7 @@ class Run:
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self._sleep = sleep
         self._attempt_executor = attempt_executor
+        self._tool_runtime = tool_runtime
         self._board_broker_path = board_broker_path
         self._board_broker_boot_id = board_broker_boot_id
         self._lead_adapter = lead_adapter
@@ -732,6 +734,7 @@ class Run:
             first_step=self._steps.next_index(),
             generation_id=held.generation_id,
             executor=self._attempt_executor,
+            tool_runtime=self._tool_runtime,
         )
         self._steps.reached(self._steps.spent + len(found.probes))
         return found

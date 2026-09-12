@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -74,6 +75,7 @@ class AttemptHandle:
         if self._cancelled.is_set():
             return
         self._cancelled.set()
+        self._executor._revoke_generation(self._request.generation_id)
         cancel = getattr(self._executor._runtime, "cancel", None)
         if cancel is not None:
             cancel(self.envelope_id)
@@ -123,6 +125,7 @@ class AttemptExecutor:
         self._canonical_lock = threading.RLock()
         self._handles: set[AttemptHandle] = set()
         self._handles_lock = threading.Lock()
+        self._generation_revocations: list[Callable[[str], None]] = []
         self._lock_file = self._open_lock()
         self._owner_epoch = self._next_owner_epoch()
         try:
@@ -229,6 +232,7 @@ class AttemptExecutor:
     def close_generation(self, generation_id: str, disposition) -> None:
         """Fence one Work generation, then terminate and drain all of its envelopes."""
 
+        self._revoke_generation(generation_id)
         with self._canonical_lock:
             self._generations.close(generation_id, disposition)
             close = next(
@@ -264,6 +268,16 @@ class AttemptExecutor:
             except LateAttemptResult:
                 pass
         self._write_process_receipt()
+
+    def add_generation_revocation(self, revoke: Callable[[str], None]) -> None:
+        """Register authority removed before any owned process cancellation or teardown."""
+
+        if revoke not in self._generation_revocations:
+            self._generation_revocations.append(revoke)
+
+    def _revoke_generation(self, generation_id: str) -> None:
+        for revoke in tuple(self._generation_revocations):
+            revoke(generation_id)
 
     def _run(self, handle: AttemptHandle) -> None:
         try:
