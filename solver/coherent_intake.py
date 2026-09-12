@@ -225,6 +225,25 @@ class CoherentIntake:
     def available(self) -> bool:
         return self._canonical is not None
 
+    def order_authority(self):
+        """Expose only verified canonical Intake facts to the v2 Order boundary."""
+
+        from solver.order_policy import OrderAuthority
+
+        replayed = self._journal._replay(self._contract.profile_digest)
+        if replayed.snapshot is None:
+            raise LookupError("no coherent Intake snapshot has been published")
+        crowd_source = crowd_source_from_contract(
+            Path(self._recorder.run_dir).parents[1], self._recorder.run_id, self._contract
+        )
+        return OrderAuthority(
+            snapshot=replayed.snapshot,
+            fence=replayed.fence,
+            history=tuple(reversed(replayed.history)),
+            effective_max_challenges=self._contract.max_challenges,
+            crowd_source=crowd_source,
+        )
+
     def due(self, *, at: dt.datetime | None = None) -> bool:
         moment = at or self._now()
         return self._next_due is None or moment >= self._next_due
@@ -708,6 +727,44 @@ def _challenge_path(challenge_id: int | str) -> str:
     return "/api/v1/challenges/" + urllib.parse.quote(str(challenge_id), safe="")
 
 
+def crowd_source_from_contract(state: Path, run_id: str, contract: IntakeContract):
+    """Rebuild crowd trust only from canonical profile authority and its verified receipt."""
+
+    from solver.order_policy import CrowdSource
+
+    decision = next(
+        (
+            event
+            for event in EventStore(state, run_id=run_id).events()
+            if event.event_digest == contract.profile_decision_event_digest
+            and event.event_type == "board-profile-phase.recorded"
+            and event.payload.get("record") == "profile-decided"
+            and event.payload.get("decision") == "authoritative"
+        ),
+        None,
+    )
+    trusted = False
+    if decision is not None:
+        try:
+            from solver.board_profile_receipt import verify_receipt as verify_profile_receipt
+
+            receipt = verify_profile_receipt(Path(state) / "runs" / run_id / "canonical" / "board-profile.receipt.json")
+            trusted = decision.payload.get("receipt_digest") == _sha256(receipt.read_bytes())
+        except ValueError:
+            trusted = False
+    control_digest = _sha256(
+        canonical_subject(
+            {
+                "profile_decision_event_digest": contract.profile_decision_event_digest,
+                "landing_digests": list(contract.landing_digests),
+                "read_control_digests": list(contract.read_control_digests),
+                "read_control_statuses": list(contract.read_control_statuses),
+            }
+        )
+    )
+    return CrowdSource(trusted, False, control_digest)
+
+
 def contract_from_profile_receipt(state: Path, run_id: str) -> IntakeContract:
     """Derive Intake authority only from the independently verified selected Board profile."""
 
@@ -827,4 +884,10 @@ def _failure_fingerprint(probe: IntakeProbe, decision: IntakeDecision) -> str:
     )
 
 
-__all__ = ["BrokerIntakeSource", "CoherentIntake", "IntakeSource", "contract_from_profile_receipt"]
+__all__ = [
+    "BrokerIntakeSource",
+    "CoherentIntake",
+    "IntakeSource",
+    "contract_from_profile_receipt",
+    "crowd_source_from_contract",
+]

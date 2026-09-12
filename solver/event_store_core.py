@@ -166,6 +166,7 @@ class EventStoreCore:
         *,
         blob_digest: str,
         blob_bytes: int,
+        sequence: int | None = None,
     ) -> EventReservation:
         if len(blob_digest) != 64 or any(character not in "0123456789abcdef" for character in blob_digest):
             raise ValueError("blob_digest must be a lowercase SHA-256 hex digest")
@@ -186,7 +187,7 @@ class EventStoreCore:
             if prior is not None:
                 self._recover_reservation_locked(prior)
                 return self._reservation_from_event(prior)
-            return self._reserve_locked(event, payload, existing)
+            return self._reserve_locked(event, payload, existing, sequence=sequence)
 
     def commit(
         self,
@@ -313,25 +314,33 @@ class EventStoreCore:
         event: CanonicalEvent,
         payload: Mapping[str, Any],
         existing: list[CommittedEvent],
+        *,
+        sequence: int | None = None,
     ) -> EventReservation:
         contract = event_contract(event.event_type)
         if contract is None:
             raise InvalidEventError(f"unsupported event type {event.event_type!r}")
-        contract.validate_payload(payload, sequence=len(existing) + 1)
         reservations = self._read_reservations()
         highest = max(
             [item.sequence for item in existing] + [item.sequence for item in reservations],
             default=0,
         )
+        desired = sequence if sequence is not None else highest + 1
+        if desired <= (existing[-1].sequence if existing else 0):
+            raise InvalidEventError("reservation sequence is already committed", sequence=desired)
+        occupied = {item.sequence for item in reservations if item.status is ReservationStatus.RESERVED}
+        if desired in occupied:
+            raise DuplicateSequenceError("reservation sequence is already held", sequence=desired)
+        contract.validate_payload(payload, sequence=desired)
         reservation = EventReservation(
-            sequence=highest + 1,
+            sequence=desired,
             previous_digest=existing[-1].event_digest if existing else "",
             run_id=self.run_id,
             event_type=event.event_type,
             event_fingerprint=_event_fingerprint(payload),
             blob_digest=str(payload["blob_digest"]),
             blob_bytes=int(payload["blob_bytes"]),
-            reservation_id=f"{self.run_id}:{highest + 1}:{event.event_type}",
+            reservation_id=f"{self.run_id}:{desired}:{event.event_type}",
         )
         self._record_reservation(reservation)
         self._call_hook("after_reserve")
@@ -379,8 +388,8 @@ class EventStoreCore:
         if raw and not raw.endswith(b"\n"):
             raise TornAppendError("reservation stream has an incomplete final line")
         reservations: list[EventReservation] = []
-        latest_sequence = 0
         latest_by_id: dict[str, EventReservation] = {}
+        owner_by_sequence: dict[int, str] = {}
         for line_number, line in enumerate(raw.splitlines(), start=1):
             try:
                 row = json.loads(line)
@@ -424,10 +433,9 @@ class EventStoreCore:
                 raise InvalidEventError("reservation sequence is not positive", sequence=reservation.sequence)
             previous = latest_by_id.get(reservation.reservation_id)
             if previous is None:
-                if reservation.sequence < latest_sequence:
+                owner = owner_by_sequence.get(reservation.sequence)
+                if owner is not None and owner != reservation.reservation_id:
                     raise DuplicateSequenceError("reservation sequence was reused", sequence=reservation.sequence)
-                if reservation.sequence > latest_sequence + 1:
-                    raise SequenceGapError("reservation sequence has a gap", sequence=reservation.sequence)
             elif (
                 previous.sequence != reservation.sequence
                 or previous.run_id != reservation.run_id
@@ -443,7 +451,7 @@ class EventStoreCore:
                 raise InvalidEventError("reservation belongs to another Run", sequence=reservation.sequence)
             reservations.append(reservation)
             latest_by_id[reservation.reservation_id] = reservation
-            latest_sequence = max(latest_sequence, reservation.sequence)
+            owner_by_sequence[reservation.sequence] = reservation.reservation_id
         return reservations
 
     def _reservation_for_sequence(self, sequence: int) -> EventReservation | None:

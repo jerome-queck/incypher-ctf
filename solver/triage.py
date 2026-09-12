@@ -36,6 +36,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -165,10 +166,12 @@ def triage(challenges: Sequence[Sighting], *, recorder: Recorder, judge: Judge =
     remainder = [one for one in challenges if one.challenge_id not in extracted]
     inferred = _by_solves([one for one in remainder if one.solves > 0])
     unknown = [one for one in remainder if one.challenge_id not in inferred]
+    safe_ids = set(judgeable_ids(tuple(one.challenge_id for one in unknown)))
+    judgeable = [one for one in unknown if one.challenge_id in safe_ids]
     # One prompt for the whole remainder rather than one per Challenge: it is one invocation, and a
     # model comparing twelve Challenges against each other is doing the only thing this judgement is
     # for, which is ordering them.
-    judged = _judged(judge(_prompt(unknown)), unknown) if unknown else {}
+    judged = _judged(judge(_prompt(judgeable)), judgeable) if judgeable else {}
     judgements = tuple(
         extracted.get(one.challenge_id) or inferred.get(one.challenge_id) or _from_the_judge(one, judged)
         for one in challenges
@@ -270,7 +273,15 @@ def _judged(answer: str, unknown: Sequence[Sighting]) -> dict[int | str, int]:
     words: a Challenge it did not answer for keeps the floor and is recorded as `unjudged`, which is
     what makes a judge that has stopped working visible rather than silently unanimous.
     """
-    wanted = {str(one.challenge_id): one.challenge_id for one in unknown}
+    return parse_judged_tiers(answer, tuple(one.challenge_id for one in unknown))
+
+
+def parse_judged_tiers(answer: str, challenge_ids: Sequence[int | str]) -> dict[int | str, int]:
+    """Parse only explicit in-range model answers for the exact typed IDs asked."""
+
+    if len(judgeable_ids(challenge_ids)) != len(challenge_ids):
+        raise ValueError("model judgement IDs are textually ambiguous")
+    wanted = {str(challenge_id): challenge_id for challenge_id in challenge_ids}
     given: dict[int | str, int] = {}
     for line in answer.splitlines():
         tokens = re.findall(r"[A-Za-z0-9_-]+", line)
@@ -281,6 +292,16 @@ def _judged(answer: str, unknown: Sequence[Sighting]) -> dict[int | str, int]:
         if tier:
             given.setdefault(wanted[tokens[named]], tier)
     return given
+
+
+def judgeable_ids(challenge_ids: Sequence[int | str]) -> tuple[int | str, ...]:
+    """Return only IDs whose prompt spelling identifies one exact typed Challenge."""
+
+    spellings = [str(challenge_id) for challenge_id in challenge_ids]
+    counts = Counter(spellings)
+    return tuple(
+        challenge_id for challenge_id, spelling in zip(challenge_ids, spellings, strict=True) if counts[spelling] == 1
+    )
 
 
 def _stated(description: str) -> str:

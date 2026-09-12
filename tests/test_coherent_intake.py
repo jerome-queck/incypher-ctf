@@ -175,6 +175,12 @@ def test_controller_collects_all_pages_twice_then_publishes_and_projects_v1(tmp_
     assert intake.available
     assert [one.challenge_id for one in intake.snapshot.challenges] == [1, 2]
     assert intake.snapshot.challenges[0].description == "statement-1"
+    order_authority = intake.order_authority()
+    assert order_authority.snapshot.digest == intake._canonical.digest
+    assert order_authority.fence.snapshot_digest == order_authority.snapshot.digest
+    assert order_authority.history == (order_authority.snapshot,)
+    assert order_authority.effective_max_challenges == intake._contract.max_challenges
+    assert order_authority.crowd_source.structurally_trusted is False
     assert [call[2] for call in source.calls] == [
         "/api/v1/users/me",
         "/",
