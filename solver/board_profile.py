@@ -257,6 +257,9 @@ def qualify(probe: ProfileProbe, rules: Rules) -> ProfileDecision:
         configs_outcome=configs["outcome"],
         board_window=dict(config_window or landing_window),
         board_window_observations=window_sources,
+        authenticated_user_id=projection["identity"]["id"],
+        authenticated_team_id=projection["identity"]["team_id"],
+        instance_ledger_mode=projection["identity"]["user_mode"],
     )
     return ProfileDecision(True, "compatible", profile)
 
@@ -345,6 +348,9 @@ def decision_from_document(document: Mapping[str, object], rules: Rules) -> Prof
         configs_outcome=str(recorded["configs_outcome"]),
         board_window=dict(recorded.get("board_window", {})),
         board_window_observations=dict(recorded.get("board_window_observations", {})),
+        authenticated_user_id=int(recorded.get("authenticated_user_id", 0)),
+        authenticated_team_id=recorded.get("authenticated_team_id"),
+        instance_ledger_mode=str(recorded.get("instance_ledger_mode", "")),
     )
     if profile.recorded() != dict(recorded):
         raise ValueError("Board-profile decision contains inconsistent tracked Rules")

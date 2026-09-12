@@ -13,6 +13,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import itertools
 import json
 import urllib.error
@@ -72,6 +73,7 @@ BROWSER_USER_AGENT = (
 # ledger is not on the API at all and answers HTML.
 CHALL_MANAGER = "/api/v1/plugins/ctfd-chall-manager"
 INSTANCE_LEDGER = "/plugins/ctfd-chall-manager/instances"
+INSTANCE_LEDGER_API = f"{CHALL_MANAGER}/instances"
 
 # What a chall-manager call answered, named rather than numbered. The plugin says three different
 # things through one 403, says "you already hold this" through a 200 that reads like a success, and
@@ -423,6 +425,39 @@ class Board:
         if rows is None:
             raise BoardFailure("the instance ledger carried no table — a login page reads as an empty ledger")
         return rows
+
+    def instance_ledger_page(self, page: int):
+        """Read one identity-bearing page; policy and ownership stay above the wire seam."""
+        from solver.instance_ledger import LedgerPage, LedgerRow
+
+        status, raw, _location = self.request("GET", f"{INSTANCE_LEDGER_API}?page={page}")
+        digest = hashlib.sha256(raw).hexdigest()
+        document = _json_or_none(raw)
+        data = document.get("data") if isinstance(document, dict) else None
+        if status != 200 or not isinstance(data, dict):
+            return LedgerPage(status=status, body=raw, page=page, complete=False, response_digest=digest)
+        try:
+            rows = tuple(
+                LedgerRow(
+                    str(row["instanceId"]),
+                    row["challengeId"],
+                    row.get("userId"),
+                    row.get("teamId"),
+                )
+                for row in data["rows"]
+            )
+            return LedgerPage(
+                status=status,
+                body=raw,
+                rows=rows,
+                page=int(data["page"]),
+                total_pages=int(data["totalPages"]),
+                total_rows=int(data["totalRows"]),
+                complete=True,
+                response_digest=digest,
+            )
+        except (KeyError, TypeError, ValueError):
+            return LedgerPage(status=status, body=raw, page=page, complete=False, response_digest=digest)
 
     def _instance_call(self, method: str, query: str, body: dict[str, Any] | None = None) -> Reply:
         outcome, data, detail = self._plugin_call(method, f"{CHALL_MANAGER}/instance{query}", body)

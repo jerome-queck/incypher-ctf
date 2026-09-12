@@ -44,6 +44,7 @@ from solver.cpa_responses import CPAResponsesModel
 from solver.cpa_service import CPA_CREDENTIAL_FD_ENV, CPA_RESPONSES_URL_ENV, CPALeadPort, CPAService
 from solver.flag import Flags, Pace
 from solver.instance import Instances
+from solver.instance_ledger import AuthenticatedIdentity
 from solver.intake import Intake
 from solver.intake_qualification import NoCoherentSnapshot
 from solver.isolation import IMAGE_ID as STRICT_IMAGE_ENV
@@ -225,7 +226,22 @@ def _run_admitted(
         raise Refusal(f"{boot.MARK} the first Intake did not believe the Board — {opening.detail}")
 
     steps = Steps()
-    instances = Instances(board, recorder, step_numbers=steps.spend)
+    ledger_identity = None
+    ledger_broker = None
+    if board_broker_path is not None:
+        ledger_identity = AuthenticatedIdentity(
+            discovered.instance_ledger_mode,
+            discovered.authenticated_user_id,
+            discovered.authenticated_team_id,
+        )
+        ledger_broker = board
+    instances = Instances(
+        board,
+        recorder,
+        step_numbers=steps.spend,
+        ledger_identity=ledger_identity,
+        ledger_broker=ledger_broker,
+    )
     # Triage's last resort, and the one collaborator only this file can hand it: what the Board
     # states and what its solves say are read off the Board itself, and the model is asked about
     # whatever neither of them could rank. Left at its default nothing is asked at all, and a Board

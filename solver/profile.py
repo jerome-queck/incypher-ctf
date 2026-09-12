@@ -122,6 +122,9 @@ class Profile:
     # and taking it would end the Run before it started.
     board_window: dict[str, Any] = field(default_factory=dict)
     board_window_observations: dict[str, Any] = field(default_factory=dict)
+    authenticated_user_id: int = 0
+    authenticated_team_id: int | None = None
+    instance_ledger_mode: str = ""
 
     @property
     def instances_reachable(self) -> bool:
@@ -150,6 +153,9 @@ class Profile:
             "configs_outcome": self.configs_outcome,
             "board_window": self.board_window,
             "board_window_observations": self.board_window_observations,
+            "authenticated_user_id": self.authenticated_user_id,
+            "authenticated_team_id": self.authenticated_team_id,
+            "instance_ledger_mode": self.instance_ledger_mode,
         }
 
 

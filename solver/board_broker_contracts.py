@@ -12,6 +12,7 @@ from solver.board import Held, Mana, Reply, Standing, Verdict
 from solver.capability import CapabilityBinding
 from solver.event_store_contracts import InvalidEventError
 from solver.intake_evidence import PRIVATE_BOARD_RESPONSE_CLASS
+from solver.instance_ledger import LedgerPage
 
 BOARD_BROKER_RECORDED = "board-broker.recorded"
 BOARD_BROKER_SOCKET_ENV = "INCYPHER_BOARD_BROKER_SOCKET"
@@ -34,6 +35,7 @@ class BoardOperation(str, enum.Enum):
     INSTANCE_TERMINATE = "instance-terminate"
     INSTANCE_MANA = "instance-mana"
     INSTANCES_HELD = "instances-held"
+    INSTANCE_LEDGER_PAGE = "instance-ledger-page"
 
 
 class BoardOutcome(str, enum.Enum):
@@ -119,6 +121,7 @@ BoardValue = (
     | Reply
     | Mana
     | tuple[Held, ...]
+    | LedgerPage
 )
 
 
@@ -226,6 +229,16 @@ def _encode_value(operation: BoardOperation, value: BoardValue | None) -> object
         return vars(value)
     if operation is BoardOperation.INSTANCES_HELD:
         return {"held": [vars(row) for row in value]}
+    if operation is BoardOperation.INSTANCE_LEDGER_PAGE:
+        return {
+            "status": value.status,
+            "rows": [row.document() for row in value.rows],
+            "page": value.page,
+            "total_pages": value.total_pages,
+            "total_rows": value.total_rows,
+            "complete": value.complete,
+            "response_digest": value.response_digest,
+        }
     raise TypeError("Board broker value does not match its operation")
 
 
@@ -260,6 +273,18 @@ def _decode_value(operation: BoardOperation, value: object) -> BoardValue | None
         return Mana(**value)
     if operation is BoardOperation.INSTANCES_HELD:
         return tuple(Held(**row) for row in value["held"])
+    if operation is BoardOperation.INSTANCE_LEDGER_PAGE:
+        from solver.instance_ledger import LedgerPage, LedgerRow
+
+        return LedgerPage(
+            status=int(value["status"]),
+            rows=tuple(LedgerRow(**row) for row in value["rows"]),
+            page=int(value["page"]),
+            total_pages=int(value["total_pages"]),
+            total_rows=int(value["total_rows"]),
+            complete=bool(value["complete"]),
+            response_digest=str(value["response_digest"]),
+        )
     raise ValueError("Board broker operation has no typed value")
 
 

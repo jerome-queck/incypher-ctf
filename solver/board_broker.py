@@ -79,6 +79,7 @@ _SCOPE = {
     BoardOperation.INSTANCE_TERMINATE: "board.instance.effect",
     BoardOperation.INSTANCE_MANA: "board.instance.read",
     BoardOperation.INSTANCES_HELD: "board.instance.read",
+    BoardOperation.INSTANCE_LEDGER_PAGE: "board.instance.read",
 }
 
 _EFFECTS = {
@@ -604,6 +605,8 @@ class BoardBrokerRuntime:
             return board.mana()
         if operation is BoardOperation.INSTANCES_HELD:
             return board.instances_held()
+        if operation is BoardOperation.INSTANCE_LEDGER_PAGE:
+            return board.instance_ledger_page(int(arguments["page"]))
         raise ValueError("unsupported Board operation")
 
     def _failure_outcome(self, operation: BoardOperation) -> BoardOutcome:
@@ -734,6 +737,9 @@ class BoardBrokerClient:
     def instance(self, operation: BoardOperation, challenge_id: int | str | None = None) -> BoardBrokerResult:
         return self._execute(operation, **({} if challenge_id is None else {"challenge_id": challenge_id}))
 
+    def instance_ledger_page(self, page: int) -> BoardBrokerResult:
+        return self._execute(BoardOperation.INSTANCE_LEDGER_PAGE, page=page)
+
     def _execute(self, operation: BoardOperation, **arguments) -> BoardBrokerResult:
         if self._closed:
             return BoardBrokerResult(operation, BoardOutcome.REVOKED)
@@ -795,7 +801,10 @@ class BoardCompatibilityClient:
     def instances_held(self) -> tuple[Held, ...]:
         return self._value(BoardOperation.INSTANCES_HELD)
 
-    def _value(self, operation: BoardOperation, **arguments):
+    def instance_ledger_page(self, page: int):
+        return self._result(BoardOperation.INSTANCE_LEDGER_PAGE, page=page)
+
+    def _result(self, operation: BoardOperation, **arguments) -> BoardBrokerResult:
         response = _ipc_request(
             self._socket_path,
             {
@@ -805,7 +814,10 @@ class BoardCompatibilityClient:
                 "arguments": arguments,
             },
         )
-        result = _decode_ipc_result(response)
+        return _decode_ipc_result(response)
+
+    def _value(self, operation: BoardOperation, **arguments):
+        result = self._result(operation, **arguments)
         if result.outcome is not BoardOutcome.ANSWERED or result.value is None:
             raise BoardFailure(f"Board broker classified {operation.value} as {result.outcome.value}")
         return result.value
