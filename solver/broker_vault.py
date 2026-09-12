@@ -54,9 +54,11 @@ class BrokerVaultProcess:
 
     @property
     def service_path(self) -> Path:
-        if self.owner is not Broker.BOARD:
-            raise ValueError("only the Board owner exposes a Board service")
-        return self._runtime / "board.sock"
+        if self.owner is Broker.BOARD:
+            return self._runtime / "board.sock"
+        if self.owner is Broker.CODEX:
+            return self._runtime / "codex.sock"
+        raise ValueError("this broker owner exposes no service")
 
     def configure_board(self, *, state: Path, run_id: str, boot_id: str, url: str) -> Path:
         if self.owner is not Broker.BOARD:
@@ -80,6 +82,23 @@ class BrokerVaultProcess:
         ):
             raise RuntimeError("Board owner returned an invalid service endpoint")
         self._profile_handle = response["profile_handle"]
+        return self.service_path
+
+    def configure_codex(self, *, state: Path, run_id: str, boot_id: str, model: str, probe) -> Path:
+        if self.owner is not Broker.CODEX:
+            raise ValueError("only the Codex owner accepts Codex configuration")
+        request = {
+            "command": "configure-codex",
+            "state": str(Path(state)),
+            "run_id": run_id,
+            "boot_id": boot_id,
+            "model": model,
+            "probe": probe.document(),
+        }
+        self._channel.sendall(canonical_bytes(request) + b"\n")
+        response = json.loads(receive_line(self._channel, failure="Codex owner did not configure its service"))
+        if response != {"path": str(self.service_path), "status": "ready"}:
+            raise RuntimeError("Codex owner returned an invalid service endpoint")
         return self.service_path
 
     @property
@@ -110,6 +129,7 @@ class BrokerVaultProcess:
 
     def _cleanup_runtime(self) -> None:
         (self._runtime / "board.sock").unlink(missing_ok=True)
+        (self._runtime / "codex.sock").unlink(missing_ok=True)
         (self._runtime / "custody.sock").unlink(missing_ok=True)
         try:
             self._runtime.rmdir()

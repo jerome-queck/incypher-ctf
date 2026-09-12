@@ -387,7 +387,7 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
     trace = []
 
     class ConfiguredCustody(EmptyCustody):
-        endpoints = {Broker.BOARD: tmp_path / "board.sock"}
+        endpoints = {Broker.BOARD: tmp_path / "board.sock", Broker.CODEX: tmp_path / "codex.sock"}
         holdings = {Broker.BOARD: ("CTFD_API_TOKEN", "TEAM_KEY")}
         executor_environment = {}
         profile_handles = {Broker.BOARD: "profile-authority"}
@@ -422,6 +422,7 @@ def test_pid_one_main_composes_the_run_controller_behind_pre_authority_checks(tm
         assert environment["INCYPHER_BOARD_BROKER_SOCKET"] == str(tmp_path / "board.sock")
         assert environment["INCYPHER_BOARD_BROKER_HOLDINGS"] == "CTFD_API_TOKEN,TEAM_KEY"
         assert environment["INCYPHER_BOARD_PROFILE_HANDLE"] == "profile-authority"
+        assert environment["INCYPHER_CODEX_CONTROL_SOCKET"] == str(tmp_path / "codex.sock")
         trace.append(f"run-controller:{boot_id}")
         return ExitedBoot(0)
 

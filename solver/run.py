@@ -34,6 +34,8 @@ from solver.board_broker import BoardBrokerClient
 from solver.capability import CapabilityBinding
 from solver.carry import Boundary, label
 from solver.codex import ADAPTER, CLAIM, COMMAND, STOPPED, Credential, Invocation
+from solver.codex_control import CodexControlClient
+from solver.codex_control_native import V1CodexControlAdapter
 from solver.flag import Candidate, Flags, Outcome, Slots
 from solver.instance import Instances, Lease
 from solver.intake import Intake, Sighting
@@ -219,6 +221,7 @@ class Run:
         board_broker_path: Path | None = None,
         board_broker_boot_id: str = "",
         lead_adapter=None,
+        codex_control_path: Path | None = None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -242,6 +245,7 @@ class Run:
         self._board_broker_path = board_broker_path
         self._board_broker_boot_id = board_broker_boot_id
         self._lead_adapter = lead_adapter
+        self._codex_control_path = Path(codex_control_path) if codex_control_path else None
         self._boundaries: dict[int | str, Boundary] = {}
         self._pending: dict[int | str, Pending] = {}
         # Every candidate already put to the submission gate, per Challenge. Turns of one Attempt
@@ -479,7 +483,47 @@ class Run:
             budget_s=held.pick.budget_s,
             lease=held.lease,
         )
-        if self._lead_adapter is not None:
+        if self._codex_control_path is not None:
+            turn_index = held.turns + 1
+            request_id = f"{held.attempt_id}:turn:{turn_index}"
+            binding = CapabilityBinding(
+                self._recorder.run_id,
+                self._board_broker_boot_id,
+                held.generation_id,
+                "lane-1",
+                held.attempt_id,
+                request_id,
+            )
+            client = CodexControlClient.open(self._codex_control_path, binding)
+            try:
+                measured = V1CodexControlAdapter(
+                    client,
+                    self._chain[0].model,
+                    self._invocation.reasoning_effort,
+                ).turn(
+                    text,
+                    request_id=request_id,
+                    turn_id=request_id,
+                    workdir=held.workdir,
+                    attempt_id=held.attempt_id,
+                    deadline=held.deadline.at,
+                    first_step=self._steps.next_index(),
+                )
+                if measured.text:
+                    said.append(measured.text)
+                for item in measured.stream:
+                    step_index = int(item["step_index"])
+                    self._steps.reached(step_index)
+                    if item["kind"] == COMMAND and item["tool"] != ADAPTER:
+                        observed += 1
+                        watch.observed(
+                            str(item["command"]),
+                            exit_code=item["exit_code"],
+                            digest=str(item["digest"]),
+                        )
+            finally:
+                client.close()
+        elif self._lead_adapter is not None:
             outcome = self._lead_adapter(
                 V1LeadTurn(
                     prompt=text,
