@@ -92,7 +92,9 @@ jobs:
       # changed rule on the Monday run rather than inside somebody's pull request. What the
       # linter enforces is pinned where it belongs — `pyproject.toml` names the rule set rather
       # than inheriting whichever one ships.
-      - run: python -m pip install --disable-pip-version-check ruff pytest
+      # `cryptography` deliberately floats here as an API-compatibility check; the image job below
+      # installs and probes the actual `python3-cryptography` runtime package shipped by Docker.
+      - run: python -m pip install --disable-pip-version-check cryptography ruff pytest
 
       - run: ruff check --output-format=github .
 

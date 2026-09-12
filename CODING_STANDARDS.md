@@ -154,11 +154,13 @@ fit this rule trades away regenerating it, and buys a tidier `ls`.
 
 ### Standard library only, inside the Solver image
 
-Anything that has to run in the Solver container imports from the standard library and nothing
-else. The image ships with nothing installed and the competition run is unattended, so a missing
-dependency is not a thing anyone is there to fix. `solver/__init__.py` states the constraint for
-the whole package, and `scripts/ctfd_probe.py` states it again in its own module docstring —
-both hold to it.
+Anything that has to run in the Solver container imports from the standard library except the exact
+Candidate vault. ADR-0045 requires that vault to be encrypted; this repository implements that
+requirement with `cryptography`'s reviewed AES-GCM rather than a locally designed cipher. The
+dependency is an immutable `Dockerfile` input with a behavioral build probe. The competition run is
+unattended, so an undeclared or runtime-installed dependency is not a thing anyone is there to fix.
+`solver/__init__.py` states the constraint for the package, and `scripts/ctfd_probe.py` states the
+stricter constraint for its own seam.
 
 ### Where a new file goes
 

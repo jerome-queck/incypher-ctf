@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:
+    from solver.candidate_admission_contracts import CandidateAdmissionRecorded
     from solver.capability_event_contracts import CapabilityFact
 
 CANONICAL_SCHEMA_VERSION = 1
@@ -719,10 +720,20 @@ class CapabilityCustodyRecorded:
         validate_capability_fact(payload, sequence=sequence)
 
 
-CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorded | CapabilityCustodyRecorded
+if TYPE_CHECKING:
+    CanonicalEvent = (
+        ObservationRecorded
+        | LifecycleRecorded
+        | WorkGenerationRecorded
+        | CapabilityCustodyRecorded
+        | CandidateAdmissionRecorded
+    )
+else:
+    CanonicalEvent = ObservationRecorded | LifecycleRecorded | WorkGenerationRecorded | CapabilityCustodyRecorded
 
 
 def event_contract(event_type: str):
+    from solver.candidate_admission_contracts import CANDIDATE_ADMISSION_RECORDED, CandidateAdmissionRecorded
     from solver.cpa_contracts import CPA_HARNESS_RECORDED, CPAHarnessRecorded
     from solver.attempt_executor_contracts import AttemptEnvelopeRecorded
     from solver.attempt_process_contracts import ATTEMPT_PROCESS_RECORDED, AttemptProcessRecorded
@@ -767,6 +778,7 @@ def event_contract(event_type: str):
         TRIAGE_JUDGEMENT_RECORDED: TriageJudgementRecorded,
         TOOL_CONTROL_RECORDED: ToolControlRecorded,
         TARGET_EXCHANGE_RECORDED: TargetBrokerRecorded,
+        CANDIDATE_ADMISSION_RECORDED: CandidateAdmissionRecorded,
     }
     return contracts.get(event_type)
 

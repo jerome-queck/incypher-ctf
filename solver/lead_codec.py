@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict
 
 from solver.event_store_storage import canonical_bytes, digest_bytes
@@ -70,7 +71,10 @@ def proposal_requires_result(proposal: LeadProposal) -> bool:
 
 
 def proposal_document(proposal: LeadProposal) -> dict[str, object]:
-    return {"kind": proposal_kind(proposal), **asdict(proposal)}
+    document = {"kind": proposal_kind(proposal), **asdict(proposal)}
+    if isinstance(proposal, CandidateProposal) and proposal.derivation is None:
+        document.pop("derivation")
+    return document
 
 
 def decode_proposal(document: object) -> LeadProposal:
@@ -112,7 +116,11 @@ def valid_proposal(proposal: LeadProposal) -> bool:
     if isinstance(proposal, ToolProposal):
         return _text(proposal.tool) and _text_tuple(proposal.arguments, empty=True)
     if isinstance(proposal, CandidateProposal):
-        return _text(proposal.value) and _text_tuple(proposal.evidence_refs)
+        return (
+            _text(proposal.value)
+            and _text_tuple(proposal.evidence_refs)
+            and (proposal.derivation is None or isinstance(proposal.derivation, Mapping))
+        )
     if isinstance(proposal, ProgressProposal):
         return _text(proposal.detail)
     if isinstance(proposal, StopProposal):

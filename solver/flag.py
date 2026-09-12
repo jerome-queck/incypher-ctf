@@ -81,6 +81,7 @@ from pathlib import Path, PurePosixPath
 
 from solver.board import Board, Verdict
 from solver.carry import DERIVED
+from solver.candidate_template import describes_template
 from solver.instance import Instances, Lease, submission_shape
 from solver.record import NO_MODEL, SOURCE_SOLVER, Recorder
 from solver.shell import run
@@ -146,20 +147,6 @@ NEEDS_THE_SOLVERS_OWN_WORK = (UNVERIFIED, GUESSED, CROWDED)
 # `REDACTED`. A heuristic and a parameter like every threshold here: a real Flag themed on one of
 # these words (`…{fake_solved_it}`) keeps its other segments, so it is the *only* content being one
 # of these that trips the rule, never a mention of one.
-PLACEHOLDERS = frozenset(
-    {
-        "flag", "fake", "example", "placeholder", "redacted", "sample", "changeme",
-        "dummy", "todo", "your", "here", "paste", "insert", "xxx", "xxxx", "test",
-    }
-)  # fmt: skip
-
-# The regex fragments a literal Flag does not carry. Character-class brackets and escapes are the
-# reliable half — a base64 Flag holds `+` `/` `=` but never `[` `]` `\` — so a bare quantifier is
-# not enough on its own and only a quantifier *bound to* a class or group counts. `[A-z0-9_-]+`
-# trips on the brackets; `zephyr{a+b=c}` trips on none of them.
-PATTERN_METACHARACTERS = ("[", "]", "\\")
-PATTERN_QUANTIFIERS = (".*", ".+", "]+", "]*", ")+", ")*", r"\d", r"\w", r"\s")
-
 # The three tools this module spends Steps on. The first and the last are the Solver talking *about*
 # candidates rather than a command producing one, so the sweep never reads their bodies; the replay
 # is a real command and its output is an Observation like any other.
@@ -495,7 +482,7 @@ class Flags:
                 # A template outranks even a crowd's demotion downward: `_describes` reads the
                 # string alone, so a candidate that is a Flag's shape is one wherever it was seen
                 # and no clean second sighting can promote it.
-                candidate = Candidate(text, TEMPLATE if _describes(text) else crowd, command=command, ref=ref)
+                candidate = Candidate(text, TEMPLATE if describes_template(text) else crowd, command=command, ref=ref)
                 # A later command that emitted it alone outranks an earlier one that emitted it in a
                 # crowd: the crowd says the *command* was reading a list, never that the string is
                 # wrong, so one clean sighting is still the Solver's own work finding it.
@@ -504,7 +491,7 @@ class Flags:
         for text in (match for prose in said for match in _matches(prose.encode(), matchers)):
             # A string a command produced is already here and outranks both — the Board having also
             # stated it says nothing about whether the Solver later found it.
-            nominated = TEMPLATE if _describes(text) else (STATED if text in by_the_board else UNVERIFIED)
+            nominated = TEMPLATE if describes_template(text) else (STATED if text in by_the_board else UNVERIFIED)
             found.setdefault(text, Candidate(text, nominated))
         ordered = tuple(sorted(found.values(), key=lambda candidate: candidate.rank))
         self._record(
@@ -738,33 +725,6 @@ def _crowded(emitted: Sequence[str]) -> bool:
     how junk reached the strength this module reserves for a Board's last attempt — never runs.
     """
     return len(emitted) > CROWD_LIMIT
-
-
-def _describes(text: str) -> bool:
-    """Whether a candidate is a Flag's *shape* rather than a Flag — a pattern or a placeholder.
-
-    Two heuristics, and each is one shape a live `compfest-2026-seg2` submission was. Both read the
-    string alone, because that is the whole point: `COMPFEST18{[A-z0-9_-]+}` and
-    `COMPFEST18{FAKE_FLAG}` were seen in genuine command output — the sweep read the provenance
-    right — so no rule that turns on *where* a candidate came from could ever catch them (#150).
-
-    A **pattern** carries the regex fragments a literal Flag does not: a character class in
-    brackets, an escape, or a quantifier bound to a class or group. Deliberately not a bare `+` or
-    `*`, which a base64 Flag holds legitimately — `zephyr{a+b/c=}` is a value, `[A-z0-9_-]+` is not.
-
-    A **placeholder** is a wrapped body that is nothing but the words a handout puts where the Flag
-    will go, joined by separators. The body is taken from inside the outermost braces so the
-    wrapper's own name is not one of the words weighed; a Board that wraps some other way is read by
-    the pattern half alone. `FAKE_FLAG` is `{fake, flag}`, both placeholders; a real Flag themed on
-    the word — `{fake_solved_it}` — keeps `solved` and `it` and is left alone.
-    """
-    if ("[" in text and "]" in text) or "\\" in text:
-        return True
-    if any(fragment in text for fragment in PATTERN_QUANTIFIERS):
-        return True
-    body = text[text.find("{") + 1 : text.rfind("}")] if "{" in text and "}" in text else ""
-    words = [word for word in re.split(r"[^0-9A-Za-z]+", body.lower()) if word]
-    return bool(words) and all(word in PLACEHOLDERS for word in words)
 
 
 def _refuses(candidate: Candidate, slots: Slots, spent_here: int, wrong_here: int, *, last_call: bool) -> str:

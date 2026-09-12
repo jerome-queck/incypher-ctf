@@ -162,11 +162,11 @@ RUN set -eu; \
     codex-code-mode-host --version >/dev/null 2>&1 || codex-code-mode-host --help >/dev/null 2>&1; \
     rm "$probe"
 
-# The second list, and it has a different provenance from the one above: those tools were designed
-# in from ADR-0005's cascade, these were **measured** — every one is a binary or a module the model
-# itself reached for and did not find, across the 121 `shell` Steps of the `brunner-gate-2` and
-# `brunner-gate-3` Runs on 26 August 2026 (#99). Eighteen of those Steps ended `command not found`.
-# ADR-0024 is the per-line argument and the list of what was declined.
+# The second list has two explicit provenance classes. Most entries were **measured** — binaries or
+# modules the model reached for and did not find across the 121 `shell` Steps of `brunner-gate-2`
+# and `brunner-gate-3` on 26 August 2026 (#99); eighteen ended `command not found`. A line marked
+# **authority dependency** is instead designed runtime support required by a controlling ADR and
+# behaviorally probed below. ADR-0024 is the measured per-line argument and declined list.
 #
 # It sits **after** the probe above rather than beside the floor list, for one reason that is pure
 # build mechanics: the `codex` layer downloads ~100 MB pinned by digest, and a package added above
@@ -213,6 +213,9 @@ RUN apt-get update \
       python3-pil \
       # `pip` itself. ADR-0024 argues the line; the marker removed below is what makes it true.
       python3-pip \
+      # **Authority dependency:** ADR-0045 requires encrypted exact Candidate custody. Reviewed
+      # AES-GCM keeps key material out of process arguments; its behavior is probed below.
+      python3-cryptography \
       # 1 package on top of what is here. The model reached for it once, and a PDF that `pdftotext`
       # renders as nothing is often one whose text is in an object `pypdf` will hand over.
       python3-pypdf \
@@ -291,6 +294,9 @@ i.save('one.png'); i.save('drawn.pdf')"; \
 assert (int(page.mediabox.width), int(page.mediabox.height)) == (240, 60), page.mediabox"; \
     python3 -c "import requests; \
 assert requests.Request('GET', 'http://probe/x', params={'f': 'flag{probe}'}).prepare().url.endswith('f=flag%7Bprobe%7D')"; \
+    python3 -c "from cryptography.hazmat.primitives.ciphers.aead import AESGCM; \
+k=b'k'*32; n=b'n'*12; c=AESGCM(k).encrypt(n,b'flag{probe}',b'vault'); \
+assert AESGCM(k).decrypt(n,c,b'vault') == b'flag{probe}'"; \
     pip3 install --no-index --dry-run pypdf 2>&1 | grep -q 'Requirement already satisfied'; \
     test "$(pip --version | cut -d' ' -f2)" = "$(pip3 --version | cut -d' ' -f2)"; \
     cd /; rm -rf "$work"
