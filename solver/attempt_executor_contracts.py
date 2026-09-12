@@ -85,6 +85,25 @@ class RuntimeBinding:
             raise ValueError("Attempt runtime platform is unsupported")
 
 
+NETWORK_PROBE_KINDS = frozenset({"sibling-target", "board", "research", "control", "private", "undeclared-port"})
+
+
+@dataclass(frozen=True)
+class NetworkProbeDeclaration:
+    kind: str
+    attempted_endpoint_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.kind not in NETWORK_PROBE_KINDS
+            or re.fullmatch(r"[0-9a-f]{64}", self.attempted_endpoint_digest) is None
+        ):
+            raise ValueError("Attempt network probe declaration is invalid")
+
+    def document(self) -> dict[str, str]:
+        return {"kind": self.kind, "attempted_endpoint_digest": self.attempted_endpoint_digest}
+
+
 @dataclass(frozen=True)
 class RuntimeReservation:
     cgroup_path: str
@@ -100,6 +119,8 @@ class AttemptRequest:
     argv: tuple[str, ...]
     workspace: Path
     envelope: EnvelopeSpec
+    lane_id: str = "lane-1"
+    network_probe: NetworkProbeDeclaration | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +218,7 @@ class AttemptEnvelopeRecorded:
     cleanup_complete: bool = False
     declared: Mapping[str, object] | None = None
     observed: Mapping[str, object] | None = None
+    network_probe: NetworkProbeDeclaration | None = None
     ts: str = ""
 
     @property
@@ -233,6 +255,7 @@ class AttemptEnvelopeRecorded:
             "cleanup_complete": self.cleanup_complete,
             "declared": dict(self.declared or {}),
             "observed": dict(self.observed or {}),
+            "network_probe": self.network_probe.document() if self.network_probe else {},
             "ts": self.ts,
             "blob_digest": blob_digest,
             "blob_bytes": blob_bytes,
@@ -259,6 +282,7 @@ class AttemptEnvelopeRecorded:
             "cleanup_complete": bool,
             "declared": dict,
             "observed": dict,
+            "network_probe": dict,
             "ts": str,
             "blob_digest": str,
             "blob_bytes": int,
@@ -288,6 +312,12 @@ class AttemptEnvelopeRecorded:
                 raise InvalidEventError("Attempt-envelope result is untyped", sequence=sequence)
         elif payload["outcome"]:
             raise InvalidEventError("Non-result Attempt-envelope fact carries an outcome", sequence=sequence)
+        probe = payload["network_probe"]
+        if probe:
+            try:
+                NetworkProbeDeclaration(**probe)
+            except (TypeError, ValueError) as error:
+                raise InvalidEventError("Attempt-envelope network probe is invalid", sequence=sequence) from error
 
 
 __all__ = [
@@ -297,6 +327,7 @@ __all__ = [
     "EnvelopeRecord",
     "EnvelopeSpec",
     "NetworkPolicy",
+    "NetworkProbeDeclaration",
     "ProcessLifecycle",
     "ResourceOutcome",
     "RuntimeBinding",

@@ -142,6 +142,21 @@ def test_tool_handle_probe_runs_the_catalogued_fixture_in_the_strict_image(tmp_p
     ]
 
 
+def test_target_broker_probe_runs_inside_the_strict_image(tmp_path: Path) -> None:
+    command = strict_runtime.target_broker_probe_command(image_binding(), tmp_path)
+
+    assert ["--mount", f"type=bind,source={tmp_path},target=/state"] in [
+        command[index : index + 2] for index in range(len(command) - 1)
+    ]
+    assert command[-5:] == [
+        "--entrypoint",
+        "python3",
+        IMAGE_ID,
+        "-m",
+        "solver.target_broker_probe",
+    ]
+
+
 class Runner:
     def __init__(
         self,

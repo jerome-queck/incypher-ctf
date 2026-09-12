@@ -176,6 +176,28 @@ def tool_handle_probe_command(
     return command
 
 
+def target_broker_probe_command(binding: RuntimeBinding, state: Path) -> list[str]:
+    """Exercise the hostile worker's sole Target port in the strict image."""
+
+    command = container_command(
+        binding.image_id,
+        env_file=None,
+        state=None,
+        preflight_only=True,
+        binding=binding,
+    )
+    command[-5:] = [
+        "--mount",
+        f"type=bind,source={state},target=/state",
+        "--entrypoint",
+        "python3",
+        binding.image_id,
+        "-m",
+        "solver.target_broker_probe",
+    ]
+    return command
+
+
 def _check_result(result: Any, command: list[str]) -> None:
     returncode = getattr(result, "returncode", None)
     if returncode not in (None, 0):
@@ -293,6 +315,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Solver through strict Colima isolation.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("preflight", help="run the image's strict isolation preflight")
+    commands.add_parser("qualify-target", help="prove the hostile worker's Target port")
     run = commands.add_parser("run", help="run the image's Solver entrypoint")
     run.add_argument("--env-file", type=Path, required=True)
     run.add_argument("--state", type=Path, required=True)
@@ -310,6 +333,32 @@ def main(
 
     if arguments.command == "preflight":
         return _launch(env_file=None, state=None, preflight_only=True, runner=command_runner)
+    if arguments.command == "qualify-target":
+        verified = runtime.verify()
+        if verified != 0:
+            return verified
+        cache = REPO_ROOT / ".cache"
+        cache.mkdir(exist_ok=True)
+        binding = build_image(command_runner)
+        try:
+            _checked(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--cgroup-parent",
+                    CGROUP_PARENT,
+                    "--entrypoint",
+                    "/bin/true",
+                    binding.image_id,
+                ],
+                command_runner,
+            )
+            with tempfile.TemporaryDirectory(prefix="target-qualification-", dir=cache) as state:
+                _checked(target_broker_probe_command(binding, Path(state)), command_runner)
+        finally:
+            _checked(["colima", "ssh", "--", "sudo", "rmdir", CGROUP_SOURCE], command_runner)
+        return 0
 
     home_root = Path.home() if home is None else home
     try:

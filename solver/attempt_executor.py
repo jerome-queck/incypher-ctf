@@ -17,6 +17,7 @@ from solver.attempt_executor_contracts import (
     EnvelopeRecord,
     EnvelopeSpec,
     NetworkPolicy,
+    NetworkProbeDeclaration,
     ResourceOutcome,
     RuntimeBinding,
     RuntimeObservation,
@@ -342,6 +343,7 @@ class AttemptExecutor:
             argv=("reconciled",),
             workspace=self._state,
             envelope=_spec_from_document(state["declared"]),
+            network_probe=_probe_from_document(state["network_probe"]),
         )
         if observation.process_lifecycle is not None:
             self._append_process(
@@ -480,6 +482,7 @@ class AttemptExecutor:
             cleanup_complete=cleanup_complete,
             declared=declared,
             observed=observed,
+            network_probe=request.network_probe if request else None,
             ts=self._timestamp(),
         )
         reservation = self._store.reserve(event, blob_digest=EMPTY_BLOB_DIGEST, blob_bytes=0)
@@ -518,6 +521,10 @@ def _spec_from_document(document) -> EnvelopeSpec:
         wall_seconds=float(document["wall_seconds"]),
         cleanup_seconds=float(document["cleanup_seconds"]),
     )
+
+
+def _probe_from_document(document) -> NetworkProbeDeclaration | None:
+    return NetworkProbeDeclaration(**document) if document else None
 
 
 __all__ = [

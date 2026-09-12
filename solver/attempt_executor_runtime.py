@@ -16,17 +16,22 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
 from solver.attempt_executor_contracts import (
     AttemptRequest,
+    EnvelopeSpec,
     ProcessLifecycle,
     ResourceOutcome,
     RuntimeObservation,
+    RuntimeBinding,
     RuntimeReservation,
 )
+from solver.capability import CapabilityBinding
 from solver.attempt_executor_pool import AttemptPool, AttemptSlot
 from solver.attempt_executor_worker import MAX_FRAME, MAX_OUTPUT, encode_frame
+from solver.isolation import STRICT_PROFILE_DIGEST
+from solver.target_broker_contracts import TargetCandidateBinding
 
 
 MAX_WORKSPACE_BYTES = 128 * 1024 * 1024
@@ -36,6 +41,47 @@ MAX_POLL_INTERVAL = 0.025
 
 class RuntimeUnavailable(RuntimeError):
     """No child started because the fixed runtime could not reserve its boundary."""
+
+
+class TargetBroker(Protocol):
+    boot_id: str
+    candidate: TargetCandidateBinding
+
+    def prepare_attempt(self, binding: CapabilityBinding) -> None: ...
+
+    def revoke_generation(self, generation_id: str) -> None: ...
+
+
+class TargetService(Protocol):
+    path: Path
+
+    def start(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class TargetServiceFactory(Protocol):
+    def __call__(self, path: Path, runtime: TargetBroker) -> TargetService: ...
+
+
+class RuntimeInput(Protocol):
+    run_id: str
+    request: AttemptRequest
+    binding: RuntimeBinding
+
+
+class CgroupController(Protocol):
+    def write(self, path: Path, name: str, value: str) -> None: ...
+
+    def counter(self, path: Path, name: str, key: str) -> int: ...
+
+    def kill(self, path: Path) -> None: ...
+
+    def count(self, path: Path) -> int: ...
+
+    def pids(self, path: Path) -> tuple[int, ...]: ...
+
+    def term(self, path: Path, pids: tuple[int, ...]) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -58,8 +104,10 @@ class AttemptRuntime:
         sleep: Callable[[float], None] = time.sleep,
         proc_root: Path = Path("/proc"),
         workspace_limit: int = MAX_WORKSPACE_BYTES,
-        cgroup: Any | None = None,
+        cgroup: CgroupController | None = None,
         gate: Callable[[socket.socket, str, float], int] | None = None,
+        target_broker: TargetBroker | None = None,
+        target_service_factory: TargetServiceFactory | None = None,
     ) -> None:
         self.pool = pool
         self.clock = clock
@@ -68,13 +116,28 @@ class AttemptRuntime:
         self.workspace_limit = workspace_limit
         self.cgroup = cgroup
         self.gate = gate or self._await_gated
+        self.target_broker = target_broker
+        self._target_service_factory = target_service_factory or _target_service
         self._cancelled: set[str] = set()
         self._cancel_lock = threading.Lock()
         self._reservations: dict[str, tuple[AttemptSlot, Path, int, str]] = {}
+        self._target_services: dict[str, TargetService] = {}
+        self._target_socket_inodes: dict[Path, int] = {}
 
-    def prepare(self, envelope_id: str, incoming: Any) -> RuntimeReservation:
+    def prepare(self, envelope_id: str, incoming: RuntimeInput) -> RuntimeReservation:
         """Reserve and configure a childless envelope before canonical launch records."""
 
+        if self.target_broker is not None:
+            candidate = self.target_broker.candidate
+            actual = incoming.binding
+            if (
+                candidate.image_id != actual.image_id
+                or candidate.manifest_digest != actual.image_manifest_digest
+                or candidate.config_digest != actual.image_config_digest
+                or candidate.platform != actual.platform
+                or candidate.profile_digest != STRICT_PROFILE_DIGEST
+            ):
+                raise RuntimeUnavailable("Target broker differs from the admitted Attempt candidate")
         if not self.pool.healthy:
             raise RuntimeUnavailable("Attempt worker pool is unavailable")
         try:
@@ -92,6 +155,31 @@ class AttemptRuntime:
             self.pool.release(slot)
             raise RuntimeUnavailable(f"Attempt envelope preparation failed: {error}") from error
         nonce = secrets.token_hex(16)
+        if self.target_broker is not None:
+            binding = CapabilityBinding(
+                incoming.run_id,
+                self.target_broker.boot_id,
+                incoming.request.generation_id,
+                incoming.request.lane_id,
+                incoming.request.attempt_id,
+                incoming.request.step_id,
+            )
+            service: TargetService | None = None
+            try:
+                self.target_broker.prepare_attempt(binding)
+                service = self._target_service_factory(slot.work_path / ".target.sock", self.target_broker)
+                service.start()
+                # The socket lives inside this slot's private /work bind; only its hostile UID can
+                # traverse the directory, so the pathname itself need not retain controller ownership.
+                service.path.chmod(0o666)
+                self._target_services[envelope_id] = service
+                self._target_socket_inodes[slot.work_path] = service.path.stat().st_ino
+            except (OSError, RuntimeError, ValueError) as error:
+                if service is not None:
+                    service.close()
+                self.target_broker.revoke_generation(binding.generation_id)
+                self.pool.release(slot)
+                raise RuntimeUnavailable(f"Target broker preparation failed: {error}") from error
         self._reservations[envelope_id] = slot, cgroup, baseline_bytes, nonce
         return RuntimeReservation(str(cgroup), slot.uid, nonce)
 
@@ -101,7 +189,7 @@ class AttemptRuntime:
                 return
             self._cancelled.add(envelope_id)
 
-    def launch(self, envelope_id: str, incoming: Any) -> RuntimeObservation:
+    def launch(self, envelope_id: str, incoming: RuntimeInput) -> RuntimeObservation:
         try:
             slot, cgroup, baseline_bytes, nonce = self._reservations[envelope_id]
         except KeyError as error:
@@ -115,6 +203,8 @@ class AttemptRuntime:
                         "nonce": nonce,
                         "argv": list(request.argv),
                         "filesystem_bytes": request.envelope.filesystem_bytes,
+                        "target_socket": "/work/.target.sock" if envelope_id in self._target_services else "",
+                        "target_generation": request.generation_id if envelope_id in self._target_services else "",
                     }
                 )
             )
@@ -143,7 +233,14 @@ class AttemptRuntime:
                 bool(cleanup["complete"]),
             )
         finally:
+            self._close_target(envelope_id)
             self._finish(envelope_id)
+
+    def _close_target(self, envelope_id: str) -> None:
+        service = self._target_services.pop(envelope_id, None)
+        if service is not None:
+            self._target_socket_inodes.pop(service.path.parent, None)
+            service.close()
 
     def reconcile(self, unresolved: tuple[dict[str, object], ...]) -> tuple[RuntimeObservation, ...]:
         return tuple(self._reconcile_one(state) for state in unresolved)
@@ -220,6 +317,7 @@ class AttemptRuntime:
             response = _recv_nonblocking(slot.connection)
             network = bool(response and response.get("network_breach") is True)
             if response is not None:
+                self._close_target(envelope_id)
                 sample = self._sample(request, slot, cgroup, baseline, baseline_bytes)
             cause = _first_cause(
                 cancelled,
@@ -255,7 +353,10 @@ class AttemptRuntime:
         baseline_bytes: int,
     ) -> ResourceSample:
         snapshot = self._cgroup_counters(cgroup)
-        filesystem_bytes, unsafe = _workspace_usage(slot.work_path)
+        filesystem_bytes, unsafe = _workspace_usage(
+            slot.work_path,
+            allowed_socket_inode=self._target_socket_inodes.get(slot.work_path),
+        )
         return ResourceSample(
             counters=snapshot,
             filesystem_bytes=filesystem_bytes,
@@ -317,7 +418,7 @@ class AttemptRuntime:
         self,
         slot: AttemptSlot,
         cgroup: Path,
-        envelope: Any,
+        envelope: EnvelopeSpec,
         cause: ResourceOutcome | None,
         response: dict[str, object] | None,
         nonce: str,
@@ -413,7 +514,7 @@ class AttemptRuntime:
 
     def _observed(
         self,
-        envelope: Any,
+        envelope: EnvelopeSpec,
         baseline: Mapping[str, int],
         snapshot: Mapping[str, int],
         cleanup: Mapping[str, object],
@@ -743,7 +844,7 @@ def _materialize_workspace(
             os.close(descriptor)
 
 
-def _workspace_usage(path: Path) -> tuple[int, bool]:
+def _workspace_usage(path: Path, *, allowed_socket_inode: int | None = None) -> tuple[int, bool]:
     total = 0
     unsafe = False
     try:
@@ -758,7 +859,13 @@ def _workspace_usage(path: Path) -> tuple[int, bool]:
             if stat.S_ISREG(mode):
                 total += entry.stat().st_size
             elif not stat.S_ISDIR(mode):
-                unsafe = True
+                allowed = (
+                    allowed_socket_inode is not None
+                    and entry.name == ".target.sock"
+                    and stat.S_ISSOCK(mode)
+                    and entry.lstat().st_ino == allowed_socket_inode
+                )
+                unsafe = unsafe or not allowed
         except OSError:
             unsafe = True
     return total, unsafe
@@ -811,6 +918,12 @@ def _int_or_none(value: object) -> int | None:
 
 def _nonnegative_int(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def _target_service(path: Path, runtime: TargetBroker) -> TargetService:
+    from solver.target_broker_ipc import TargetBrokerService
+
+    return TargetBrokerService(path, runtime)
 
 
 __all__ = ["AttemptRuntime", "RuntimeUnavailable"]
