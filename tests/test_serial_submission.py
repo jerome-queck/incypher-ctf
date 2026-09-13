@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from solver.board import CORRECT, Verdict
-from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome
+from solver.board_broker_contracts import (
+    BoardBrokerResult,
+    BoardOperation,
+    BoardOutcome,
+    BoardProvenance,
+    SubmissionLedgerValue,
+)
 from solver.capability import CapabilityBinding
 from solver.candidate_admission_contracts import (
     CandidateDisposition,
@@ -199,7 +205,7 @@ def test_production_identity_composition_replays_epoch_and_binds_canonical_conte
                 ),
                 close=lambda: (_ for _ in ()).throw(OSError("secret close")),
             ),
-            "board-broker:timeout",
+            "board-broker:close-failed",
         ),
     ],
 )
@@ -212,6 +218,42 @@ def test_reconciliation_probe_sanitizes_transport_failures(factory, source):
     evidence = probe(SimpleNamespace(effect_id="effect"))
     assert evidence.source == source
     assert "secret" not in evidence.source
+
+
+def test_close_failure_disqualifies_an_exact_authenticated_answer():
+    complete = CompleteSubmissionIdentity("board-1", 7, "revision-1", "static:board-1", "b" * 64, 1)
+    row = {
+        "board_row_id": "row-1",
+        "row_type": "submission",
+        "submitted_at": "2026-09-13T00:00:00Z",
+        "request_id": "request-1",
+        "verdict": "correct",
+        "candidate_id": "a" * 64,
+        "supplied_value_digest": complete.candidate_digest,
+        "effect_id": complete.effect_id,
+        "submission_epoch": 1,
+        "complete_identity": complete.document(),
+    }
+    result = BoardBrokerResult(
+        BoardOperation.SUBMISSION_LEDGER,
+        BoardOutcome.ANSWERED,
+        SubmissionLedgerValue(row),
+        BoardProvenance(
+            endpoint="submission-ledger",
+            classified_event_id="classified-1",
+            binding_digest="binding-1",
+            peer_identity_digest="peer-1",
+        ),
+        "request-1",
+    )
+    client = SimpleNamespace(
+        submission_ledger=lambda _effect: result,
+        close=lambda: (_ for _ in ()).throw(OSError("secret close")),
+    )
+    evidence = broker_evidence_probe(lambda *_args, **_kwargs: client, Path("board.sock"), BINDING)(
+        SimpleNamespace(effect_id=complete.effect_id)
+    )
+    assert evidence == Evidence.unsettled("board-broker:close-failed")
 
 
 def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_path):

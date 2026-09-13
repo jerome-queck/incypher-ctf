@@ -80,8 +80,7 @@ def broker_evidence_probe(open_client: Callable, socket_path, binding):
             try:
                 client.close()
             except Exception:
-                if evidence is None:
-                    evidence = Evidence.unsettled("board-broker:close-failed")
+                evidence = Evidence.unsettled("board-broker:close-failed")
         return evidence or Evidence.unsettled("board-broker:unavailable")
 
     return probe
