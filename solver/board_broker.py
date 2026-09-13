@@ -351,23 +351,6 @@ class BoardBrokerRuntime:
             return BoardBrokerResult(operation, BoardOutcome.CAPABILITY_REFUSED)
         request_id = self._next_id()
         ledger_identity = arguments.get("complete_identity") if operation is BoardOperation.SUBMIT else None
-        if ledger_identity is not None:
-            from solver.submission.ambiguity_types import CompleteSubmissionIdentity
-            from solver.submission.ledger import SubmissionLedgerPhase, SubmissionLedgerRecorded
-
-            identity = CompleteSubmissionIdentity(**dict(ledger_identity))
-            self._store.append(
-                SubmissionLedgerRecorded(
-                    f"{request_id}:intent",
-                    SubmissionLedgerPhase.INTENDED,
-                    request_id,
-                    str(arguments["candidate_id"]),
-                    str(arguments["flag"]),
-                    identity,
-                    self._timestamp(),
-                ),
-                body=str(arguments["flag"]).encode(),
-            )
         request_digest = _request_digest(operation, arguments)
         try:
             self._store.append(
@@ -385,6 +368,26 @@ class BoardBrokerRuntime:
             )
         except (OSError, RuntimeError, ValueError):
             return BoardBrokerResult(operation, BoardOutcome.RESERVATION_REFUSED)
+        if ledger_identity is not None:
+            from solver.submission.ambiguity_types import CompleteSubmissionIdentity
+            from solver.submission.ledger import SubmissionLedgerPhase, SubmissionLedgerRecorded
+
+            try:
+                identity = CompleteSubmissionIdentity(**dict(ledger_identity))
+                self._store.append(
+                    SubmissionLedgerRecorded(
+                        f"{request_id}:intent",
+                        SubmissionLedgerPhase.INTENDED,
+                        request_id,
+                        str(arguments["candidate_id"]),
+                        str(arguments["flag"]),
+                        identity,
+                        self._timestamp(),
+                    ),
+                    body=str(arguments["flag"]).encode(),
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                return BoardBrokerResult(operation, BoardOutcome.RESERVATION_REFUSED, request_id=request_id)
         self._wire().clear()
         value = None
         try:
