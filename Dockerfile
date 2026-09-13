@@ -323,6 +323,29 @@ RUN set -eu; \
       rm -rf /var/lib/apt/lists/*; \
     fi; \
     rm /tmp/tool-supply-apt-packages.txt
+ARG MICROMAMBA_VERSION=2.8.1-0
+ARG MICROMAMBA_SHA256_ARM64=e5ba23b5945aa49dfd11022e592a510d2686a8feee810e00140b73c9fdf0ba2a
+ARG MICROMAMBA_SHA256_AMD64=9689782d863c05a1bf5d2d371ba527104e7a4eb4310c1637d8653b751aed9c82
+COPY scripts/verify_sage_closure.py /tmp/verify-sage-closure.py
+COPY tool-supply/generated/rootfs/opt/solver/tool-supply/tool-crypto/closure/sage-linux-*.explicit /tmp/sage-closure/
+COPY tool-supply/generated/rootfs/opt/solver/tool-supply/tool-crypto/closure/sage-linux-*.json /tmp/sage-closure/
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) conda_arch=aarch64; micromamba_sha="$MICROMAMBA_SHA256_ARM64" ;; \
+      amd64) conda_arch=64; micromamba_sha="$MICROMAMBA_SHA256_AMD64" ;; \
+      *) echo "no Sage closure is mapped for TARGETARCH='$TARGETARCH'" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 5 -o /tmp/micromamba \
+      "https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-linux-${conda_arch}"; \
+    printf '%s  %s\n' "$micromamba_sha" /tmp/micromamba | sha256sum -c -; \
+    chmod 0755 /tmp/micromamba; \
+    /tmp/micromamba create --yes --no-rc --prefix /usr/local/sage \
+      --file "/tmp/sage-closure/sage-linux-${TARGETARCH}.explicit"; \
+    python3 /tmp/verify-sage-closure.py /usr/local/sage \
+      "/tmp/sage-closure/sage-linux-${TARGETARCH}.json" \
+      "/tmp/sage-closure/sage-linux-${TARGETARCH}.explicit"; \
+    rm -rf /root/.cache/mamba /root/.local/share/mamba /tmp/micromamba \
+      /tmp/verify-sage-closure.py /tmp/sage-closure
 COPY tool-supply/generated/rootfs/ /
 COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json /opt/solver/tool-supply/
 COPY solver/ solver/

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VERIFY = ROOT / "scripts" / "verify_runtime_evidence.py"
 SOURCE = ROOT / "docs/evidence/runtime-qualification-v2/293-serial-submission"
 INCIDENT = ROOT / "docs/evidence/runtime-qualification-v2/296-incident-containment"
+CRYPTO = ROOT / "docs/evidence/runtime-qualification-v2/299-tool-crypto"
 HISTORICAL = ROOT / "docs/evidence/runtime-qualification-v1/269-strict-isolation-preflight"
 
 
@@ -34,9 +35,9 @@ def test_v1_capsule_remains_verifiable_at_its_sealed_historical_fixed_point(tmp_
     assert result.returncode == 0
 
 
-def test_v2_candidate_keeps_submission_and_incident_capsules_at_one_fixed_point():
+def test_v2_candidate_keeps_submission_incident_and_crypto_capsules_at_one_fixed_point():
     result = subprocess.run(
-        ["python3", str(VERIFY), str(SOURCE), str(INCIDENT)],
+        ["python3", str(VERIFY), str(SOURCE), str(INCIDENT), str(CRYPTO)],
         capture_output=True,
         text=True,
         check=False,

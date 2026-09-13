@@ -27,6 +27,7 @@ RANGE_SEGMENT_PATTERN = re.compile(r"(?:^|[.+:~_-])[xX](?:$|[.+:~_-])")
 class PackageLock:
     name: str
     version: str
+    ecosystem: str = "apt"
 
 
 @dataclass(frozen=True)
@@ -85,7 +86,10 @@ class ComponentLock:
         record = asdict(self)
         record["platforms"] = list(self.platforms)
         record["capability_ids"] = list(self.capability_ids)
-        record["packages"] = [asdict(package) for package in self.packages]
+        record["packages"] = [
+            {key: value for key, value in asdict(package).items() if key != "ecosystem" or value != "apt"}
+            for package in self.packages
+        ]
         record["files"] = [asdict(declared_file) for declared_file in self.files]
         record["version_argv"] = list(self.version_argv)
         if self.interpreter is None:
@@ -133,6 +137,7 @@ class AssemblyPlan:
                 f"{package.name}={re.sub(r'\+b\d+$', '*', package.version)}"
                 for component in self.components
                 for package in component.packages
+                if package.ecosystem == "apt"
             }
         )
         return ("\n".join(packages) + ("\n" if packages else "")).encode()
@@ -177,11 +182,16 @@ def exact_version(value: object, kind: str, identity: str) -> str:
 
 
 def parse_package(value: object, component_id: str) -> PackageLock:
-    item = object_with_keys(value, {"name", "version"}, f"package in {component_id}")
+    if not isinstance(value, Mapping) or set(value) not in ({"name", "version"}, {"name", "version", "ecosystem"}):
+        raise ValueError(f"package in {component_id} has unknown or missing fields")
+    item = cast(Mapping[str, object], value)
     name = item["name"]
     if not isinstance(name, str) or not PACKAGE_PATTERN.fullmatch(name):
         raise ValueError(f"invalid package name: {name}")
-    return PackageLock(name, exact_version(item["version"], "package", f"{component_id}/{name}"))
+    ecosystem = item.get("ecosystem", "apt")
+    if ecosystem not in {"apt", "conda"}:
+        raise ValueError(f"invalid package ecosystem: {component_id}/{name}")
+    return PackageLock(name, exact_version(item["version"], "package", f"{component_id}/{name}"), str(ecosystem))
 
 
 def parse_file(value: object, profile_id: str) -> FileLock:
@@ -405,7 +415,8 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
                 raise ValueError(f"capability policy has an invalid input kind: {component_id}/{capability_id}")
             if policy["network"] not in {"deny", "target-broker"}:
                 raise ValueError(f"capability policy has an invalid network class: {component_id}/{capability_id}")
-            if not isinstance(policy["output_schema"], str) or not policy["output_schema"].startswith("resident."):
+            schema_prefix = "resident." if profile_id == "resident" else f"{profile_id}."
+            if not isinstance(policy["output_schema"], str) or not policy["output_schema"].startswith(schema_prefix):
                 raise ValueError(f"capability policy has an invalid output schema: {component_id}/{capability_id}")
             for limit in (
                 "max_input_bytes",

@@ -10,7 +10,14 @@ from solver.capability import CapabilityAuthority, CapabilityBinding, PeerIdenti
 from solver.redaction import Redactor
 from solver.attempt_executor import AttemptExecutor, EnvelopeSpec, NetworkPolicy, RuntimeBinding
 from solver.event_store import EventStore
-from solver.tool_control import AttemptToolRuntime, ToolComponent, ToolController, ToolInvocation, resident_components
+from solver.tool_control import (
+    AttemptToolRuntime,
+    ToolComponent,
+    ToolController,
+    ToolInvocation,
+    attempt_components,
+    resident_components,
+)
 from solver.tool_control_receipt import manifest_receipt, receipt_document, verify_receipt, write_receipt
 from solver.work_generation import GenerationDisposition, GenerationFence
 from test_attempt_executor import CancellableRuntime, IMAGE_ID, ImmediateRuntime, isolation_receipt, request
@@ -44,6 +51,15 @@ def test_locked_resident_catalogue_exposes_every_capability_with_bounded_policy(
         and item.resource_limits
         for item in components
     )
+
+
+def test_production_attempt_catalogue_includes_qualified_crypto_handles() -> None:
+    inventory = Path(__file__).resolve().parent.parent / "tool-supply" / "generated" / "inventory.json"
+
+    components = attempt_components(inventory)
+
+    assert len(components) == 25
+    assert {item.capability_id for item in components} >= {"crypto.cas", "crypto.lattice", "crypto.hash-crack"}
 
 
 def test_production_runtime_dispatches_every_resident_capability_from_its_locked_policy(
@@ -243,6 +259,7 @@ def test_declared_component_traverses_the_strict_attempt_executor(tmp_path: Path
         boot_id="boot-1",
         peer=PEER,
     )
+    assert runtime._enabled_profiles == ("resident", "tool-crypto")
 
     result = runtime.invoke(
         generation_id=binding.generation_id,

@@ -1,0 +1,1 @@
+{"authority":"locked-package-closure-notices","platforms":{"linux/amd64":{"apt":"apt-amd64.json","sage":"sage-linux-amd64.json"},"linux/arm64":{"apt":"apt-arm64.json","sage":"sage-linux-arm64.json"}},"schema_version":1}

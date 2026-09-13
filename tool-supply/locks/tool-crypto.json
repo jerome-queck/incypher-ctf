@@ -1,0 +1,613 @@
+{
+  "schema_version": 1,
+  "profile_id": "tool-crypto",
+  "components": [
+    {
+      "component_id": "tool-crypto.core",
+      "capability_ids": [
+        "crypto.asymmetric",
+        "crypto.cas",
+        "crypto.classical",
+        "crypto.encoding",
+        "crypto.certificate",
+        "crypto.lattice",
+        "crypto.number-theory",
+        "crypto.hash-crack",
+        "crypto.symmetric-hash"
+      ],
+      "version": "2.0.0",
+      "license_expression": "GPL-2.0-or-later AND MIT AND BSD-3-Clause",
+      "license_classification": "free-redistributable",
+      "source": {
+        "uri": "repo:tool-supply/fixtures/tool-crypto/tool.py",
+        "file": "fixtures/tool-crypto/tool.py"
+      },
+      "license": {
+        "authority": "locked-package-closure-notices",
+        "file": "fixtures/tool-crypto/closure/LICENSES.json"
+      },
+      "entrypoint": "/usr/local/bin/incypher-tool-crypto",
+      "interpreter": "/bin/dash",
+      "version_argv": [
+        "--version"
+      ],
+      "fixture": {
+        "fixture_id": "tool-crypto.semantic-v2",
+        "argv": [
+          "--self-check",
+          "/opt/solver/tool-supply/tool-crypto/input.txt"
+        ],
+        "input_file": "fixtures/tool-crypto/input.txt",
+        "expected_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "timeout_seconds": 60,
+        "capability_stdout_sha256": {
+        "crypto.encoding": "5ceee8fa806f174cb286c43ea44b29a2af3bd2cd7b1ec34ada933be1a80cb92e",
+        "crypto.number-theory": "1f022e6dba6625ea7d2807257e45dab1d1c764411b23489421ecccac68a6d4ba",
+        "crypto.symmetric-hash": "5cc96554260adb9ebe1a7718b936155d65e45c09e1407d1ecc1b75786f7ee6e5",
+        "crypto.classical": "3e1581b5f95b01d83313132205a80ec7694e02268d0174703707f323d792ac9c",
+        "crypto.asymmetric": "ee51aaf6bf871df016f8c9ddf6060476962a15cd1c5a6653f7a5f25b81804cf3",
+        "crypto.cas": "1abf85aeeb4b16bd3c5599d084973e20ab9a39564d090448eadcfcfa98caa891",
+        "crypto.lattice": "e0b204107350b7fe0e5311eb74f541538127e85717a1356d95d0ad385bab8a2c",
+        "crypto.hash-crack": "2ec06c5577ab7fc486771fe73c28623987b45f81129935fcee574673a0678fa1",
+        "crypto.certificate": "1ce2e7d34785db2f9162f2a04235e5102de9658517dbf6f64b5d5c259703d0d5"
+        },
+        "capability_argv": {
+          "crypto.encoding": [
+            "/opt/solver/tool-supply/tool-crypto/encoding.json"
+          ],
+          "crypto.number-theory": [
+            "/opt/solver/tool-supply/tool-crypto/number-theory.json"
+          ],
+          "crypto.symmetric-hash": [
+            "/opt/solver/tool-supply/tool-crypto/symmetric-hash.json"
+          ],
+          "crypto.classical": [
+            "/opt/solver/tool-supply/tool-crypto/classical.json"
+          ],
+          "crypto.asymmetric": [
+            "/opt/solver/tool-supply/tool-crypto/asymmetric.json"
+          ],
+          "crypto.cas": [
+            "/opt/solver/tool-supply/tool-crypto/cas.json"
+          ],
+          "crypto.lattice": [
+            "/opt/solver/tool-supply/tool-crypto/lattice.json"
+          ],
+          "crypto.hash-crack": [
+            "/opt/solver/tool-supply/tool-crypto/password"
+          ],
+          "crypto.certificate": [
+            "/opt/solver/tool-supply/tool-crypto/certificate.pem"
+          ]
+        },
+        "capability_input_files": {
+          "crypto.encoding": [
+            "fixtures/tool-crypto/encoding.json"
+          ],
+          "crypto.number-theory": [
+            "fixtures/tool-crypto/number-theory.json"
+          ],
+          "crypto.symmetric-hash": [
+            "fixtures/tool-crypto/symmetric-hash.json"
+          ],
+          "crypto.classical": [
+            "fixtures/tool-crypto/classical.json"
+          ],
+          "crypto.asymmetric": [
+            "fixtures/tool-crypto/asymmetric.json"
+          ],
+          "crypto.cas": [
+            "fixtures/tool-crypto/cas.json"
+          ],
+          "crypto.lattice": [
+            "fixtures/tool-crypto/lattice.json"
+          ],
+          "crypto.hash-crack": [
+            "fixtures/tool-crypto/hash.txt",
+            "fixtures/tool-crypto/wordlist.txt"
+          ],
+          "crypto.certificate": [
+            "fixtures/tool-crypto/certificate.pem"
+          ]
+        },
+        "capability_expected_facts": {
+          "crypto.encoding": [
+            "schema=tool-crypto.encoding.v1",
+            "flag{encoding-fixture}"
+          ],
+          "crypto.number-theory": [
+            "schema=tool-crypto.number-theory.v1",
+            "crt=23 modulus=105 inverse=4"
+          ],
+          "crypto.symmetric-hash": [
+            "schema=tool-crypto.symmetric-hash.v1",
+            "plaintext=flag{symmetric-hash-fixture}",
+            "sha256=10f694b2f2322155e91fdab525a3cdfb7c7075a584c9d2e58c123c2f1bad9c8b"
+          ],
+          "crypto.classical": [
+            "schema=tool-crypto.classical.v1",
+            "plaintext=FLAG{CLASSICAL}"
+          ],
+          "crypto.asymmetric": [
+            "schema=tool-crypto.asymmetric.v1",
+            "plaintext=flag{asym}"
+          ],
+          "crypto.cas": [
+            "schema=tool-crypto.cas.v1",
+            "roots=[1, 2, 3]"
+          ],
+          "crypto.lattice": [
+            "schema=tool-crypto.lattice.v1",
+          "shortest=[1,-2,1]"
+          ],
+          "crypto.hash-crack": [
+            "schema=tool-crypto.hash-crack.v1",
+            "plaintext=password"
+          ],
+          "crypto.certificate": [
+            "schema=tool-crypto.certificate.v1",
+            "subject=CN=incypher-crypto-fixture",
+            "serial=012B"
+          ]
+        }
+      },
+      "platforms": [
+        "arm64",
+        "amd64"
+      ],
+      "packages": [
+        {
+          "name": "john",
+          "version": "1.9.0-Jumbo-1+git20211102-0kali11"
+        },
+        {
+          "name": "john-data",
+          "version": "1.9.0-Jumbo-1+git20211102-0kali11"
+        },
+        {
+          "name": "libblas3",
+          "version": "3.12.1-8"
+        },
+        {
+          "name": "libdbus-1-3",
+          "version": "1.16.2-5+b1"
+        },
+        {
+          "name": "libexpat1",
+          "version": "2.8.3-1"
+        },
+        {
+          "name": "libffi8",
+          "version": "3.8.0-2"
+        },
+        {
+          "name": "libfplll9",
+          "version": "5.5.0-2"
+        },
+        {
+          "name": "libfplll9-data",
+          "version": "5.5.0-2"
+        },
+        {
+          "name": "libgfortran5",
+          "version": "16.2.0-1"
+        },
+        {
+          "name": "libgomp1",
+          "version": "16.2.0-1"
+        },
+        {
+          "name": "liblapack3",
+          "version": "3.12.1-8"
+        },
+        {
+          "name": "libmpc3",
+          "version": "1.3.1-3"
+        },
+        {
+          "name": "libmpfr6",
+          "version": "4.2.2-3"
+        },
+        {
+          "name": "libncursesw6",
+          "version": "6.6+20260608-2"
+        },
+        {
+          "name": "libpcap0.8t64",
+          "version": "1.10.6-2"
+        },
+        {
+          "name": "libpython3-stdlib",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "libpython3.14-minimal",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "libpython3.14-stdlib",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "libreadline8t64",
+          "version": "8.3-4"
+        },
+        {
+          "name": "libsqlite3-0",
+          "version": "3.53.4-2"
+        },
+        {
+          "name": "media-types",
+          "version": "14.0.0"
+        },
+        {
+          "name": "netbase",
+          "version": "6.5"
+        },
+        {
+          "name": "openssl",
+          "version": "3.6.3-1"
+        },
+        {
+          "name": "python-gmpy2-common",
+          "version": "2.2.1-5"
+        },
+        {
+          "name": "python3",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "python3-cysignals-bare",
+          "version": "1.12.4+ds-2+b1"
+        },
+        {
+          "name": "python3-fpylll",
+          "version": "0.6.4-1.1+b2"
+        },
+        {
+          "name": "python3-gmpy2",
+          "version": "2.2.1-5+b1"
+        },
+        {
+          "name": "python3-minimal",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "python3-mpmath",
+          "version": "1.4.1-3"
+        },
+        {
+          "name": "python3-numpy",
+          "version": "1:2.4.6+ds-4+b1"
+        },
+        {
+          "name": "python3-numpy-dev",
+          "version": "1:2.4.6+ds-4+b1"
+        },
+        {
+          "name": "python3-pycryptodome",
+          "version": "3.20.0+dfsg-3+b1"
+        },
+        {
+          "name": "python3-sympy",
+          "version": "1.14.0-4"
+        },
+        {
+          "name": "python3.14",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "python3.14-minimal",
+          "version": "3.14.6-1"
+        },
+        {
+          "name": "readline-common",
+          "version": "8.3-4"
+        },
+        {
+        "name": "sagelib",
+          "version": "10.9",
+          "ecosystem": "conda"
+        }
+      ],
+      "files": [
+        {
+          "source": "fixtures/tool-crypto/LICENSE.txt",
+          "destination": "/opt/solver/tool-supply/tool-crypto/LICENSE.txt",
+          "sha256": "58755b8e71337177b1dfe00e0fe5d502ca8263743613816f6645c23767a6584e",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/asymmetric.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/asymmetric.json",
+          "sha256": "b12d9a2ca4c08f1b4497421ba69ba3a8bc084f5afffe60f238d7b8946b30b2e3",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/cas.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/cas.json",
+          "sha256": "a95e3eb29be02e2c75178ec4067354da06bb84ba075eb743c7df4480570ed232",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/cas-injection.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/cas-injection.json",
+          "sha256": "7b86a49dcde0dfbdd00540af8e45d7ccbc68e6a2a71a6b736d1957be205725e9",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/certificate.pem",
+          "destination": "/opt/solver/tool-supply/tool-crypto/certificate.pem",
+          "sha256": "ac5894310938696850d68300751f037f2cae9022e6a0e9fb64a3ffce808e03da",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/classical.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/classical.json",
+          "sha256": "8ecedd6c61b5fe7c0a54d91a359ee61008f247d32a9f3e85706438faaf56471c",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/LICENSES.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/LICENSES.json",
+          "sha256": "a1760a4a25b469952a2a6d49e55f3363b3a4bc13384c18508a33fc1b534f2885",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/apt-amd64.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/apt-amd64.json",
+          "sha256": "b440cc29e2f0982c83569e289957131352063db8ffe21c81f4c149b274c3e6ba",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/apt-arm64.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/apt-arm64.json",
+      "sha256": "e756925af8523189b3e2fa6662490a52d63d2f3285c0f00b0d26b3ebc22acf2c",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/sage-linux-amd64.explicit",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/sage-linux-amd64.explicit",
+      "sha256": "b9f455f757e0667397305e030b19fd72cae412d3646bf4edc82703a68449dbee",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/sage-linux-amd64.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/sage-linux-amd64.json",
+      "sha256": "cc453527da66b85d20b62c3c773d2ae6031a583a51a70c2a8ba8f4b340a4d8b3",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/sage-linux-arm64.explicit",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/sage-linux-arm64.explicit",
+      "sha256": "2107a8df8ffda7789f20db7d364ba3406ef093bbc3be71bcf13dbe7a4f288295",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/closure/sage-linux-arm64.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/closure/sage-linux-arm64.json",
+      "sha256": "63006c999e257f4d7a61c7a56b6ec050ba193ada8619f3db6f6bb3b5632cad58",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/encoding.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/encoding.json",
+          "sha256": "55349d9c4c3c072ea5a8a1b9b0ef3d29540016ff6687b1a8a69f5095d8d5954a",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/hash.txt",
+          "destination": "/opt/solver/tool-supply/tool-crypto/password/hash.txt",
+          "sha256": "4a5f47cf9843a02e870abbdf3b54d2d10411766fa896fdf85fe4828d3c02809b",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/input.txt",
+          "destination": "/opt/solver/tool-supply/tool-crypto/input.txt",
+          "sha256": "8c340e5edb27464e2abef685d508f58cc1b3b1c69c7ddf0aa543760420421f74",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/lattice.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/lattice.json",
+          "sha256": "6302e42cf1200aefdfb10cfcec9289cf6cc458e876fb971a2ae7b937a09d1160",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/number-theory.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/number-theory.json",
+          "sha256": "b7383c080288f31ac8ccc390ac9158b8b08942be3c4a5d45a23f968b56706d70",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/symmetric-hash.json",
+          "destination": "/opt/solver/tool-supply/tool-crypto/symmetric-hash.json",
+          "sha256": "5faad2cb6bd6471be459a293d0d78652091c2b4e5cd7c9587433bd2c589208d3",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/tool.py",
+      "destination": "/usr/local/libexec/incypher-tool-crypto.py",
+          "sha256": "26364524481c8dc5d43228d6697f8a0482508e6ef5492e5d9cf95d8b45682157",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/tool.sh",
+          "destination": "/usr/local/bin/incypher-tool-crypto",
+      "sha256": "45087becdab902a0635520895c4420a443391243beb15273fa3c7fb68b8bc0c7",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/tool-crypto/wordlist.txt",
+          "destination": "/opt/solver/tool-supply/tool-crypto/password/wordlist.txt",
+          "sha256": "30e9700b98a50e83b6dd3cc46d9cec592de1bc44d49c4bf2ed4b0d89facda501",
+          "mode": "0444"
+        }
+      ],
+      "capability_policies": {
+        "crypto.encoding": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.encoding",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.encoding.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.number-theory": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.number-theory",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.number-theory.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.symmetric-hash": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.symmetric-hash",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.symmetric-hash.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.classical": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.classical",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.classical.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.asymmetric": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.asymmetric",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.asymmetric.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.cas": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.cas",
+            "{input}"
+          ],
+          "cpu_seconds": 120,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 2147483648,
+          "network": "deny",
+          "output_schema": "tool-crypto.cas.v1",
+          "pids": 64,
+          "wall_seconds": 120
+        },
+        "crypto.lattice": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.lattice",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.lattice.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.hash-crack": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.hash-crack",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "directory",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.hash-crack.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        },
+        "crypto.certificate": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-tool-crypto",
+            "crypto.certificate",
+            "{input}"
+          ],
+          "cpu_seconds": 30,
+          "filesystem_bytes": 67108864,
+          "input_kind": "file",
+          "max_input_bytes": 1048576,
+          "max_output_bytes": 65536,
+          "memory_bytes": 536870912,
+          "network": "deny",
+          "output_schema": "tool-crypto.certificate.v1",
+          "pids": 64,
+          "wall_seconds": 30
+        }
+      }
+    }
+  ]
+}

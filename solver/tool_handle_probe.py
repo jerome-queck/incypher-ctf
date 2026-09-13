@@ -24,7 +24,7 @@ from solver.isolation_receipt import write_receipt as write_isolation_receipt
 from solver.redaction import Redactor
 from solver.target_broker import TargetBrokerRuntime
 from solver.target_broker_contracts import TargetCandidateBinding, TargetEndpoint, TargetLimits, TargetProtocol
-from solver.tool_control import AttemptToolRuntime, ToolController, ToolInvocation, resident_components
+from solver.tool_control import AttemptToolRuntime, ToolController, ToolInvocation, profile_components
 from solver.tool_control_receipt import verify_receipt, write_receipt
 from solver.work_generation import GenerationDisposition, GenerationFence
 
@@ -164,7 +164,10 @@ def qualify(
             timestamp=timestamp,
         )
         capability_ids = tuple(str(item) for item in component["capability_ids"])  # type: ignore[index]
-        available = {item.capability_id: item for item in resident_components(inventory_path, require_complete=False)}
+        profile_id = str(component["profiles"][0])  # type: ignore[index]
+        available = {
+            item.capability_id: item for item in profile_components(inventory_path, profile_id, require_complete=False)
+        }
         controller = ToolController(
             state=state,
             run_id=RUN_ID,
@@ -245,6 +248,7 @@ def qualify(
                         run_id=RUN_ID,
                         boot_id="boot-qualification",
                         peer=peer,
+                        enabled_profiles=(profile_id,),
                     ).invoke(
                         generation_id=generation.generation_id,
                         attempt_id=generation.attempt_id,

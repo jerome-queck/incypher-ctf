@@ -332,7 +332,7 @@ def validate_receipt(receipt: Mapping[str, object], *, expected_image_manifest_d
     expected_stdout = _validate_authorities(materials, component, closure)
     entrypoint, entrypoint_digest, version = _validate_sbom(document, evidence)
     _validate_admission(document, entrypoint, entrypoint_digest, version, expected_stdout)
-    if document["profile_id"] == "resident":
+    if component.get("capability_policies"):
         from solver.resident_handle_receipt import validate_receipt as validate_handle_receipt
 
         closure_by_source = {str(record["source"]): content for record, content in closure.values()}
@@ -344,7 +344,7 @@ def validate_receipt(receipt: Mapping[str, object], *, expected_image_manifest_d
             expected_image=_mapping(document["image"], "image"),
         )
     elif document["handle_solve"] is not None:
-        raise ReceiptInvalid("non-resident receipt must not claim resident Handle Solve evidence")
+        raise ReceiptInvalid("component without handle policies must not claim Handle Solve evidence")
     identity = _digest(document["identity"], "identity", prefixed=True)
     expected_identity = "sha256:" + hashlib.sha256(canonical_receipt_bytes(document, without_identity=True)).hexdigest()
     if identity != expected_identity:

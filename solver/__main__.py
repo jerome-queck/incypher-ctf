@@ -68,7 +68,7 @@ from solver.schedule import Dials, Scheduler, Window
 from solver.order_runtime import CanonicalScheduler
 from solver.lead_controller import LeadController
 from solver.lead_v1_adapter import V1LeadAdapter
-from solver.tool_control import AttemptToolRuntime, ToolController, resident_components
+from solver.tool_control import AttemptToolRuntime, ToolController, attempt_components
 from solver.candidate_admission import CandidateAdmission
 from solver.submission.authority import SerialSubmission
 from solver.submission.bridge import CandidateSubmissionBridge, ObservedCandidateSubmissionBridge
@@ -357,7 +357,7 @@ def _run_admitted(
             run_id=held.run_id,
             authority=tool_authority,
             image_digest=binding.image_manifest_digest,
-            components=resident_components(Path("/opt/solver/tool-supply/inventory.json")),
+            components=attempt_components(Path("/opt/solver/tool-supply/inventory.json")),
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
         tool_runtime = AttemptToolRuntime(
