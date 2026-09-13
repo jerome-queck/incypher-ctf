@@ -69,6 +69,7 @@ def build_image(runner: Runner = _run) -> tuple[str, str, str]:
         raise ReceiptInvalid("BuildKit did not return the OCI config digest")
     if len(inspected) != 2 or inspected[0] != manifest_digest:
         raise ReceiptInvalid("the loaded strict image is not the OCI manifest")
+    strict_runtime.enforce_host_storage("development", runner)
     return inspected[1], manifest_digest, config_digest
 
 

@@ -35,6 +35,11 @@ def test_build_metadata_binds_the_loaded_config_to_the_oci_manifest(monkeypatch)
     assert "--load" in runner.commands[0]
     assert "--provenance=false" in runner.commands[0]
     assert runner.commands[1][-1] == strict_runtime.IMAGE_TAG
+    assert runner.commands[2] == [
+        qualify_tool_supply.sys.executable,
+        str(qualify_tool_supply.REPO_ROOT / "scripts/check_host_storage.py"),
+        "development",
+    ]
 
 
 def test_strict_observation_cleans_only_its_cgroup() -> None:

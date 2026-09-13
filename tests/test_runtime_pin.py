@@ -23,7 +23,7 @@ PINNED_VERSIONS = {"colima": runtime.PIN.colima, "docker": runtime.PIN.docker}
 
 
 def test_the_accepted_allocation_is_the_pin():
-    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 100)
+    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 200)
 
 
 def test_a_machine_on_the_pin_has_drifted_on_nothing():

@@ -1,6 +1,7 @@
 # One immutable image exposes only proved free Tool components
 
-> **ADR-0057 moves the 100 GiB VM onto the external Working volume and adds independent 12 GiB
+> **ADR-0057 moves the VM onto the external Working volume, later increases its sparse capacity to
+> 200 GiB, and retains independent 12 GiB
 > Candidate, 3 GiB resident-floor and 4 GiB profile-delta limits.**
 
 [The complete v2 tool image](https://github.com/jerome-queck/incypher-ctf/issues/186)
@@ -358,7 +359,7 @@ ADR-0045 requires.
 
 There is no arbitrary package-count proxy. The immutable image, stable rollback image,
 bounded build cache, worst-case Run state and protected safety reserve must fit ADR-0057's budgets
-inside the pinned 100 GiB Colima runtime. The build reports component/profile deltas, compressed and uncompressed size,
+inside the pinned 200 GiB Colima runtime. The build reports component/profile deltas, compressed and uncompressed size,
 cached/uncached time and start cost; the freeze decision sets numeric thresholds from those
 measurements. Run-time writable caches, profile scratch and outputs remain attempt-local and quota-
 bounded. Image breadth never authorises loaded processes to consume memory or CPU outside their

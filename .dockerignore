@@ -24,6 +24,7 @@ tool-supply/generated/*
 !scripts
 scripts/*
 !scripts/apply_tool_supply_modes.py
+!scripts/runtime_qualification.py
 
 # The third thing ADR-0008 bakes in: every event's tracked Board profile, which `CTFD_URL` selects
 # between at run time. Written out one directory at a time rather than as a single `!` line, because

@@ -43,10 +43,10 @@ class Pin:
 
 
 # Eight of the build machine's 14 cores and half its 48 GiB. The Owner accepted the live VM's
-# 8 CPU, 24 GiB and 100 GiB allocation on 5 September 2026; keeping that measured allocation avoids
-# a `colima stop` that would invalidate the unattended restart proof. Moving it again remains one
-# reviewable line here rather than a slider on one laptop.
-PIN = Pin(colima="0.10.3", docker="29.7.2", cpu=8, memory_gib=24, disk_gib=100)
+# 8 CPU, 24 GiB and 200 GiB allocation accepted on 13 September 2026. The larger sparse VM disk is
+# recovery capacity, not permission to widen ADR-0057's independent image, Tool, cache or state
+# budgets. Moving it again remains one reviewable line here rather than a slider on one laptop.
+PIN = Pin(colima="0.10.3", docker="29.7.2", cpu=8, memory_gib=24, disk_gib=200)
 
 
 def version_in(text: str) -> str | None:

@@ -210,13 +210,18 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         "{{.Id}} {{.Os}}/{{.Architecture}}",
         strict_runtime.IMAGE_TAG,
     ]
-    assert runner.commands[2] == ["docker", "builder", "prune", "--all", "--force"]
-    assert runner.commands[3] == [
+    assert runner.commands[2] == [
+        strict_runtime.sys.executable,
+        str(strict_runtime.REPO_ROOT / "scripts/check_host_storage.py"),
+        "development",
+    ]
+    assert runner.commands[3] == ["docker", "builder", "prune", "--all", "--force"]
+    assert runner.commands[4] == [
         strict_runtime.sys.executable,
         str(strict_runtime.REPO_ROOT / "scripts/check_host_storage.py"),
         "competition",
     ]
-    assert runner.commands[4] == [
+    assert runner.commands[5] == [
         "docker",
         "run",
         "--rm",
@@ -226,15 +231,15 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         "/bin/true",
         IMAGE_ID,
     ]
-    assert runner.commands[5] == strict_runtime.container_command(
+    assert runner.commands[6] == strict_runtime.container_command(
         IMAGE_ID,
         env_file=env_file,
         state=state,
         preflight_only=False,
         binding=image_binding(),
     )
-    assert runner.commands[6] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
-    assert IMAGE_ID in runner.commands[5]
+    assert runner.commands[7] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+    assert IMAGE_ID in runner.commands[6]
 
 
 def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
@@ -244,7 +249,7 @@ def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
     monkeypatch.setattr(strict_runtime.runtime, "verify", lambda: 0)
 
     assert strict_runtime.main(["preflight"], runner=runner) == 0
-    assert runner.commands[3] == strict_runtime.container_command(
+    assert runner.commands[4] == strict_runtime.container_command(
         IMAGE_ID,
         env_file=None,
         state=None,

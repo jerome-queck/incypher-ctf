@@ -1,4 +1,18 @@
 import check_host_storage as storage
+import runtime
+
+
+def test_larger_vm_capacity_does_not_widen_storage_budgets():
+    assert runtime.PIN.disk_gib == 200
+    assert storage.LIMITS == {
+        "development": {"Images": 40 * storage.GIB, "Build Cache": 20 * storage.GIB},
+        "competition": {"Images": 24 * storage.GIB, "Build Cache": 0},
+    }
+    assert (storage.IMAGE_LIMIT, storage.STATE_LIMIT, storage.MINIMUM_HOST_FREE) == (
+        12 * storage.GIB,
+        60 * storage.GIB,
+        100 * storage.GIB,
+    )
 
 
 def test_development_budget_rejects_the_measured_cache_explosion():

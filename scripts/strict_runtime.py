@@ -232,6 +232,12 @@ def _checked(command: list[str], runner: CommandRunner) -> Any:
     return result
 
 
+def enforce_host_storage(mode: str, runner: CommandRunner) -> None:
+    """Run the canonical host-storage refusal for a build lifecycle phase."""
+
+    _checked([sys.executable, str(REPO_ROOT / "scripts/check_host_storage.py"), mode], runner)
+
+
 def build_image(runner: CommandRunner) -> RuntimeBinding:
     with tempfile.TemporaryDirectory(prefix="strict-image-metadata-") as temporary:
         metadata_path = Path(temporary) / "metadata.json"
@@ -274,7 +280,9 @@ def build_image(runner: CommandRunner) -> RuntimeBinding:
         or inspected[1] not in {"linux/arm64", "linux/amd64"}
     ):
         raise RuntimeError("BuildKit did not bind one loaded OCI image")
-    return RuntimeBinding(inspected[0], manifest, config, inspected[1])
+    binding = RuntimeBinding(inspected[0], manifest, config, inspected[1])
+    enforce_host_storage("development", runner)
+    return binding
 
 
 def _validate_path(
@@ -322,7 +330,7 @@ def _launch(
 
     if not preflight_only:
         _checked(["docker", "builder", "prune", "--all", "--force"], runner)
-        _checked([sys.executable, str(REPO_ROOT / "scripts/check_host_storage.py"), "competition"], runner)
+        enforce_host_storage("competition", runner)
 
     try:
         _checked(

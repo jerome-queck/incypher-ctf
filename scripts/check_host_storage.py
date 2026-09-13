@@ -1,4 +1,8 @@
-"""Refuse host storage growth outside ADR-0057's development or competition budget."""
+"""Refuse host storage growth outside ADR-0057's development or competition budget.
+
+Docker's aggregate image and cache totals include Tool layers, downloads, package closures and
+build intermediates. No Tool supply is exempt merely because the sparse VM disk is larger.
+"""
 
 from __future__ import annotations
 

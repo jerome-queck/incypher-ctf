@@ -11,8 +11,10 @@ is reached through `~/.colima` so interactive commands, Docker contexts and the 
 one stable socket/config address. The VM explicitly mounts `$HOME` and `/Volumes/Working/001
 Projects` writable. No other host root is a supported Solver bind source.
 
-The pinned VM remains 8 CPUs, 24 GiB memory and **100 GiB disk**. The Working volume must be mounted
-before Colima starts; a missing volume is a Refusal, never a fresh internal VM.
+The pinned VM is 8 CPUs, 24 GiB memory and **200 GiB disk**. The capacity increase on 13 September
+2026 gives the sparse external VM recovery room; it allocates no additional image, Tool, cache or
+state budget. The Working volume must be mounted before Colima starts; a missing volume is a
+Refusal, never a fresh internal VM.
 
 The VM envelope is divided before work begins:
 
@@ -27,6 +29,7 @@ The VM envelope is divided before work begins:
 | Development BuildKit cache | 20 GiB |
 | Docker/runtime overhead and scratch | 20 GiB |
 | Untouchable VM headroom | 16 GiB |
+| Additional unallocated VM capacity | 100 GiB |
 
 Development prunes BuildKit back toward 10 GiB before it reaches the 20 GiB hard limit. A scored
 Run builds its immutable image, prunes BuildKit, then refuses unless cache is zero and the entire
@@ -49,7 +52,9 @@ Run state is a Working-volume bind mount rather than VM-disk consumption. Its ac
 60 GiB, with 100 GiB of physical-volume free space protected from project and VM growth. An amd64
 artifact is exported and verified rather than retained beside both host-platform images.
 
-The image budgets measure unpacked Docker size, not package count. Full Sage made issue #299's
+The image budgets measure unpacked Docker size, not package count. Compressed downloads, unpacked
+layers, package closures, package caches, generated supply and BuildKit intermediates all count;
+Sage, CAS tools and wordlists have no exemption. Full Sage made issue #299's
 strict image 10.6 GB with a 9.3 GB unique layer, exceeding the 4 GiB profile-delta budget. That
 profile remains unadmitted unless a smaller locked closure passes its declared fixtures or this
 budget is explicitly revised. Tool downloads remain build-time, locked and receipt-bearing; no
@@ -64,7 +69,7 @@ current credential store and issue #299's dirty worktree remain.
 - Losing or renaming the external volume stops the runtime. This is preferable to silently starting
   an empty internal VM or empty `/state` mount.
 - `~/.colima` is a compatibility address, not internal storage; its target is verified at preflight.
-- A 1 TB physical volume does not make a 100 GiB image acceptable. Image and profile admission fail
+- A 1 TB physical volume and 200 GiB sparse VM do not make a 100 GiB image acceptable. Image and profile admission fail
   at their smaller budgets.
 - Build caches improve iteration only inside their budget and carry no competition authority.
 
