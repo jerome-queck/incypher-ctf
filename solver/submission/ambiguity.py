@@ -376,7 +376,7 @@ class AmbiguousSubmissionFence:
 
 
 from solver.submission.ambiguity_adapter import AmbiguityAwareSerialSubmission  # noqa: E402
-from solver.submission.ambiguity_support import (  # noqa: E402
+from solver.submission.ambiguity_receipt import (  # noqa: E402
     link_manifest,
     manifest_receipt,
     verify_receipt,
