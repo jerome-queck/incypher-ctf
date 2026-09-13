@@ -761,6 +761,7 @@ def event_contract(event_type: str):
     from solver.tool_control_contracts import TOOL_CONTROL_RECORDED, ToolControlRecorded
     from solver.target_broker_contracts import TARGET_EXCHANGE_RECORDED, TargetBrokerRecorded
     from solver.research_broker_contracts import RESEARCH_BROKER_RECORDED, ResearchBrokerRecorded
+    from solver.submission.epoch import SUBMISSION_EPOCH_ADVANCED, SubmissionEpochAdvanced
 
     contracts = {
         INCIDENT_RECORDED: IncidentRecorded,
@@ -787,6 +788,7 @@ def event_contract(event_type: str):
         TARGET_EXCHANGE_RECORDED: TargetBrokerRecorded,
         RESEARCH_BROKER_RECORDED: ResearchBrokerRecorded,
         CANDIDATE_ADMISSION_RECORDED: CandidateAdmissionRecorded,
+        SUBMISSION_EPOCH_ADVANCED: SubmissionEpochAdvanced,
     }
     return contracts.get(event_type)
 

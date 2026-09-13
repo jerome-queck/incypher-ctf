@@ -1,27 +1,48 @@
 import json
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
 from solver.board import CORRECT, Verdict
-from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome
+from solver.board_broker_contracts import (
+    BoardBrokerResult,
+    BoardOperation,
+    BoardOutcome,
+    BoardProvenance,
+    SubmissionLedgerValue,
+)
 from solver.capability import CapabilityBinding
 from solver.candidate_admission_contracts import (
     CandidateDisposition,
     CandidateProvenance,
     ReadyAdmission,
     ReadyCandidate,
+    SubmissionContext,
 )
+from solver.__main__ import _submission_identity_composition
+from solver.event_store import EventStore
+from solver.instance_ledger import POPULATED, LedgerResult, LedgerRow
 from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.manifest import generate_manifest
 from solver.submission.authority import SerialSubmission
+from solver.submission.ambiguity import (
+    AmbiguityAwareSerialSubmission,
+    AmbiguousSubmissionFence,
+    CompleteSubmissionIdentity,
+    Evidence,
+)
 from solver.submission.bridge import CandidateSubmissionBridge
 from solver.submission.bridge import ObservedCandidateSubmissionBridge
 from solver.submission.receipt import link_manifest, verify_receipt, write_receipt
+from solver.submission.runtime import compose_submission_runtime
+from solver.submission.reconciliation import broker_evidence_probe
+from solver.submission.epoch import SubmissionEpochAuthority
 from solver.write_reservation import EffectIndeterminate
+from solver.write_reservation import Capacity, EffectIdentity, ReservationUnavailable
 from test_manifest import release_candidate_profile
 from test_candidate_admission import CANDIDATE as ADMITTED_FLAG
 from test_candidate_admission import service as admission_service
@@ -53,11 +74,13 @@ class Wire:
         self.lock = threading.Lock()
         self.crash_during = crash_during
         self.candidates = []
+        self.complete_identities = []
 
-    def submit(self, challenge_id, flag):
+    def submit(self, challenge_id, flag, *, candidate_id="", complete_identity=None):
         with self.lock:
             self.posts += 1
             self.candidates.append(flag)
+            self.complete_identities.append((candidate_id, complete_identity))
             self.active += 1
             self.maximum = max(self.maximum, self.active)
         if self.crash_during:
@@ -69,6 +92,9 @@ class Wire:
 
     def close(self):
         pass
+
+    def submission_ledger(self, _effect_id):
+        return BoardBrokerResult(BoardOperation.SUBMISSION_LEDGER, BoardOutcome.UNREACHABLE)
 
 
 BINDING = CapabilityBinding("run-1", "boot-1", "generation-1", "lane-1", "attempt-1", "step-1")
@@ -84,6 +110,7 @@ def ready(identity="a" * 64, candidate=FLAG):
         candidate_digest="b" * 64,
         provenance=CandidateProvenance(CandidateDisposition.OBSERVED, ("c" * 64,), ()),
         admission_rule="candidate-admission-v1",
+        submission_context=SubmissionContext.static("challenge-revision-1", "board-1"),
     )
 
 
@@ -102,6 +129,324 @@ def service(tmp_path, *, hook=None, wire=None):
         open_client=lambda _path, _binding: network,
     )
     return authority, recorder, network
+
+
+def test_production_identity_composition_replays_epoch_and_binds_canonical_context(tmp_path):
+    static = SimpleNamespace(
+        challenge_id=SimpleNamespace(value=7),
+        revision_digest="revision-from-intake",
+        challenge_type="static",
+    )
+    isolated = SimpleNamespace(
+        challenge_id=SimpleNamespace(value=8),
+        revision_digest="isolated-revision",
+        challenge_type="dynamic_iac",
+    )
+    intake = SimpleNamespace(
+        order_authority=lambda: SimpleNamespace(snapshot=SimpleNamespace(challenges=(static, isolated)))
+    )
+    ledger = LedgerResult(
+        POPULATED,
+        "teams",
+        1,
+        2,
+        "ledger-digest",
+        owned=(LedgerRow("row-8", 8, team_id=2, response_digest="response-digest"),),
+    )
+    store = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
+
+    context_for, identity_for, epochs = _submission_identity_composition(
+        intake, ledger, "https://board.example", store, Clock()
+    )
+    context = context_for(7)
+    candidate = replace(ready(), submission_context=context)
+
+    assert context.challenge_revision == "revision-from-intake"
+    assert context.instance_provenance == "static:https://board.example"
+    assert context_for(8).instance_provenance == "ledger:row-8:response-digest"
+    assert epochs.current("https://board.example") == 1
+    assert identity_for(candidate).document() == {
+        "board_identity": "https://board.example",
+        "challenge_id": 7,
+        "challenge_revision": "revision-from-intake",
+        "instance_provenance": "static:https://board.example",
+        "candidate_digest": "b" * 64,
+        "submission_epoch": 1,
+        "reservation_id": identity_for(candidate).reservation_id,
+        "effect_id": identity_for(candidate).effect_id,
+    }
+
+    replayed = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
+    _, restarted_identity_for, restarted_epochs = _submission_identity_composition(
+        intake, ledger, "https://board.example", replayed, Clock()
+    )
+    assert restarted_epochs.current("https://board.example") == 1
+    assert restarted_identity_for(candidate).submission_epoch == 1
+
+
+@pytest.mark.parametrize(
+    ("factory", "source"),
+    [
+        (lambda: (_ for _ in ()).throw(OSError("secret path")), "board-broker:open-failed"),
+        (
+            lambda: SimpleNamespace(
+                submission_ledger=lambda _effect: (_ for _ in ()).throw(OSError("secret row")),
+                close=lambda: None,
+            ),
+            "board-broker:read-failed",
+        ),
+        (
+            lambda: SimpleNamespace(
+                submission_ledger=lambda _effect: BoardBrokerResult(
+                    BoardOperation.SUBMISSION_LEDGER,
+                    BoardOutcome.TIMEOUT,
+                    None,
+                    "request",
+                ),
+                close=lambda: (_ for _ in ()).throw(OSError("secret close")),
+            ),
+            "board-broker:close-failed",
+        ),
+    ],
+)
+def test_reconciliation_probe_sanitizes_transport_failures(factory, source):
+    probe = broker_evidence_probe(
+        lambda *_args, **_kwargs: factory(),
+        Path("board.sock"),
+        BINDING,
+    )
+    evidence = probe(SimpleNamespace(effect_id="effect"))
+    assert evidence.source == source
+    assert "secret" not in evidence.source
+
+
+def test_close_failure_disqualifies_an_exact_authenticated_answer():
+    complete = CompleteSubmissionIdentity("board-1", 7, "revision-1", "static:board-1", "b" * 64, 1)
+    row = {
+        "board_row_id": "row-1",
+        "row_type": "submission",
+        "submitted_at": "2026-09-13T00:00:00Z",
+        "request_id": "request-1",
+        "verdict": "correct",
+        "candidate_id": "a" * 64,
+        "supplied_value_digest": complete.candidate_digest,
+        "effect_id": complete.effect_id,
+        "submission_epoch": 1,
+        "complete_identity": complete.document(),
+    }
+    result = BoardBrokerResult(
+        BoardOperation.SUBMISSION_LEDGER,
+        BoardOutcome.ANSWERED,
+        SubmissionLedgerValue(row),
+        BoardProvenance(
+            endpoint="submission-ledger",
+            classified_event_id="classified-1",
+            binding_digest="binding-1",
+            peer_identity_digest="peer-1",
+        ),
+        "request-1",
+    )
+    client = SimpleNamespace(
+        submission_ledger=lambda _effect: result,
+        close=lambda: (_ for _ in ()).throw(OSError("secret close")),
+    )
+    evidence = broker_evidence_probe(lambda *_args, **_kwargs: client, Path("board.sock"), BINDING)(
+        SimpleNamespace(effect_id=complete.effect_id)
+    )
+    assert evidence == Evidence.unsettled("board-broker:close-failed")
+
+
+def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire(crash_during=True)
+    mono, wall = [0.0], [100.0]
+    epochs = SubmissionEpochAuthority(recorder.event_store, Clock())
+    epochs.ensure("board-1")
+
+    def identity_for(candidate):
+        return CompleteSubmissionIdentity(
+            "board-1",
+            candidate.challenge_id,
+            candidate.submission_context.challenge_revision,
+            candidate.submission_context.instance_provenance,
+            candidate.candidate_digest,
+            epochs.current("board-1"),
+        )
+
+    runtime = compose_submission_runtime(
+        state=tmp_path / "state",
+        recorder=recorder,
+        run_id="run-1",
+        boot_id="boot-1",
+        board_broker_path=tmp_path / "board.sock",
+        timestamp=Clock(),
+        identity_for=identity_for,
+        epoch_authority=epochs,
+        board_identity="board-1",
+        monotonic=lambda: mono[0],
+        wall_time=lambda: wall[0],
+        open_client=lambda *_args, **_kwargs: wire,
+        reconcile_interval=100,
+    )
+    successor = replace(ready(identity="d" * 64, candidate=b"zephyr{next}"), candidate_digest="e" * 64)
+    other = replace(ready(identity="f" * 64, candidate=b"zephyr{other}"), candidate_digest="1" * 64)
+    try:
+        with pytest.raises(SystemExit):
+            runtime.submission.dispatch(queued(), binding=BINDING)
+        mono[0], wall[0] = 60.0, 160.0
+        runtime.reconciler.cycle()
+        failures = []
+
+        def dispatch(candidate):
+            try:
+                runtime.submission.dispatch(queued(candidate), binding=BINDING)
+            except Exception as error:
+                failures.append(error)
+
+        threads = [threading.Thread(target=dispatch, args=(candidate,)) for candidate in (successor, other)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert failures == []
+        assert epochs.current("board-1") == 2
+        assert [row[1]["submission_epoch"] for row in wire.complete_identities[-2:]] == [2, 2]
+    finally:
+        runtime.close()
+
+    replayed = SubmissionEpochAuthority(EventStore(tmp_path / "state", run_id="run-1", redactor=Redactor({})), Clock())
+    assert replayed.current("board-1") == 2
+
+
+def test_serial_submission_sends_complete_identity_to_board_broker(tmp_path):
+    complete = CompleteSubmissionIdentity(
+        "https://board.example",
+        7,
+        "revision-from-intake",
+        "static:https://board.example",
+        "b" * 64,
+        1,
+    )
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire()
+    authority = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+        identity_for=lambda _candidate: complete,
+    )
+
+    authority.dispatch(queued(), binding=BINDING)
+
+    assert wire.complete_identities == [(ready().identity, complete.__dict__)]
+
+
+def test_production_runtime_fences_ambiguous_post_then_releases_unrelated_candidate(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire(crash_during=True)
+    mono, wall = [10.0], [100.0]
+
+    def identity_for(candidate):
+        return CompleteSubmissionIdentity(
+            "board-1",
+            candidate.challenge_id,
+            candidate.submission_context.challenge_revision,
+            candidate.submission_context.instance_provenance,
+            candidate.candidate_digest,
+            1,
+        )
+
+    runtime = compose_submission_runtime(
+        state=tmp_path / "state",
+        recorder=recorder,
+        run_id="run-1",
+        boot_id="boot-1",
+        board_broker_path=tmp_path / "board.sock",
+        timestamp=Clock(),
+        identity_for=identity_for,
+        monotonic=lambda: mono[0],
+        wall_time=lambda: wall[0],
+        open_client=lambda _path, _binding, *, scope: wire,
+        reconcile_interval=100,
+    )
+    first = queued()
+    second_candidate = replace(
+        ready(identity="d" * 64, candidate=b"zephyr{unrelated}"),
+        candidate_digest="e" * 64,
+    )
+    try:
+        with pytest.raises(SystemExit):
+            runtime.submission.dispatch(first, binding=BINDING)
+        with pytest.raises(EffectIndeterminate):
+            runtime.submission.dispatch(queued(second_candidate), binding=BINDING)
+
+        mono[0], wall[0] = 70.0, 160.0
+        runtime.reconciler.cycle()
+        probes = [row for row in runtime.fence._events() if row["event"] == "evidence-probe"]
+        assert [row["scheduled_offset"] for row in probes] == [0.0, 15.0, 30.0, 60.0]
+        assert all(row["source"] == "board-broker:unreachable" for row in probes)
+        assert runtime.reconciler.is_alive
+        result = runtime.submission.dispatch(queued(second_candidate), binding=BINDING)
+
+        assert result is not None
+        assert wire.posts == 2
+        assert runtime.fence.can_submit(first.candidate.identity, identity_for(first.candidate).effect_id) is False
+        assert runtime.fence.barrier_open is False
+    finally:
+        runtime.close()
+    assert not runtime.reconciler.is_alive
+
+
+def test_production_runtime_resumes_open_fence_with_reset_monotonic_epoch(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire(crash_during=True)
+    mono, wall = [10.0], [100.0]
+
+    def identity_for(candidate):
+        return CompleteSubmissionIdentity(
+            "board-1",
+            candidate.challenge_id,
+            candidate.submission_context.challenge_revision,
+            candidate.submission_context.instance_provenance,
+            candidate.candidate_digest,
+            1,
+        )
+
+    def boot(boot_id):
+        return compose_submission_runtime(
+            state=tmp_path / "state",
+            recorder=recorder,
+            run_id="run-1",
+            boot_id=boot_id,
+            board_broker_path=tmp_path / "board.sock",
+            timestamp=Clock(),
+            identity_for=identity_for,
+            monotonic=lambda: mono[0],
+            wall_time=lambda: wall[0],
+            open_client=lambda _path, _binding, *, scope: wire,
+            reconcile_interval=100,
+        )
+
+    first_boot = boot("boot-1")
+    try:
+        with pytest.raises(SystemExit):
+            first_boot.submission.dispatch(queued(), binding=BINDING)
+    finally:
+        first_boot.close()
+
+    mono[0], wall[0] = 0.0, 115.0
+    second_boot = boot("boot-2")
+    try:
+        second_boot.reconciler.cycle()
+        assert second_boot.fence.barrier_open
+        mono[0], wall[0] = 45.0, 160.0
+        second_boot.reconciler.cycle()
+        assert not second_boot.fence.barrier_open
+        assert len(second_boot.fence.post_trace(ready().identity)) == 1
+    finally:
+        second_boot.close()
 
 
 def test_first_ready_candidate_dispatches_in_the_admission_call_with_one_post(tmp_path):
@@ -131,7 +476,9 @@ def test_durable_lead_candidate_is_admitted_and_dispatched_before_adapter_return
         tmp_path / "board.sock",
         open_client=lambda _path, _binding: wire,
     )
-    bridge = CandidateSubmissionBridge(admission, submission)
+    bridge = CandidateSubmissionBridge(
+        admission, submission, lambda _challenge_id: SubmissionContext.static("r1", "b1")
+    )
     incoming = SimpleNamespace(
         run_id="run-1",
         boot_id="boot-1",
@@ -170,6 +517,7 @@ def test_observed_flag_sweep_enters_candidate_admission_before_typed_board_dispa
         submission,
         run_id="run-1",
         boot_id="boot-1",
+        context_for=lambda _challenge_id: SubmissionContext.static("r1", "b1"),
     )
     observation_ref = "observations/1.bin"
     (admission.store.run_dir / observation_ref).parent.mkdir(exist_ok=True)
@@ -323,3 +671,87 @@ def test_retained_serial_and_crash_trace_verifies_without_live_authority():
         "possibly-sent",
         "aborted",
     ]
+
+
+def test_ambiguous_post_blocks_serial_posts_then_releases_other_work_at_sixty(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire, mono, wall = Wire(crash_during=True), [10.0], [100.0]
+    fence = AmbiguousSubmissionFence(
+        tmp_path / "state",
+        recorder.write_authority,
+        run_id="run-1",
+        boot_id="boot-1",
+        monotonic=lambda: mono[0],
+        wall_time=lambda: wall[0],
+        probe=lambda _: Evidence.unsettled("authenticated-submission-ledger"),
+    )
+
+    def identity(candidate):
+        return CompleteSubmissionIdentity(
+            "board-identity",
+            candidate.challenge_id,
+            "revision-1",
+            "instance-1",
+            candidate.candidate_digest,
+            1,
+        )
+
+    serial = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+    )
+    submission = AmbiguityAwareSerialSubmission(serial, fence, identity)
+    with pytest.raises(SystemExit):
+        submission.dispatch(queued(), binding=BINDING)
+    budget = recorder.write_authority.trace(f"ambiguity-path:{identity(ready()).effect_id}")
+    post = recorder.write_authority.trace(identity(ready()).reservation_id)
+    assert budget[0]["ordinal"] < post[0]["ordinal"]
+    assert budget[0]["need"] == {"bytes": 12800, "objects": 1, "operations": 24}
+    other = replace(ready("2" * 64), candidate_digest="d" * 64)
+    with pytest.raises(EffectIndeterminate, match="barrier"):
+        submission.dispatch(queued(other), binding=BINDING)
+    assert wire.posts == 1
+    mono[0], wall[0] = 70.0, 160.0
+    assert fence.reconcile(fence.pending()[0]).disposition == "unknown-and-spent"
+    submission.dispatch(queued(other), binding=BINDING)
+    assert wire.posts == 2
+
+
+def test_complete_ambiguity_reservation_failure_prevents_board_post(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    recorder.write_authority.reserve(
+        "controlled-exhaustion",
+        EffectIdentity("test.exhaust", "shared"),
+        Capacity(500 * 1024, 1, 3),
+    )
+    wire = Wire()
+    fence = AmbiguousSubmissionFence(
+        tmp_path / "state",
+        recorder.write_authority,
+        run_id="run-1",
+        boot_id="boot-1",
+        monotonic=lambda: 1.0,
+        probe=lambda _: Evidence.unsettled("ledger"),
+    )
+    serial = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+    )
+    wrapped = AmbiguityAwareSerialSubmission(
+        serial,
+        fence,
+        lambda candidate: CompleteSubmissionIdentity(
+            "board", candidate.challenge_id, "revision", "instance", candidate.candidate_digest, 1
+        ),
+    )
+
+    with pytest.raises(ReservationUnavailable):
+        wrapped.dispatch(queued(), binding=BINDING)
+
+    assert wire.posts == 0

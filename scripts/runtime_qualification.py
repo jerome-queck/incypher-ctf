@@ -26,6 +26,7 @@ from solver.candidate_admission_contracts import (
     CandidateProvenance,
     ReadyAdmission,
     ReadyCandidate,
+    SubmissionContext,
 )
 from solver.event_store import GenerationDisposition
 from solver.event_store_storage import atomic_write, canonical_bytes
@@ -116,6 +117,7 @@ def _candidate(serial: int, ready_at: str, *, ready_order: int | None = None) ->
         candidate_digest="a" * 64,
         provenance=CandidateProvenance(CandidateDisposition.OBSERVED, ("b" * 64,), ()),
         admission_rule="candidate-admission-v1",
+        submission_context=SubmissionContext.static("qualification-revision-1", "qualification-board"),
     )
     return ReadyAdmission(ready, ready_at, ready_order if ready_order is not None else serial, ())
 

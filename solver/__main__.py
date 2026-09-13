@@ -45,7 +45,7 @@ from solver.cpa_contracts import CPAConfig
 from solver.cpa_responses import CPAResponsesModel
 from solver.cpa_service import CPA_CREDENTIAL_FD_ENV, CPA_RESPONSES_URL_ENV, CPALeadPort, CPAService
 from solver.flag import Flags, Pace
-from solver.instance import Instances
+from solver.instance import INSTANCED_ELSEWHERE, INSTANCED_TYPE, Instances
 from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger
 from solver.instance_ledger import write_receipt as write_instance_ledger_receipt
 from solver.instance_lease_contracts import LeasePhase, LeaseVerdict, RowCorroboration
@@ -70,8 +70,11 @@ from solver.lead_controller import LeadController
 from solver.lead_v1_adapter import V1LeadAdapter
 from solver.tool_control import AttemptToolRuntime, ToolController, attempt_components
 from solver.candidate_admission import CandidateAdmission
-from solver.submission.authority import SerialSubmission
+from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.submission.bridge import CandidateSubmissionBridge, ObservedCandidateSubmissionBridge
+from solver.submission.context import SubmissionContextResolver
+from solver.submission.epoch import SubmissionEpochAuthority
+from solver.submission.runtime import compose_submission_runtime
 from solver.submission.receipt import link_manifest as link_submission_manifest
 from solver.submission.receipt import write_receipt as write_submission_receipt
 
@@ -79,6 +82,43 @@ from solver.submission.receipt import write_receipt as write_submission_receipt
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
 # different thing and survives nothing (`CONTEXT.md`, *Run state*).
 RUN_STATE = Path("/state")
+
+
+def _submission_identity_composition(intake, ledger, board_identity, store, timestamp):
+    """Bind Candidate submission identity to this Boot's canonical Board projections."""
+    challenges = intake.order_authority().snapshot.challenges
+    revisions = {int(item.challenge_id.value): item.revision_digest for item in challenges}
+    instance_required = {
+        int(item.challenge_id.value): item.challenge_type == INSTANCED_TYPE
+        or item.challenge_type in INSTANCED_ELSEWHERE
+        for item in challenges
+    }
+    contexts = SubmissionContextResolver(
+        board_identity=board_identity,
+        revisions=revisions,
+        instance_ledger=ledger,
+    )
+    epochs = SubmissionEpochAuthority(store, timestamp)
+    epochs.ensure(board_identity)
+
+    def context_for(challenge_id):
+        return contexts.resolve(challenge_id, requires_instance=instance_required[challenge_id])
+
+    def identity_for(candidate):
+        context = candidate.submission_context
+        if context != context_for(candidate.challenge_id):
+            raise ValueError("Candidate submission context is not the current canonical projection")
+        return CompleteSubmissionIdentity(
+            board_identity,
+            candidate.challenge_id,
+            context.challenge_revision,
+            context.instance_provenance,
+            candidate.candidate_digest,
+            epochs.current(board_identity),
+        )
+
+    return context_for, identity_for, epochs
+
 
 # The two directories this file names under the mount it was pointed at, and they are named the
 # same way on purpose: a Solver handed a different `/state` is handed a different one whole, and a
@@ -244,6 +284,7 @@ def _run_admitted(
     steps = Steps()
     ledger_identity = None
     ledger_broker = None
+    ledger = None
     if board_broker_path is not None:
         ledger_identity = AuthenticatedIdentity(
             discovered.instance_ledger_mode,
@@ -381,18 +422,33 @@ def _run_admitted(
             hashlib.sha256(b"candidate-vault-v1\0" + held.token.encode()).digest(),
             recorder.generations,
         )
-        submission = SerialSubmission(
-            recorder.run_dir / "canonical",
-            recorder.write_authority,
+        context_for, identity_for, submission_epochs = _submission_identity_composition(
+            intake,
+            ledger,
+            held.url,
+            recorder.event_store,
             lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
-            board_broker_path,
         )
-        candidate_sink = CandidateSubmissionBridge(admission, submission)
+        submission_runtime = compose_submission_runtime(
+            state=run_state,
+            recorder=recorder,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            board_broker_path=board_broker_path,
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+            identity_for=identity_for,
+            epoch_authority=submission_epochs,
+            board_identity=held.url,
+        )
+        submission = submission_runtime.submission
+        stack.callback(submission_runtime.close)
+        candidate_sink = CandidateSubmissionBridge(admission, submission, context_for)
         observed_candidate_sink = ObservedCandidateSubmissionBridge(
             admission,
             submission,
             run_id=held.run_id,
             boot_id=boot_id,
+            context_for=context_for,
         )
         submission_receipt_inputs = (recorder.run_dir / "canonical", held.run_id, recorder.write_authority)
     lead_adapter = _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack, candidate_sink)

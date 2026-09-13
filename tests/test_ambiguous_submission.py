@@ -1,0 +1,295 @@
+import json
+import shutil
+from pathlib import Path
+
+import pytest
+
+from solver.manifest import generate_manifest
+from solver.manifest import parse_manifest
+from solver.submission.evaluator_receipt import verify_receipt as verify_evaluator_receipt
+from solver.record import Recorder
+from solver.redaction import Redactor
+from solver.submission.ambiguity import (
+    AmbiguousSubmissionFence,
+    AuthenticatedSubmissionEvidence,
+    CompleteSubmissionIdentity,
+    Evidence,
+    FenceClosed,
+    link_manifest,
+    verify_receipt,
+)
+from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome, BoardProvenance
+from test_manifest import release_candidate_profile
+
+RETAINED = (
+    Path(__file__).parent.parent
+    / "docs/evidence/runtime-qualification-v2/294-ambiguous-submission/ambiguous-submission.receipt.json"
+)
+
+
+class Clock:
+    def __init__(self, value=100.0):
+        self.value = value
+
+    def __call__(self):
+        return self.value
+
+
+def fence(tmp_path, clock, probes=(), boot="boot-1", wall=None):
+    answers = iter(probes)
+    recorder = Recorder(tmp_path, "run-1", Redactor({}))
+    return AmbiguousSubmissionFence(
+        tmp_path,
+        recorder.write_authority,
+        run_id="run-1",
+        boot_id=boot,
+        monotonic=clock,
+        wall_time=wall or clock,
+        probe=lambda _pending: next(answers, Evidence.unsettled("authenticated-submission-ledger")),
+    )
+
+
+def exact(verdict, candidate="candidate-1", effect="effect-1", **overrides):
+    complete = identity(candidate)
+    row = {
+        "board_row_id": "row-1",
+        "row_type": "submission",
+        "submitted_at": "2026-09-13T00:00:00Z",
+        "request_id": "request-1",
+        "verdict": verdict,
+        "candidate_id": candidate,
+        "supplied_value_digest": complete.candidate_digest,
+        "effect_id": effect,
+        "submission_epoch": complete.submission_epoch,
+        "complete_identity": complete.document(),
+    }
+    row.update(overrides)
+    result = BoardBrokerResult(
+        BoardOperation.SUBMIT,
+        BoardOutcome.ANSWERED,
+        value=row,
+        provenance=BoardProvenance(
+            endpoint="/api/v1/submissions",
+            classified_event_id="board-event-1",
+            binding_digest="binding-digest",
+            peer_identity_digest="peer-digest",
+        ),
+        request_id="request-1",
+    )
+    return AuthenticatedSubmissionEvidence.from_broker(result)
+
+
+def identity(candidate="candidate-1"):
+    return CompleteSubmissionIdentity("board-1", 7, "revision-1", "instance-1", f"digest:{candidate}", 1)
+
+
+def begin(service, candidate="candidate-1"):
+    complete = identity(candidate)
+    service.reserve_path(candidate, complete)
+    return service.begin(candidate, complete)
+
+
+@pytest.mark.parametrize("verdict,disposition", [("correct", "accepted"), ("incorrect", "rejected")])
+def test_exact_authenticated_candidate_evidence_closes_inside_fence(tmp_path, verdict, disposition):
+    clock = Clock()
+    service = fence(
+        tmp_path,
+        clock,
+        [exact(verdict)],
+    )
+    complete = identity()
+    service._probe = lambda _pending: exact(verdict, effect=complete.effect_id)
+    pending = begin(service)
+
+    closed = service.reconcile(pending)
+
+    assert closed.disposition == disposition
+    assert closed.provenance == "/api/v1/submissions"
+
+
+def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_sixty(tmp_path):
+    clock = Clock()
+    service = fence(
+        tmp_path,
+        clock,
+        [Evidence.score_change("scoreboard"), Evidence.unsettled("authenticated-solve-ledger")],
+    )
+    pending = begin(service)
+    assert service.reconcile(pending).disposition == "pending"
+    clock.value = 159.999
+    assert service.reconcile(pending).disposition == "pending"
+    clock.value = 160.0
+
+    closed = service.reconcile(pending)
+
+    assert closed.disposition == "unknown-and-spent"
+    assert service.barrier_open is False
+    assert service.can_submit("candidate-2") is True
+    assert service.can_submit("candidate-1") is False
+
+
+def test_unexpected_probe_failures_are_durable_unsettled_cycles_and_expire(tmp_path):
+    clock = Clock()
+    service = fence(tmp_path, clock)
+    service._probe = lambda _pending: (_ for _ in ()).throw(RuntimeError("secret transport detail"))
+    pending = begin(service)
+
+    service.reconcile(pending)
+    clock.value = 115.0
+    service.reconcile(pending)
+    clock.value = 130.0
+    service.reconcile(pending)
+    clock.value = 160.0
+    closed = service.reconcile(pending)
+
+    probes = [row for row in service._events() if row["event"] == "evidence-probe"]
+    assert [row["scheduled_offset"] for row in probes] == [0.0, 15.0, 30.0, 60.0]
+    assert all(row["source"] == "submission-probe:failed" for row in probes)
+    assert closed.disposition == "unknown-and-spent"
+    assert "secret" not in json.dumps(probes)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"candidate_id": "other"},
+        {"effect_id": "other"},
+        {"submission_epoch": 2},
+        {"supplied_value_digest": "other"},
+        {"row_type": "solve"},
+        {"submitted_at": ""},
+        {"board_row_id": ""},
+        {"request_id": "other"},
+        {"complete_identity": {}},
+    ],
+)
+def test_authenticated_broker_row_mismatch_cannot_close_candidate(tmp_path, override):
+    clock = Clock()
+    complete = identity()
+    try:
+        evidence = exact("correct", effect=complete.effect_id, **override)
+    except ValueError:
+        return
+    service = fence(tmp_path, clock, [evidence])
+    assert service.reconcile(begin(service)).disposition == "pending"
+
+
+@pytest.mark.parametrize("restart_at", [100.0, 114.0, 159.0, 160.0, 190.0])
+def test_restart_replays_original_deadline_without_resending(tmp_path, restart_at):
+    first_monotonic = Clock(4000.0)
+    first_wall = Clock(100.0)
+    first = fence(tmp_path, first_monotonic, wall=first_wall)
+    pending = begin(first)
+    first.close_boot()
+    reset_monotonic = Clock(3.0)
+    restarted = fence(tmp_path, reset_monotonic, boot="boot-2", wall=Clock(restart_at))
+
+    state = restarted.reconcile(pending)
+
+    assert state.deadline == 160.0
+    assert restarted.post_trace("candidate-1") == ("possibly-sent",)
+    assert state.disposition == ("unknown-and-spent" if restart_at >= 160.0 else "pending")
+
+
+def test_ticking_wall_cannot_advance_same_boot_monotonic_fence(tmp_path):
+    mono, wall = Clock(10.0), Clock(100.0)
+    service = fence(tmp_path, mono, wall=wall)
+    pending = begin(service)
+    wall.value = 10_000.0
+    mono.value = 15.0
+
+    state = service.reconcile(pending)
+
+    assert state.disposition == "pending"
+    assert state.deadline == 160.0
+
+
+def test_wall_rollback_on_new_boot_cannot_extend_fence(tmp_path):
+    mono, wall = Clock(10.0), Clock(100.0)
+    first = fence(tmp_path, mono, wall=wall)
+    pending = begin(first)
+    mono.value = 40.0
+    first.reconcile(pending)
+    first.close_boot()
+    restarted = fence(tmp_path, Clock(1.0), wall=Clock(50.0), boot="boot-2")
+
+    state = restarted.reconcile(pending)
+
+    assert state.disposition == "unknown-and-spent"
+    receipt = json.loads(restarted.write_receipt().read_text())
+    probes = [row["scheduled_offset"] for row in receipt["events"] if row["event"] == "evidence-probe"]
+    assert probes == [0.0, 15.0, 30.0, 60.0]
+
+
+def test_forward_wall_jump_runs_every_overdue_probe_before_expiry(tmp_path):
+    first = fence(tmp_path, Clock(500.0), wall=Clock(100.0))
+    pending = begin(first)
+    first.close_boot()
+    restarted = fence(tmp_path, Clock(2.0), wall=Clock(175.0), boot="boot-2")
+
+    state = restarted.reconcile(pending)
+
+    assert state.disposition == "unknown-and-spent"
+    assert state.deadline == 160.0
+
+
+def test_receipt_is_sanitized_replay_verified_and_manifest_linked(tmp_path):
+    clock = Clock()
+    service = fence(tmp_path, clock)
+    complete = identity("c")
+    service._probe = lambda _pending: exact("correct", "c", complete.effect_id)
+    pending = begin(service, "c")
+    service.reconcile(pending)
+    path = service.write_receipt()
+
+    assert verify_receipt(path) == path
+    receipt = json.loads(path.read_text())
+    assert receipt["schema_version"] == 1
+    assert receipt["receipt_type"] == "ambiguous-submission"
+    assert receipt["no_resend_trace"] == [{"candidate_id": "c", "posts": 1}]
+    manifest = generate_manifest(
+        image_digest=f"sha256:{'d' * 64}", release_candidate_profile=release_candidate_profile()
+    )
+    linked = link_manifest(manifest, path)
+    row = next(row for row in linked["requirements"] if row["row_id"] == "core.submission-tail")
+    assert row["receipt_ref"] == "receipt:ambiguous-submission"
+    tampered = path.read_text().replace('"posts":1', '"posts":2')
+    path.write_text(tampered)
+    with pytest.raises(ValueError, match="no-resend"):
+        verify_receipt(path)
+
+
+def test_same_candidate_can_never_begin_twice(tmp_path):
+    service = fence(tmp_path, Clock())
+    begin(service)
+    with pytest.raises(FenceClosed, match="already spent"):
+        service.begin("candidate-1", identity())
+
+
+def test_retained_ambiguity_receipt_verifies_independently():
+    assert verify_evaluator_receipt(RETAINED) == RETAINED
+    receipt = json.loads(RETAINED.read_text())
+    assert receipt["producer"] == "external-evaluator"
+    manifest = parse_manifest(json.loads((RETAINED.parent / "candidate-manifest.json").read_text()))
+    row = next(row for row in manifest["requirements"] if row["row_id"] == "core.submission-tail")
+    descriptor = next(item for item in manifest["receipts"] if item["ref"] == row["receipt_ref"])
+    assert descriptor["digest"] == __import__("hashlib").sha256(RETAINED.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "intended-event.json",
+        "actual-board-state.json",
+        "serial-authority.json",
+        "solver-observation.json",
+        "ambiguous-submission.receipt.json",
+    ],
+)
+def test_signed_evaluator_proof_rejects_every_tampered_source(tmp_path, name):
+    copied = tmp_path / "proof"
+    shutil.copytree(RETAINED.parent, copied)
+    target = copied / name
+    target.write_bytes(target.read_bytes() + b" ")
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        verify_evaluator_receipt(copied / RETAINED.name)

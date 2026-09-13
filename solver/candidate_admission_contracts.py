@@ -34,6 +34,36 @@ class DerivationKind(str, enum.Enum):
     OSINT_INFERENCE = "osint-inference"
 
 
+class InstanceProvenanceKind(str, enum.Enum):
+    STATIC_NO_INSTANCE = "static-no-instance"
+    AUTHENTICATED_LEDGER = "authenticated-instance-ledger"
+
+
+@dataclass(frozen=True)
+class SubmissionContext:
+    challenge_revision: str
+    instance_provenance: str
+    instance_kind: InstanceProvenanceKind
+
+    def __post_init__(self):
+        if not self.challenge_revision or not self.instance_provenance:
+            raise ValueError("canonical submission context is incomplete")
+
+    @classmethod
+    def static(cls, challenge_revision: str, board_identity: str):
+        return cls(challenge_revision, f"static:{board_identity}", InstanceProvenanceKind.STATIC_NO_INSTANCE)
+
+    @classmethod
+    def authenticated_instance(cls, challenge_revision: str, row_id: str, response_digest: str):
+        if not row_id or not response_digest:
+            raise ValueError("authenticated Instance provenance is incomplete")
+        return cls(
+            challenge_revision,
+            f"ledger:{row_id}:{response_digest}",
+            InstanceProvenanceKind.AUTHENTICATED_LEDGER,
+        )
+
+
 @dataclass(frozen=True)
 class CandidateDerivation:
     kind: DerivationKind
@@ -75,6 +105,7 @@ class CandidateProposal:
     generation_id: str
     candidate: bytes
     provenance: CandidateProvenance
+    submission_context: SubmissionContext
     schema_version: int = 1
 
 
@@ -87,6 +118,7 @@ class ReadyCandidate:
     candidate_digest: str
     provenance: CandidateProvenance
     admission_rule: str
+    submission_context: SubmissionContext
 
 
 @dataclass(frozen=True)
@@ -114,6 +146,7 @@ class CandidateAdmissionRecorded:
     provenance_digest: str
     admission_rule: str
     decision: AdmissionDecision
+    submission_context: SubmissionContext
     duplicate_class: str = ""
     ts: str = ""
 
@@ -143,6 +176,11 @@ class CandidateAdmissionRecorded:
             "vault_bytes": blob_bytes,
             "admission_rule": self.admission_rule,
             "decision": self.decision.value,
+            "submission_context": {
+                "challenge_revision": self.submission_context.challenge_revision,
+                "instance_provenance": self.submission_context.instance_provenance,
+                "instance_kind": self.submission_context.instance_kind.value,
+            },
             "duplicate_class": self.duplicate_class,
             "ts": self.ts,
         }
@@ -161,7 +199,10 @@ class CandidateAdmissionRecorded:
             "duplicate_class",
             "ts",
         )
-        if any(name not in payload for name in (*strings, "challenge_id", "vault_bytes", "blob_digest", "blob_bytes")):
+        if any(
+            name not in payload
+            for name in (*strings, "challenge_id", "vault_bytes", "blob_digest", "blob_bytes", "submission_context")
+        ):
             raise InvalidEventError("Candidate admission payload is incomplete", sequence=sequence)
         if any(not isinstance(payload[name], str) for name in strings):
             raise InvalidEventError("Candidate admission string field has the wrong type", sequence=sequence)
@@ -173,6 +214,21 @@ class CandidateAdmissionRecorded:
             raise InvalidEventError("Candidate vault aliases disagree with sealed body", sequence=sequence)
         if payload["challenge_id"] <= 0 or payload["vault_bytes"] < 0:
             raise InvalidEventError("Candidate admission contains an invalid count", sequence=sequence)
+        context = payload["submission_context"]
+        if not isinstance(context, dict) or set(context) != {
+            "challenge_revision",
+            "instance_provenance",
+            "instance_kind",
+        }:
+            raise InvalidEventError("Candidate submission context is malformed", sequence=sequence)
+        try:
+            SubmissionContext(
+                context["challenge_revision"],
+                context["instance_provenance"],
+                InstanceProvenanceKind(context["instance_kind"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise InvalidEventError("Candidate submission context is invalid", sequence=sequence) from error
         for name in ("candidate_id", "candidate_digest", "provenance_digest", "vault_digest"):
             value = payload[name]
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):

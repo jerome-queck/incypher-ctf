@@ -39,3 +39,5 @@ docs/competitions/*
 
 # Byte-compiled leftovers of whatever interpreter last ran on the host — not the one in the image.
 solver/**/__pycache__
+solver/**/__pycache__/**
+solver/**/*.pyc

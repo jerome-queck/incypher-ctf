@@ -29,6 +29,7 @@ class BoardOperation(str, enum.Enum):
     SCOREBOARD = "scoreboard"
     DOWNLOAD = "download"
     SUBMIT = "submit"
+    SUBMISSION_LEDGER = "submission-ledger"
     INSTANCE_DEPLOY = "instance-deploy"
     INSTANCE_READ = "instance-read"
     INSTANCE_RENEW = "instance-renew"
@@ -105,6 +106,11 @@ class DownloadValue:
 
 
 @dataclass(frozen=True)
+class SubmissionLedgerValue:
+    row: Mapping[str, object] | None
+
+
+@dataclass(frozen=True)
 class IntakeReadValue:
     body: bytes
     location: str
@@ -117,6 +123,7 @@ BoardValue = (
     | ChallengeValue
     | ScoreboardValue
     | DownloadValue
+    | SubmissionLedgerValue
     | Verdict
     | Reply
     | Mana
@@ -221,6 +228,8 @@ def _encode_value(operation: BoardOperation, value: BoardValue | None) -> object
         return {"standings": [vars(row) for row in value.standings]}
     if isinstance(value, DownloadValue):
         return {"content": base64.b64encode(value.content).decode(), "hops": list(value.hops)}
+    if isinstance(value, SubmissionLedgerValue):
+        return {"row": dict(value.row) if value.row is not None else None}
     if isinstance(value, Verdict):
         return vars(value)
     if isinstance(value, Reply):
@@ -259,6 +268,9 @@ def _decode_value(operation: BoardOperation, value: object) -> BoardValue | None
         return ScoreboardValue(tuple(Standing(**row) for row in value["standings"]))
     if operation is BoardOperation.DOWNLOAD:
         return DownloadValue(base64.b64decode(str(value["content"])), tuple(value["hops"]))
+    if operation is BoardOperation.SUBMISSION_LEDGER:
+        row = value.get("row")
+        return SubmissionLedgerValue(dict(row) if isinstance(row, Mapping) else None)
     if operation is BoardOperation.SUBMIT:
         return Verdict(**value)
     if operation in {
