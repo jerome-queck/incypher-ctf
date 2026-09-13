@@ -32,6 +32,7 @@ from solver.submission.ambiguity import (
 from solver.submission.bridge import CandidateSubmissionBridge
 from solver.submission.bridge import ObservedCandidateSubmissionBridge
 from solver.submission.receipt import link_manifest, verify_receipt, write_receipt
+from solver.submission.runtime import compose_submission_runtime
 from solver.write_reservation import EffectIndeterminate
 from solver.write_reservation import Capacity, EffectIdentity, ReservationUnavailable
 from test_manifest import release_candidate_profile
@@ -83,6 +84,9 @@ class Wire:
 
     def close(self):
         pass
+
+    def submission_ledger(self, _effect_id):
+        return BoardBrokerResult(BoardOperation.SUBMISSION_LEDGER, BoardOutcome.UNREACHABLE)
 
 
 BINDING = CapabilityBinding("run-1", "boot-1", "generation-1", "lane-1", "attempt-1", "step-1")
@@ -195,6 +199,107 @@ def test_serial_submission_sends_complete_identity_to_board_broker(tmp_path):
     authority.dispatch(queued(), binding=BINDING)
 
     assert wire.complete_identities == [(ready().identity, complete.__dict__)]
+
+
+def test_production_runtime_fences_ambiguous_post_then_releases_unrelated_candidate(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire(crash_during=True)
+    mono, wall = [10.0], [100.0]
+
+    def identity_for(candidate):
+        return CompleteSubmissionIdentity(
+            "board-1",
+            candidate.challenge_id,
+            candidate.submission_context.challenge_revision,
+            candidate.submission_context.instance_provenance,
+            candidate.candidate_digest,
+            1,
+        )
+
+    runtime = compose_submission_runtime(
+        state=tmp_path / "state",
+        recorder=recorder,
+        run_id="run-1",
+        boot_id="boot-1",
+        board_broker_path=tmp_path / "board.sock",
+        timestamp=Clock(),
+        identity_for=identity_for,
+        monotonic=lambda: mono[0],
+        wall_time=lambda: wall[0],
+        open_client=lambda _path, _binding, *, scope: wire,
+        reconcile_interval=100,
+    )
+    first = queued()
+    second_candidate = replace(
+        ready(identity="d" * 64, candidate=b"zephyr{unrelated}"),
+        candidate_digest="e" * 64,
+    )
+    try:
+        with pytest.raises(SystemExit):
+            runtime.submission.dispatch(first, binding=BINDING)
+        with pytest.raises(EffectIndeterminate):
+            runtime.submission.dispatch(queued(second_candidate), binding=BINDING)
+
+        mono[0], wall[0] = 70.0, 160.0
+        runtime.reconciler.cycle()
+        result = runtime.submission.dispatch(queued(second_candidate), binding=BINDING)
+
+        assert result is not None
+        assert wire.posts == 2
+        assert runtime.fence.can_submit(first.candidate.identity, identity_for(first.candidate).effect_id) is False
+        assert runtime.fence.barrier_open is False
+    finally:
+        runtime.close()
+
+
+def test_production_runtime_resumes_open_fence_with_reset_monotonic_epoch(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire(crash_during=True)
+    mono, wall = [10.0], [100.0]
+
+    def identity_for(candidate):
+        return CompleteSubmissionIdentity(
+            "board-1",
+            candidate.challenge_id,
+            candidate.submission_context.challenge_revision,
+            candidate.submission_context.instance_provenance,
+            candidate.candidate_digest,
+            1,
+        )
+
+    def boot(boot_id):
+        return compose_submission_runtime(
+            state=tmp_path / "state",
+            recorder=recorder,
+            run_id="run-1",
+            boot_id=boot_id,
+            board_broker_path=tmp_path / "board.sock",
+            timestamp=Clock(),
+            identity_for=identity_for,
+            monotonic=lambda: mono[0],
+            wall_time=lambda: wall[0],
+            open_client=lambda _path, _binding, *, scope: wire,
+            reconcile_interval=100,
+        )
+
+    first_boot = boot("boot-1")
+    try:
+        with pytest.raises(SystemExit):
+            first_boot.submission.dispatch(queued(), binding=BINDING)
+    finally:
+        first_boot.close()
+
+    mono[0], wall[0] = 0.0, 115.0
+    second_boot = boot("boot-2")
+    try:
+        second_boot.reconciler.cycle()
+        assert second_boot.fence.barrier_open
+        mono[0], wall[0] = 45.0, 160.0
+        second_boot.reconciler.cycle()
+        assert not second_boot.fence.barrier_open
+        assert len(second_boot.fence.post_trace(ready().identity)) == 1
+    finally:
+        second_boot.close()
 
 
 def test_first_ready_candidate_dispatches_in_the_admission_call_with_one_post(tmp_path):

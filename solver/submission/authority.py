@@ -59,10 +59,16 @@ class SerialSubmission:
             return len(self._pending)
 
     def dispatch(
-        self, admission: ReadyAdmission, *, binding: CapabilityBinding, pre_wire: Callable[[], None] | None = None
+        self,
+        admission: ReadyAdmission,
+        *,
+        binding: CapabilityBinding,
+        pre_wire: Callable[[], None] | None = None,
+        complete_identity: CompleteSubmissionIdentity | None = None,
     ) -> SubmissionResult | None:
         candidate = admission.candidate
-        complete_identity = self._identity_for(candidate) if self._identity_for is not None else None
+        if complete_identity is None and self._identity_for is not None:
+            complete_identity = self._identity_for(candidate)
         if candidate.generation_id != binding.generation_id:
             raise ValueError("Candidate generation does not match submission capability")
         with self._queue:

@@ -225,9 +225,7 @@ def _qualify_resident_tools(image_manifest_digest: str) -> None:
     """Execute every canonical resident workload against this exact Candidate image."""
 
     inventory = json.loads((ROOT / "tool-supply/generated/inventory.json").read_bytes())
-    components = sorted(
-        item["component_id"] for item in inventory["components"] if "resident" in item["profiles"]
-    )
+    components = sorted(item["component_id"] for item in inventory["components"] if "resident" in item["profiles"])
     staged = Path(tempfile.mkdtemp(prefix="resident-requalification-", dir=ROOT / ".cache"))
     for component_id in components:
         destination = staged / f"{component_id}.json"
@@ -249,7 +247,12 @@ def _qualify_resident_tools(image_manifest_digest: str) -> None:
     )
     atomic_write(ROOT / "tool-supply/receipts/tool-crypto.core.json", core.read_bytes())
     subprocess.run(
-        [sys.executable, str(ROOT / "scripts/qualify_crypto_profile.py"), "--candidate-image", "incypher-solver:strict"],
+        [
+            sys.executable,
+            str(ROOT / "scripts/qualify_crypto_profile.py"),
+            "--candidate-image",
+            "incypher-solver:strict",
+        ],
         cwd=ROOT,
         check=True,
     )

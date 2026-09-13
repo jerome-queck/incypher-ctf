@@ -1,7 +1,5 @@
 """Bind ambiguity fencing to the serial Board submission authority."""
 
-from dataclasses import replace
-
 from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.write_reservation import EffectIndeterminate
 
@@ -27,12 +25,12 @@ class AmbiguityAwareSerialSubmission:
         if complete.candidate_digest != admission.candidate.candidate_digest:
             raise ValueError("complete submission identity names another Candidate value")
         self._fence.reserve_path(original_id, complete, record_wire=False)
-        canonical = replace(admission, candidate=replace(admission.candidate, identity=complete.payload_identity))
         try:
             result = self._serial.dispatch(
-                canonical,
+                admission,
                 binding=binding,
                 pre_wire=lambda: self._fence.mark_wire(original_id, complete),
+                complete_identity=complete,
             )
         except BaseException:
             current = self._fence.effect_state(complete.reservation_id)
@@ -41,4 +39,4 @@ class AmbiguityAwareSerialSubmission:
                     self._fence.begin(original_id, complete)
             raise
         self._fence.release_unused_path(complete.effect_id)
-        return replace(result, candidate_id=original_id)
+        return result

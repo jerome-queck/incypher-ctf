@@ -116,7 +116,11 @@ class AmbiguousSubmissionFence:
         effect_id = identity.effect_id
         challenge_id = identity.challenge_id
         budget = self._authority.current(f"ambiguity-path:{effect_id}")
-        if budget is None or budget.state.value not in {"started", "possibly-sent"} or budget.need != AMBIGUITY_PATH_NEED:
+        if (
+            budget is None
+            or budget.state.value not in {"started", "possibly-sent"}
+            or budget.need != AMBIGUITY_PATH_NEED
+        ):
             raise ValueError("complete ambiguity path was not reserved before the Board effect")
         with self._lock:
             if candidate_id in self._states():

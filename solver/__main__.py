@@ -70,11 +70,11 @@ from solver.lead_controller import LeadController
 from solver.lead_v1_adapter import V1LeadAdapter
 from solver.tool_control import AttemptToolRuntime, ToolController, attempt_components
 from solver.candidate_admission import CandidateAdmission
-from solver.submission.authority import SerialSubmission
 from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.submission.bridge import CandidateSubmissionBridge, ObservedCandidateSubmissionBridge
 from solver.submission.context import SubmissionContextResolver
 from solver.submission.epoch import SubmissionEpochAuthority
+from solver.submission.runtime import compose_submission_runtime
 from solver.submission.receipt import link_manifest as link_submission_manifest
 from solver.submission.receipt import write_receipt as write_submission_receipt
 
@@ -428,13 +428,17 @@ def _run_admitted(
             recorder.event_store,
             lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
-        submission = SerialSubmission(
-            recorder.run_dir / "canonical",
-            recorder.write_authority,
-            lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
-            board_broker_path,
+        submission_runtime = compose_submission_runtime(
+            state=run_state,
+            recorder=recorder,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            board_broker_path=board_broker_path,
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
             identity_for=identity_for,
         )
+        submission = submission_runtime.submission
+        stack.callback(submission_runtime.close)
         candidate_sink = CandidateSubmissionBridge(admission, submission, context_for)
         observed_candidate_sink = ObservedCandidateSubmissionBridge(
             admission,

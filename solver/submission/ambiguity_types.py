@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from solver.board_broker_contracts import BoardBrokerResult, BoardOutcome
+from solver.board_broker_contracts import BoardBrokerResult, BoardOutcome, SubmissionLedgerValue
 from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.write_reservation import EffectIdentity
 
@@ -124,7 +124,8 @@ class AuthenticatedSubmissionEvidence:
 
     @classmethod
     def from_broker(cls, result: BoardBrokerResult):
-        provenance, row = result.provenance, result.value
+        provenance = result.provenance
+        row = result.value.row if isinstance(result.value, SubmissionLedgerValue) else result.value
         required = {
             "board_row_id",
             "row_type",
