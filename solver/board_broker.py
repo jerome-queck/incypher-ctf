@@ -73,6 +73,7 @@ _SCOPE = {
     BoardOperation.SCOREBOARD: "board.read",
     BoardOperation.DOWNLOAD: "board.read",
     BoardOperation.SUBMIT: "board.submit",
+    BoardOperation.SUBMISSION_LEDGER: "board.submit",
     BoardOperation.INSTANCE_DEPLOY: "board.instance.effect",
     BoardOperation.INSTANCE_READ: "board.instance.read",
     BoardOperation.INSTANCE_RENEW: "board.instance.effect",
@@ -348,8 +349,26 @@ class BoardBrokerRuntime:
             return BoardBrokerResult(operation, BoardOutcome.CAPABILITY_REFUSED)
         if not self._profile_allows_operations():
             return BoardBrokerResult(operation, BoardOutcome.CAPABILITY_REFUSED)
-        request_digest = _request_digest(operation, arguments)
         request_id = self._next_id()
+        ledger_identity = arguments.get("complete_identity") if operation is BoardOperation.SUBMIT else None
+        if ledger_identity is not None:
+            from solver.submission.ambiguity_types import CompleteSubmissionIdentity
+            from solver.submission.ledger import SubmissionLedgerPhase, SubmissionLedgerRecorded
+
+            identity = CompleteSubmissionIdentity(**dict(ledger_identity))
+            self._store.append(
+                SubmissionLedgerRecorded(
+                    f"{request_id}:intent",
+                    SubmissionLedgerPhase.INTENDED,
+                    request_id,
+                    str(arguments["candidate_id"]),
+                    str(arguments["flag"]),
+                    identity,
+                    self._timestamp(),
+                ),
+                body=str(arguments["flag"]).encode(),
+            )
+        request_digest = _request_digest(operation, arguments)
         try:
             self._store.append(
                 self._record(
@@ -477,6 +496,20 @@ class BoardBrokerRuntime:
             if outcome is BoardOutcome.ANSWERED
             else None
         )
+        if ledger_identity is not None and outcome is BoardOutcome.ANSWERED:
+            self._store.append(
+                SubmissionLedgerRecorded(
+                    f"{request_id}:classified",
+                    SubmissionLedgerPhase.CLASSIFIED,
+                    request_id,
+                    str(arguments["candidate_id"]),
+                    str(arguments["flag"]),
+                    identity,
+                    self._timestamp(),
+                    str(value.outcome),
+                ),
+                body=str(arguments["flag"]).encode(),
+            )
         return BoardBrokerResult(operation, outcome, typed, provenance, request_id)
 
     def issue_intake(
@@ -593,6 +626,10 @@ class BoardBrokerRuntime:
                     verdict, message=verdict.message.replace(str(arguments["flag"]), "[submitted-candidate]")
                 )
             return verdict
+        if operation is BoardOperation.SUBMISSION_LEDGER:
+            from solver.submission.ledger import project_submission_row
+
+            return project_submission_row(self._store.events(), str(arguments["effect_id"]))
         if operation is BoardOperation.INSTANCE_DEPLOY:
             return board.deploy_instance(arguments["challenge_id"])
         if operation is BoardOperation.INSTANCE_READ:
@@ -656,6 +693,10 @@ class BoardBrokerRuntime:
             return ScoreboardValue(tuple(value))
         if operation is BoardOperation.DOWNLOAD:
             return DownloadValue(value[0], tuple(value[1]))
+        if operation is BoardOperation.SUBMISSION_LEDGER:
+            from solver.board_broker_contracts import SubmissionLedgerValue
+
+            return SubmissionLedgerValue(value)
         return value
 
 
@@ -728,8 +769,16 @@ class BoardBrokerClient:
     def download(self, file_path: str) -> BoardBrokerResult:
         return self._execute(BoardOperation.DOWNLOAD, file_path=file_path)
 
-    def submit(self, challenge_id: int | str, flag: str) -> BoardBrokerResult:
-        return self._execute(BoardOperation.SUBMIT, challenge_id=challenge_id, flag=flag)
+    def submit(
+        self, challenge_id: int | str, flag: str, *, candidate_id="", complete_identity=None
+    ) -> BoardBrokerResult:
+        arguments = {"challenge_id": challenge_id, "flag": flag}
+        if complete_identity is not None:
+            arguments.update(candidate_id=candidate_id, complete_identity=complete_identity)
+        return self._execute(BoardOperation.SUBMIT, **arguments)
+
+    def submission_ledger(self, effect_id: str) -> BoardBrokerResult:
+        return self._execute(BoardOperation.SUBMISSION_LEDGER, effect_id=effect_id)
 
     def read_instance(self, challenge_id: int | str) -> BoardBrokerResult:
         return self._execute(BoardOperation.INSTANCE_READ, challenge_id=challenge_id)
