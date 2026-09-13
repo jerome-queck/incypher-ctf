@@ -221,6 +221,43 @@ def _refresh_resident_tool(
     return refreshed
 
 
+def _qualify_resident_tools(image_manifest_digest: str) -> None:
+    """Execute every canonical resident workload against this exact Candidate image."""
+
+    inventory = json.loads((ROOT / "tool-supply/generated/inventory.json").read_bytes())
+    components = sorted(
+        item["component_id"] for item in inventory["components"] if "resident" in item["profiles"]
+    )
+    staged = Path(tempfile.mkdtemp(prefix="resident-requalification-", dir=ROOT / ".cache"))
+    for component_id in components:
+        destination = staged / f"{component_id}.json"
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts/qualify_tool_supply.py"), component_id, "--into", str(destination)],
+            cwd=ROOT,
+            check=True,
+        )
+        atomic_write(ROOT / "tool-supply/receipts" / destination.name, destination.read_bytes())
+    subprocess.run([sys.executable, str(ROOT / "scripts/aggregate_resident_tool_receipt.py")], cwd=ROOT, check=True)
+    resident = json.loads((ROOT / "tool-supply/receipts/tool-resident.json").read_bytes())
+    if resident.get("image_digest") != image_manifest_digest:
+        raise ValueError("fresh resident Tool qualification names another candidate image")
+    core = staged / "tool-crypto.core.json"
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/qualify_tool_supply.py"), "tool-crypto.core", "--into", str(core)],
+        cwd=ROOT,
+        check=True,
+    )
+    atomic_write(ROOT / "tool-supply/receipts/tool-crypto.core.json", core.read_bytes())
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/qualify_crypto_profile.py"), "--candidate-image", "incypher-solver:strict"],
+        cwd=ROOT,
+        check=True,
+    )
+    crypto = json.loads((ROOT / "tool-supply/receipts/tool-crypto.json").read_bytes())
+    if crypto.get("image_digest") != image_manifest_digest:
+        raise ValueError("fresh Crypto qualification names another candidate image")
+
+
 def _candidate_manifest(
     private_key: Path,
     fixed: dict[str, str],
@@ -437,6 +474,7 @@ def qualify(private_key: Path) -> Path:
         raise RuntimeError("runtime is off its pin")
     public = _validate_evaluator(private_key)
     binding = strict_runtime.build_image(subprocess.run)
+    _qualify_resident_tools(binding.image_manifest_digest)
     work = Path(tempfile.mkdtemp(prefix="runtime-qualification-372-", dir=STATE))
     observations, strict, strict_path, runtime_observation = _run_candidate(binding, work)
     serial, incident, crypto = _retain_evidence(
