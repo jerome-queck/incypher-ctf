@@ -97,10 +97,14 @@ def verify_receipt(path: Path, authority: WriteAuthority | None = None) -> Path:
             ["reserved", "started", "committed"],
             ["reserved", "started", "possibly-sent"],
             ["reserved", "aborted"],
+            ["reserved", "aborted", "reserved", "started", "committed"],
+            ["reserved", "aborted", "reserved", "started", "possibly-sent"],
         )
         if states not in allowed:
             raise InvalidReceiptError("serial-submission state trace is not exactly once")
-        if schema_version == 2 and (not isinstance(ordinals, list) or len(ordinals) != len(states)):
+        if schema_version == 2 and (
+            not isinstance(ordinals, list) or len(ordinals) != len(states) or ordinals != sorted(set(ordinals))
+        ):
             raise InvalidReceiptError("serial-submission trace ordinals are incomplete")
         result = row.get("result")
         if states[-1] == "committed":

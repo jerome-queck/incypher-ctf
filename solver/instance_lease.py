@@ -284,7 +284,13 @@ class LeaseCoordinator:
 
     def _record_contender(self, existing: LeaseGrant, attempt_id: str) -> None:
         subject = json.dumps(
-            {**grant_document(existing), "contender_attempt_id": attempt_id}, sort_keys=True, separators=(",", ":")
+            {
+                "contender_attempt_id": attempt_id,
+                "lease_seq": existing.identity.lease_seq,
+                "run_id": existing.identity.run_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
         key = f"lease:{self._run_id}:{existing.identity.lease_seq}:contender:{attempt_id}"
         reservation = self._authority.reserve(

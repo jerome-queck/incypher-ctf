@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass
 
 from solver.board_broker import BoardBrokerClient
-from solver.capability import CapabilityBinding
 from solver.submission.ambiguity import AmbiguousSubmissionFence
 from solver.submission.ambiguity_adapter import AmbiguityAwareSerialSubmission
 from solver.submission.authority import SerialSubmission
@@ -21,6 +20,7 @@ class SubmissionRuntime:
 
     def close(self):
         self.reconciler.close()
+        self.fence.write_receipt()
 
 
 def compose_submission_runtime(
@@ -39,14 +39,13 @@ def compose_submission_runtime(
     open_client=BoardBrokerClient.open,
     reconcile_interval=0.25,
 ):
-    binding = CapabilityBinding(
-        run_id,
-        boot_id,
-        "submission-reconciliation",
-        "authority",
-        "submission-reconciliation",
-        "submission-ledger",
-    )
+    fence = None
+
+    def binding_for(pending):
+        if fence is None:
+            raise RuntimeError("submission fence is not composed")
+        return fence.reconciliation_binding(pending)
+
     fence = AmbiguousSubmissionFence(
         state,
         recorder.write_authority,
@@ -54,7 +53,7 @@ def compose_submission_runtime(
         boot_id=boot_id,
         monotonic=monotonic,
         wall_time=wall_time,
-        probe=broker_evidence_probe(open_client, board_broker_path, binding),
+        probe=broker_evidence_probe(open_client, board_broker_path, binding_for),
     )
     serial = SerialSubmission(
         recorder.run_dir / "canonical",

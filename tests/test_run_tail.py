@@ -9,18 +9,28 @@ chall-manager never evicts.
 
 import datetime as dt
 import json
+import threading
+import time
+from types import SimpleNamespace
 
 from solver.board import Board
 from solver.codex import Credential
 from solver.flag import Flags, Pace, ReplayLimits
 from solver.instance import Instances
+from solver.instance_lease import LeaseCoordinator
+from solver.instance_lease_contracts import RowCorroboration
 from solver.intake import Intake, Limits
 from solver.profile import Rules, discovered
 from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.flag import OBSERVED, Candidate
+from solver.final_interval import FinalIntervalController
+from solver.lane_topology import LaneController
+from solver.lane_topology_contracts import LaneProfile, OwnerTermination
 from solver.run import SIGNALLED, TAIL, WINDOW_CLOSED, Pending, Run, Steps
 from solver.schedule import Dials, Scheduler, Window
+from solver.stall import Deadline
+from solver.work_generation import GenerationAuthority
 from test_run_loop import BOARD, CONTROL_REFUSED, NOON, PROFILE_LANDING, WRAPPER, Agent, Clock, records
 
 RULES = Rules(event="offline", url=BOARD, flag_wrappers=(WRAPPER,), window_seconds=3600, prohibitions=())
@@ -134,7 +144,25 @@ class Wire:
         return (200, json.dumps({"success": True, "data": data}).encode(), "", "application/json")
 
 
-def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):
+class LaneScheduler(Scheduler):
+    """Legacy-fixture projection of canonical Order's one sub-floor final chance."""
+
+    def out_of_time(self):
+        return self.window.left(self._now()) <= self.dials.tail_seconds
+
+
+def solver(
+    tmp_path,
+    wire,
+    agent,
+    clock,
+    *,
+    lasting=1200.0,
+    reproduces=True,
+    canonical_tail=False,
+    lanes=1,
+    active_lease_at_final=False,
+):
     board = Board(BOARD, "token", wire.transport)
     recorder = Recorder(tmp_path / "state", "gate", Redactor({}), now=clock)
     found = discovered(board, Board(BOARD, "", wire.transport), RULES)
@@ -142,7 +170,32 @@ def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):
     intake = Intake(board, recorder, limits=Limits(cycle_seconds=300.0), now=clock)
     intake.sync()
     steps = Steps()
-    instances = Instances(board, recorder, step_numbers=steps.spend, now=clock)
+    coordinator = None
+    if active_lease_at_final:
+        coordinator = LeaseCoordinator(
+            recorder.write_authority,
+            board,
+            run_id="gate",
+            board_id=BOARD,
+            owner_id="team-7",
+            corroborate=lambda challenge_id: RowCorroboration(row_id=f"row-{challenge_id}"),
+            admit_generation=lambda generation_id, effect: recorder.generations.authorize_and_commit(
+                generation_id,
+                GenerationAuthority.AUTHORITY,
+                lambda grant: effect(grant.sequence, grant.event_id),
+            )[1],
+            generation_events=recorder.event_store.events,
+        )
+    instances = Instances(board, recorder, step_numbers=steps.spend, now=clock, coordinator=coordinator)
+    initial_leases = {}
+    if active_lease_at_final:
+        generation = recorder.generations.acquire("integer:1", "attempt-live-at-final")
+        answer = instances.deploy(
+            intake.snapshot.challenges[0].terms,
+            attempt_id=generation.attempt_id,
+            generation_id=generation.generation_id,
+        )
+        initial_leases[1] = answer.lease
     flags = Flags(
         board,
         recorder,
@@ -157,11 +210,48 @@ def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):
         now=clock,
         sleep=lambda _seconds: None,
     )
+    final_interval = (
+        FinalIntervalController(
+            state=tmp_path / "state",
+            run_id="gate",
+            opened_at=window.opened_at,
+            ends_at=window.ends_at,
+            final_submission_reserve_seconds=int(DIALS.tail_seconds),
+            attempt_floor_seconds=int(DIALS.floor_seconds),
+            enabled_lanes=tuple(f"lane-{index}" for index in range(1, lanes + 1)),
+            now=clock,
+            reserve=lambda _identity: None,
+        )
+        if canonical_tail
+        else None
+    )
+    dials = Dials(knee_seconds=600.0, floor_seconds=300.0, tail_seconds=300.0, concurrency=lanes)
+    lane_controller = (
+        LaneController(
+            state=tmp_path / "state",
+            run_id="gate",
+            profile=LaneProfile(
+                lanes=2,
+                global_resource_units=2,
+                global_cpu_quota_us=200_000,
+                global_memory_bytes=4096,
+                global_pids=16,
+                global_filesystem_bytes=8192,
+                global_wall_seconds=int(lasting),
+            ),
+            generations=recorder.generations,
+            timestamp=lambda: clock().isoformat(),
+            terminate=lambda _binding: OwnerTermination(True, "a" * 64),
+            final_interval=final_interval,
+        )
+        if lanes == 2
+        else None
+    )
     run = Run(
         profile=found,
         recorder=recorder,
         intake=intake,
-        scheduler=Scheduler(window, recorder, dials=DIALS, now=clock),
+        scheduler=(LaneScheduler if lanes == 2 else Scheduler)(window, recorder, dials=dials, now=clock),
         flags=flags,
         instances=instances,
         steps=steps,
@@ -171,8 +261,266 @@ def solver(tmp_path, wire, agent, clock, *, lasting=1200.0, reproduces=True):
         idle_seconds=30.0,
         now=clock,
         sleep=lambda seconds: clock.tick(seconds),
+        final_interval=final_interval,
+        lane_controller=lane_controller,
+        initial_leases=initial_leases,
     )
     return run, recorder
+
+
+def test_canonical_tail_drains_reconciles_once_and_closes_at_the_official_boundary(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire, solving=(1,)),
+        clock,
+        reproduces=False,
+        canonical_tail=True,
+    )
+
+    ending = run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert wire.submitted[-1] == (1, wire.flags[1])
+    assert wire.deployed == {}
+    assert receipt["terminal"]["closed_at"] == receipt["window"]["ends_at"]
+    assert receipt["terminal"]["remaining"] == {"attempts": [], "instances": [], "submissions": []}
+    assert len(records(recorder, "run-close")) == 1
+    assert ending.clean
+
+
+def test_production_lane_termination_shortens_owner_and_waits_for_exit(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, _recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        canonical_tail=True,
+        lanes=2,
+    )
+    binding = SimpleNamespace(
+        lane_id="lane-1",
+        attempt_id="lane-attempt-000001",
+        generation=SimpleNamespace(generation_id="generation-000001"),
+        hard_deadline=(clock() + dt.timedelta(minutes=5)).isoformat(),
+    )
+    entered = threading.Event()
+
+    def owned(_pick, *, lane_binding=None, final_grant=None):
+        deadline = Deadline(clock() + dt.timedelta(minutes=5))
+        run._in_flight[lane_binding.lane_id] = deadline
+        entered.set()
+        while not deadline.sealed:
+            time.sleep(0.001)
+        run._in_flight.pop(lane_binding.lane_id, None)
+        return "ended"
+
+    run._attempt_owned = owned
+    worker = threading.Thread(target=lambda: run._attempt(None, lane_binding=binding), daemon=True)
+    worker.start()
+    assert entered.wait(1)
+
+    termination = run.terminate_lane_owner(binding, cleanup_seconds=1)
+    worker.join(timeout=1)
+
+    assert termination.ended
+    assert termination.remaining_processes == ()
+    assert not worker.is_alive()
+
+
+def test_canonical_tail_closes_every_active_generation_before_terminal_inventory(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        reproduces=False,
+        canonical_tail=True,
+    )
+    recorder.generations.acquire("integer:99", "attempt-open-at-final-interval")
+
+    run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert receipt["terminal"]["remaining"]["attempts"] == []
+    assert not [state for state in recorder.generations.projection().generations if state.active]
+
+
+def test_canonical_tail_releases_an_active_instance_before_closing_its_generation(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=301,
+        canonical_tail=True,
+        active_lease_at_final=True,
+    )
+
+    ending = run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert wire.terminated == [1]
+    assert receipt["terminal"]["remaining"] == {"attempts": [], "instances": [], "submissions": []}
+    assert ending.clean
+
+
+def test_canonical_tail_keeps_refused_instance_release_in_terminal_inventory(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, terminates=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=301,
+        canonical_tail=True,
+        active_lease_at_final=True,
+    )
+
+    ending = run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert receipt["terminal"]["remaining"]["instances"] == ["1"]
+    assert receipt["terminal"]["disposition"] == "closed-with-unsettled-cleanup"
+    assert not ending.clean
+
+
+def test_canonical_candidate_queue_replaces_the_legacy_pending_drain(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, _recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        reproduces=False,
+        canonical_tail=True,
+    )
+    submitted = []
+
+    class FinalQueue:
+        @staticmethod
+        def candidate_ids():
+            return ("canonical-candidate",)
+
+        @staticmethod
+        def pending_candidate_ids():
+            return ()
+
+        @staticmethod
+        def submit(candidate_id):
+            submitted.append(candidate_id)
+            return "accepted"
+
+    run._final_candidate_queue = FinalQueue()
+    workdir = tmp_path / "work" / RULES.event / "1"
+    workdir.mkdir(parents=True)
+    run._pending[1] = Pending(1, workdir, (Candidate("brunner{held}", OBSERVED, command="cat flag"),))
+
+    run.work()
+
+    assert submitted == ["canonical-candidate"]
+    assert (1, "brunner{held}") not in wire.submitted
+
+
+def test_terminal_inventory_retains_an_unsettled_canonical_submission(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        reproduces=False,
+        canonical_tail=True,
+    )
+
+    class FinalQueue:
+        @staticmethod
+        def candidate_ids():
+            return ("canonical-candidate",)
+
+        @staticmethod
+        def pending_candidate_ids():
+            return ("canonical-candidate",)
+
+        @staticmethod
+        def submit(_candidate_id):
+            return "possibly-sent"
+
+    run._final_candidate_queue = FinalQueue()
+
+    run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert receipt["terminal"]["remaining"]["submissions"] == ["canonical-candidate"]
+
+
+def test_terminal_inventory_retains_a_candidate_the_window_closed_before_dispatch(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        reproduces=False,
+        canonical_tail=True,
+    )
+
+    class FinalQueue:
+        @staticmethod
+        def candidate_ids():
+            return ("candidate-first", "candidate-unsubmitted")
+
+        @staticmethod
+        def pending_candidate_ids():
+            return ()
+
+        @staticmethod
+        def submit(_candidate_id):
+            clock.tick(DIALS.tail_seconds)
+            return "accepted"
+
+    run._final_candidate_queue = FinalQueue()
+
+    run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert receipt["terminal"]["remaining"]["submissions"] == ["candidate-unsubmitted"]
+
+
+def test_selected_two_lane_production_adapter_executes_both_final_entitlements(tmp_path):
+    clock = Clock()
+    wire = Wire(count=2, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=700,
+        reproduces=False,
+        canonical_tail=True,
+        lanes=2,
+    )
+    clock.tick(101)
+
+    ending = run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert set(receipt["enabled_lanes"]) == {"lane-1", "lane-2"}
+    assert set(receipt["final_chances"]) == {"lane-1", "lane-2"}
+    assert {row["challenge_id"] for row in receipt["final_chances"].values()} == {"1", "2"}
+    assert ending.clean
 
 
 def _echo(wire, command: str) -> bytes:

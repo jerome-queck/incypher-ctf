@@ -19,6 +19,7 @@ import datetime as dt
 import hashlib
 import os
 import signal
+import subprocess
 import sys
 from collections.abc import Mapping
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from solver import boot, profile
+from solver.clock import Clock, SystemClock, qualification_from_environment
 from solver.attempt_executor import AttemptExecutor
 from solver.attempt_executor_contracts import RuntimeBinding
 from solver.attempt_executor_pool import ATTEMPT_UID, POOL_ENV, attach_attempt_pool
@@ -45,6 +47,11 @@ from solver.cpa_contracts import CPAConfig
 from solver.cpa_responses import CPAResponsesModel
 from solver.cpa_service import CPA_CREDENTIAL_FD_ENV, CPA_RESPONSES_URL_ENV, CPALeadPort, CPAService
 from solver.flag import Flags, Pace
+from solver.final_interval import FinalIntervalController
+from solver.final_interval_profile import verify_selected_profile
+from solver.final_candidate_queue import FinalCandidateQueue
+from solver.lane_topology import LaneController
+from solver.lane_topology_contracts import LaneProfile, OwnerTermination
 from solver.instance import INSTANCED_ELSEWHERE, INSTANCED_TYPE, Instances
 from solver.instance_ledger import AuthenticatedIdentity, read_profiled_instance_ledger
 from solver.instance_ledger import write_receipt as write_instance_ledger_receipt
@@ -77,6 +84,8 @@ from solver.submission.epoch import SubmissionEpochAuthority
 from solver.submission.runtime import compose_submission_runtime
 from solver.submission.receipt import link_manifest as link_submission_manifest
 from solver.submission.receipt import write_receipt as write_submission_receipt
+from solver.write_reservation import Capacity, EffectIdentity
+from solver.write_reservation_contracts import Pool, RetentionPolicy
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
@@ -147,6 +156,75 @@ REFUSED_AT_BOOT = "refused-at-boot"
 TEST_DIRECT_BOARD_FACTORY: Callable[[str, str], Board] | None = None
 CPA_ROUTE_ENV = "INCYPHER_INFERENCE_ROUTE"
 CPA_ROUTE = "private-cpa"
+LANES_ENV = "INCYPHER_LANES"
+CANDIDATE_MANIFEST_ENV = "INCYPHER_CANDIDATE_MANIFEST"
+CANDIDATE_SIGNATURE_ENV = "INCYPHER_CANDIDATE_MANIFEST_SIGNATURE"
+EVALUATOR_PUBLIC_KEY_ENV = "INCYPHER_EVALUATOR_PUBLIC_KEY"
+FINAL_INTERVAL_PROFILE_ENV = "INCYPHER_FINAL_INTERVAL_PROFILE"
+FINAL_INTERVAL_PROFILE_SIGNATURE_ENV = "INCYPHER_FINAL_INTERVAL_PROFILE_SIGNATURE"
+TRUSTED_EVALUATOR_KEY_DIGEST = (  # gitleaks:allow
+    "672b8a4f435628a41eb590ee563c9e395cbebfbc766accf20efc2e028d302c5b"
+)
+
+
+def _selected_candidate_profile(environ: Mapping[str, str]):
+    """Verify the host-selected exact Candidate before its profile controls Boot."""
+    paths = tuple(
+        environ.get(name, "") for name in (CANDIDATE_MANIFEST_ENV, CANDIDATE_SIGNATURE_ENV, EVALUATOR_PUBLIC_KEY_ENV)
+    )
+    if not all(paths):
+        if TEST_DIRECT_BOARD_FACTORY is not None or not environ.get(BOARD_BROKER_SOCKET_ENV):
+            # An absent broker is refused at its older, more specific pre-effect boundary.
+            return None
+        raise Refusal(f"{boot.MARK} signed release-candidate profile is required")
+    manifest_path, signature_path, public_path = map(Path, paths)
+    try:
+        public = public_path.read_bytes()
+        if hashlib.sha256(public).hexdigest() != TRUSTED_EVALUATOR_KEY_DIGEST:
+            raise ValueError("untrusted evaluator key")
+        verified = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-verify",
+                "-rawin",
+                "-pubin",
+                "-inkey",
+                str(public_path),
+                "-in",
+                str(manifest_path),
+                "-sigfile",
+                str(signature_path),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if verified.returncode:
+            raise ValueError("invalid evaluator signature")
+        from solver.manifest import canonical_manifest_bytes, parse_manifest
+
+        manifest = parse_manifest(manifest_path.read_bytes())
+        if manifest_path.read_bytes() != canonical_manifest_bytes(manifest) + b"\n":
+            raise ValueError("manifest is not canonical")
+        expected_image = environ.get("INCYPHER_IMAGE_MANIFEST", "") or environ.get(STRICT_IMAGE_ENV, "")
+        if expected_image and manifest["candidate"]["image_digest"] != expected_image:
+            raise ValueError("manifest names another exact image")
+        row_paths = tuple(
+            environ.get(name, "") for name in (FINAL_INTERVAL_PROFILE_ENV, FINAL_INTERVAL_PROFILE_SIGNATURE_ENV)
+        )
+        if not all(row_paths):
+            raise ValueError("signed final-interval selected profile is required")
+        final_profile = verify_selected_profile(
+            Path(row_paths[0]),
+            Path(row_paths[1]),
+            public_path,
+            manifest,
+            trusted_key_digest=TRUSTED_EVALUATOR_KEY_DIGEST,
+            expected_image_digest=expected_image,
+        )
+        return manifest["selected_profile"], final_profile
+    except (OSError, ValueError) as error:
+        raise Refusal(f"{boot.MARK} signed release-candidate profile is invalid — {error}") from None
 
 
 def _deny_cpa_tool(_name, _arguments):
@@ -179,7 +257,14 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
     because it is the most expensive and the only one that needs a Recorder to write to.
     """
     held = boot.setup(environ)
-    rules = profile.rules_for(held.url, boards)
+    try:
+        qualification = qualification_from_environment(environ)
+    except ValueError as error:
+        raise Refusal(f"{boot.MARK} qualification clock refused — {error}") from None
+    clock = qualification.clock if qualification is not None else SystemClock()
+    rules = qualification.rules if qualification is not None else profile.rules_for(held.url, boards)
+    selected = _selected_candidate_profile(environ)
+    selected_candidate_profile, final_profile = selected if selected is not None else (None, None)
     try:
         verify_and_materialize_run_state(run_state, held.run_id, Redactor.for_declared_secrets(environ))
     except EventStoreDamage as damage:
@@ -195,6 +280,10 @@ def _run(environ: Mapping[str, str], *, run_state: Path, boards: Path) -> Ending
         profile_handle=environ.get(BOARD_PROFILE_HANDLE_ENV, ""),
         board_broker_path=Path(environ[BOARD_BROKER_SOCKET_ENV]) if environ.get(BOARD_BROKER_SOCKET_ENV) else None,
         boot_id=environ.get("SUPERVISOR_BOOT_ID", ""),
+        selected_candidate_profile=selected_candidate_profile,
+        selected_final_profile=final_profile,
+        clock=clock,
+        qualification_seed=qualification.seed if qualification is not None else "",
     )
 
 
@@ -208,6 +297,10 @@ def _run_admitted(
     profile_handle: str = "",
     board_broker_path: Path | None = None,
     boot_id: str = "",
+    selected_candidate_profile=None,
+    selected_final_profile=None,
+    clock: Clock | None = None,
+    qualification_seed: str = "",
 ) -> Ending:
     """Keep capability IPC live beside every admitted v1 Board and inference call."""
 
@@ -226,9 +319,22 @@ def _run_admitted(
         discovered = decision.profile
         board = BoardCompatibilityClient(board_broker_path)
 
-    now = dt.datetime.now(dt.timezone.utc)
+    clock = clock or SystemClock()
+    now = clock.now()
     try:
-        recorder = Recorder(run_state, held.run_id, Redactor.for_declared_secrets(environ))
+        write_profile = None
+        if selected_candidate_profile is not None:
+            from solver.storage_governor_contracts import StorageGovernorProfile
+
+            write_profile = StorageGovernorProfile.from_release_candidate(
+                selected_candidate_profile["storage"]
+            ).write_profile()
+        recorder = Recorder(
+            run_state,
+            held.run_id,
+            Redactor.for_declared_secrets(environ),
+            **({"write_profile": write_profile} if write_profile is not None else {}),
+        )
         window = Window.opened(
             recorder.run_dir,
             lasting=boot.lasting(rules.closes_at, rules.window_seconds, held.run_seconds, now),
@@ -240,7 +346,113 @@ def _run_admitted(
         # silence. A window already there that cannot be read is refused for the same reason it is
         # never replaced: writing a fresh one over it is the silent extension the stamp prevents.
         raise Refusal(f"{boot.MARK} {run_state} is not usable as this Run's state — {unusable}") from None
-    dials = Dials()
+    try:
+        selected_lanes = int(
+            selected_candidate_profile["lanes"]
+            if selected_candidate_profile is not None
+            else environ.get(LANES_ENV, "1")
+        )
+    except (KeyError, TypeError, ValueError):
+        raise Refusal(f"{boot.MARK} selected profile must declare one or two Lanes") from None
+    if selected_lanes not in {1, 2}:
+        raise Refusal(f"{boot.MARK} {LANES_ENV} must select one or two Lanes")
+    dials = Dials(
+        concurrency=selected_lanes,
+        tail_seconds=(
+            int(selected_final_profile["final_submission_reserve_seconds"])
+            if selected_final_profile is not None
+            else Dials().tail_seconds
+        ),
+        floor_seconds=(
+            int(selected_final_profile["attempt_floor_seconds"])
+            if selected_final_profile is not None
+            else Dials().floor_seconds
+        ),
+    )
+    if selected_final_profile is not None and int(selected_final_profile["window_seconds"]) != rules.window_seconds:
+        raise Refusal(f"{boot.MARK} signed final-interval window disagrees with Board rules")
+
+    maximum = (
+        selected_candidate_profile["storage"]["maximum_authority_effect_reservation"]
+        if selected_candidate_profile is not None
+        else None
+    )
+    final_need = (
+        Capacity(
+            int(maximum["bytes"]),
+            int(maximum["filesystem_objects"]),
+            sum(int(value) for value in maximum["operations"].values()),
+            **{
+                name: int(maximum["operations"][name])
+                for name in ("create", "append", "rename", "unlink", "durability")
+            },
+        )
+        if maximum is not None
+        else Capacity(16_384, 1, 12)
+    )
+
+    def reserve_final_authority(identity: str):
+        return recorder.write_authority.reserve(
+            f"final-interval:{identity}",
+            EffectIdentity("final-interval.authority", identity),
+            final_need,
+            retention=RetentionPolicy.RELEASE,
+            retry_aborted=True,
+        )
+
+    def reserve_terminal_authority(identity: str):
+        return recorder.write_authority.reserve(
+            f"final-interval:{identity}",
+            EffectIdentity("final-interval.authority", identity),
+            final_need,
+            pool=Pool.TERMINAL,
+            retention=RetentionPolicy.RECEIPT,
+        )
+
+    final_interval = FinalIntervalController(
+        state=run_state,
+        run_id=held.run_id,
+        opened_at=window.opened_at,
+        ends_at=window.ends_at,
+        final_submission_reserve_seconds=int(dials.tail_seconds),
+        attempt_floor_seconds=int(dials.floor_seconds),
+        enabled_lanes=tuple(f"lane-{index}" for index in range(1, dials.concurrency + 1)),
+        now=clock.now,
+        reserve=reserve_final_authority,
+        reserve_terminal=reserve_terminal_authority,
+        event_store=recorder.event_store,
+        write_authority=recorder.write_authority,
+    )
+    resources = selected_candidate_profile["resources"] if selected_candidate_profile is not None else None
+    lane_owner: dict[str, object] = {}
+
+    def terminate_lane_owner(binding):
+        owner = lane_owner.get("run")
+        if owner is None:
+            return OwnerTermination(False, hashlib.sha256(f"unbound:{binding.attempt_id}".encode()).hexdigest())
+        return owner.terminate_lane_owner(binding, cleanup_seconds=10.0)
+
+    lane_controller = (
+        LaneController(
+            state=run_state,
+            run_id=held.run_id,
+            profile=LaneProfile(
+                lanes=selected_lanes,
+                global_resource_units=selected_lanes,
+                global_cpu_quota_us=int(resources["cpu_limit"]) if resources else 100_000 * selected_lanes,
+                global_memory_bytes=int(resources["memory_bytes"]) if resources else 2 * 1024**3 * selected_lanes,
+                global_pids=int(resources["pid_limit"]) if resources else 256 * selected_lanes,
+                global_filesystem_bytes=2 * 1024**3 * selected_lanes,
+                global_wall_seconds=max(1, int((window.ends_at - now).total_seconds())),
+            ),
+            generations=recorder.generations,
+            timestamp=lambda: clock.now().isoformat(),
+            terminate=terminate_lane_owner,
+            final_interval=final_interval,
+        )
+        if selected_lanes == 2
+        else None
+    )
     recorder.run_open(
         board_profile={
             **discovered.recorded(),
@@ -293,6 +505,7 @@ def _run_admitted(
         )
         ledger_broker = board
     lease_coordinator = None
+    qualification_generation = None
     if board_broker_path is not None:
         from solver.instance_lease import LeaseCoordinator
 
@@ -411,23 +624,36 @@ def _run_admitted(
     stack = ExitStack()
     candidate_sink = None
     observed_candidate_sink = None
+    final_candidate_queue = None
     submission_receipt_inputs = None
     if board_broker_path is not None:
         admission = CandidateAdmission(
             run_state,
             held.run_id,
             Redactor.for_declared_secrets(environ),
-            lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+            lambda: clock.now().isoformat(),
             rules.flag_wrappers,
             hashlib.sha256(b"candidate-vault-v1\0" + held.token.encode()).digest(),
             recorder.generations,
         )
+        if qualification_seed:
+            from solver.qualification_seed import seed_final_interval_generation
+
+            already_seeded = any(
+                generation.attempt_id == "qualification-attempt-occupied"
+                for generation in recorder.generations.projection().generations
+            )
+            if not already_seeded:
+                qualification_generation = seed_final_interval_generation(
+                    recorder,
+                    selected_profile=selected_candidate_profile,
+                )
         context_for, identity_for, submission_epochs = _submission_identity_composition(
             intake,
             ledger,
             held.url,
             recorder.event_store,
-            lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+            lambda: clock.now().isoformat(),
         )
         submission_runtime = compose_submission_runtime(
             state=run_state,
@@ -435,10 +661,12 @@ def _run_admitted(
             run_id=held.run_id,
             boot_id=boot_id,
             board_broker_path=board_broker_path,
-            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+            timestamp=lambda: clock.now().isoformat(),
             identity_for=identity_for,
             epoch_authority=submission_epochs,
             board_identity=held.url,
+            monotonic=clock.monotonic,
+            wall_time=clock.wall_time,
         )
         submission = submission_runtime.submission
         stack.callback(submission_runtime.close)
@@ -450,6 +678,24 @@ def _run_admitted(
             boot_id=boot_id,
             context_for=context_for,
         )
+        final_interval_generation = recorder.generations.acquire("final-interval", f"final-interval:{boot_id}")
+        final_candidate_queue = FinalCandidateQueue(
+            admission,
+            submission,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            generation_id=final_interval_generation.generation_id,
+        )
+        if qualification_seed and qualification_generation is not None:
+            from solver.qualification_seed import seed_final_interval_candidates
+
+            seed_final_interval_candidates(
+                recorder,
+                admission,
+                context_for,
+                qualification_generation,
+            )
+            final_candidate_queue.prepare_all()
         submission_receipt_inputs = (recorder.run_dir / "canonical", held.run_id, recorder.write_authority)
     lead_adapter = _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack, candidate_sink)
     run = Run(
@@ -457,9 +703,18 @@ def _run_admitted(
         recorder=recorder,
         intake=intake,
         scheduler=(
-            CanonicalScheduler(window, recorder, intake.order_authority, dials=dials, judge=judge)
+            CanonicalScheduler(
+                window,
+                recorder,
+                intake.order_authority,
+                dials=dials,
+                judge=judge,
+                final_interval=final_interval,
+                final_lane_ids=final_interval.enabled_lanes,
+                now=clock.now,
+            )
             if isinstance(intake, CoherentIntake)
-            else Scheduler(window, recorder, dials=dials, judge=judge)
+            else Scheduler(window, recorder, dials=dials, judge=judge, now=clock.now)
         ),
         flags=Flags(
             board,
@@ -482,7 +737,19 @@ def _run_admitted(
         codex_control_path=Path(environ[CODEX_CONTROL_SOCKET_ENV]) if environ.get(CODEX_CONTROL_SOCKET_ENV) else None,
         lead_adapter=lead_adapter,
         inference_route=environ.get(CPA_ROUTE_ENV, "native-codex"),
+        lane_controller=lane_controller,
+        final_interval=final_interval,
+        final_candidate_preparation=observed_candidate_sink,
+        final_candidate_queue=final_candidate_queue,
+        initial_leases=(
+            {grant.challenge_id: grant for grant in lease_coordinator.leases()}
+            if lease_coordinator is not None
+            else None
+        ),
+        now=clock.now,
+        sleep=clock.sleep,
     )
+    lane_owner["run"] = run
     _on_signal(run)
     try:
         return run.work()

@@ -23,13 +23,16 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import shutil
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from solver import codex, prompt, recon
 from solver.attempt_progress import ProgressController
+from solver.final_interval import FinalIntervalController
+from solver.final_interval_runtime import FinalIntervalRuntime
 from solver.attempt_progress_contracts import (
     EvidenceArtifact,
     EvidenceClassification,
@@ -51,7 +54,7 @@ from solver.intake import Intake, Sighting
 from solver.lead_contracts import CandidateProposal
 from solver.lead_v1_adapter import V1LeadTurn
 from solver.lane_topology import LaneController
-from solver.lane_topology_contracts import LaneBinding, LaneCycleResult, LaneOutcome, WorkCandidate
+from solver.lane_topology_contracts import LaneBinding, LaneCycleResult, LaneOutcome, OwnerTermination, WorkCandidate
 from solver.route_and_quota import (
     InferenceRoute,
     QuotaObservation,
@@ -119,7 +122,15 @@ class Steps:
     """
 
     def __init__(self) -> None:
-        self.spent = 0
+        self._local = threading.local()
+
+    @property
+    def spent(self) -> int:
+        return getattr(self._local, "spent", 0)
+
+    @spent.setter
+    def spent(self, value: int) -> None:
+        self._local.spent = value
 
     def restart(self) -> None:
         self.spent = 0
@@ -149,6 +160,8 @@ class Pending:
     challenge_id: int | str
     workdir: Path
     candidates: tuple[Candidate, ...] = ()
+    attempt_id: str = ""
+    generation_id: str = ""
 
 
 @dataclass
@@ -185,6 +198,7 @@ class _Held:
     attempt_id: str
     generation_id: str
     began: dt.datetime
+    lane_id: str = "lane-1"
     recon_block: str = ""
     lease: Lease | None = None
     turns: int = 0
@@ -245,6 +259,10 @@ class Run:
         lane_controller: LaneController | None = None,
         lane_order: Callable[[object, frozenset[str]], tuple[WorkCandidate, ...]] | None = None,
         lane_execute: Callable[[Sighting, LaneBinding], LaneOutcome] | None = None,
+        final_interval: FinalIntervalController | None = None,
+        final_candidate_preparation=None,
+        final_candidate_queue=None,
+        initial_leases: Mapping[int | str, Lease] | None = None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -292,7 +310,7 @@ class Run:
         # it every turn of an Attempt is handed the budget as it stood when the Challenge was picked
         # and the reserve is never reached.
         self._slots_spent: dict[int | str, int] = {}
-        self._leases: dict[int | str, Lease] = {}
+        self._leases: dict[int | str, Lease] = dict(initial_leases or {})
         self._won: list[str] = []
         # Challenges this Run has solved but the Board has not yet been re-read to confirm.
         # A solve arrives out of band from Intake — the Board grades it the instant `_submit`
@@ -304,13 +322,22 @@ class Run:
         # ones still inside that gap.
         self._solved: set[int | str] = set()
         self._attempts = 0
-        self._in_flight: Deadline | None = None
+        self._in_flight: dict[str, Deadline] = {}
         self._stopping = ""
         self._crashed = ""
         self._lane_controller = lane_controller
-        self._lane_order = lane_order
-        self._lane_execute = lane_execute
-        if self._scheduler.dials.concurrency == 2 and None in (lane_controller, lane_order, lane_execute):
+        self._ending_type = Ending
+        self._final_runtime = FinalIntervalRuntime(self) if final_interval is not None else None
+        self._lane_picks: dict[str, Pick] = {}
+        self._lane_owner_condition = threading.Condition()
+        self._lane_active: set[str] = set()
+        self._lane_cancelled: set[str] = set()
+        self._lane_order = lane_order or (self._final_runtime.lane_order if lane_controller is not None else None)
+        self._lane_execute = lane_execute or (self._final_runtime.lane_execute if lane_controller is not None else None)
+        self._final_interval = final_interval
+        self._final_candidate_preparation = final_candidate_preparation
+        self._final_candidate_queue = final_candidate_queue
+        if self._scheduler.dials.concurrency == 2 and lane_controller is None:
             raise ValueError("the two-Lane profile requires its controller, Order adapter, and Attempt executor")
 
     def stop(self, why: str = SIGNALLED) -> None:
@@ -322,8 +349,8 @@ class Run:
         would leave both behind.
         """
         self._stopping = why
-        if self._in_flight is not None:
-            self._in_flight.shorten(self._now())
+        for deadline in tuple(self._in_flight.values()):
+            deadline.shorten(self._now())
 
     def work(self) -> Ending:
         """Take Attempts until the clock can no longer buy one, then run the reserved tail.
@@ -346,7 +373,7 @@ class Run:
                 self._route_controller.policy,
                 observations,
             )
-        return self._tail()
+        return self._final_runtime.close() if self._final_runtime is not None else self._tail()
 
     def _loop(self) -> None:
         if self._lane_controller is not None:
@@ -379,7 +406,16 @@ class Run:
                 # waits for the next Intake rather than ending the Run.
                 self._sleep(self._idle_seconds)
                 continue
-            held = self._attempt(pick)
+            final_grant = None
+            if (
+                self._final_interval is not None
+                and self._final_interval.admission_mode("lane-1").value == "final-chance"
+            ):
+                final_grant = self._final_interval.reserve_final_chance("lane-1", str(pick.challenge.challenge_id))
+                if final_grant is None:
+                    self._scheduler.release(Ended(pick.challenge.challenge_id, "final-chance-spent", 0, 0))
+                    continue
+            held = self._attempt(pick, final_grant=final_grant)
             try:
                 self._scheduler.release(
                     Ended(pick.challenge.challenge_id, held.cause, self._spent(held), held.checkpoints)
@@ -416,13 +452,48 @@ class Run:
                 return self._lane_execute(by_id[binding.work_id], binding)
 
             result: LaneCycleResult = self._lane_controller.run_cycle(order, execute)
-            self._attempts += len(result.timelines)
             if not result.timelines:
                 if self._scheduler.out_of_time():
                     return
                 self._sleep(self._idle_seconds)
 
-    def _attempt(self, pick: Pick) -> _Held:
+    def terminate_lane_owner(self, binding: LaneBinding, *, cleanup_seconds: float) -> OwnerTermination:
+        """Shorten one Lane owner's deadline and wait only through its bounded cleanup interval."""
+        deadline_at = time.monotonic() + cleanup_seconds
+        with self._lane_owner_condition:
+            self._lane_cancelled.add(binding.attempt_id)
+            deadline = self._in_flight.get(binding.lane_id)
+            if deadline is not None:
+                deadline.shorten(self._now())
+            while binding.attempt_id in self._lane_active:
+                remaining = deadline_at - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._lane_owner_condition.wait(remaining)
+            ended = binding.attempt_id not in self._lane_active
+            if ended:
+                self._lane_cancelled.discard(binding.attempt_id)
+        evidence = digest_bytes(
+            f"{binding.attempt_id}:{binding.generation.generation_id}:{binding.lane_id}:{ended}".encode()
+        )
+        return OwnerTermination(ended, evidence)
+
+    def _attempt(self, pick: Pick, *, lane_binding: LaneBinding | None = None, final_grant=None) -> _Held:
+        if lane_binding is None:
+            return self._attempt_owned(pick, final_grant=final_grant)
+        with self._lane_owner_condition:
+            if lane_binding.attempt_id in self._lane_cancelled:
+                raise RuntimeError("Lane owner was cancelled before execution")
+            self._lane_active.add(lane_binding.attempt_id)
+        try:
+            return self._attempt_owned(pick, lane_binding=lane_binding, final_grant=final_grant)
+        finally:
+            with self._lane_owner_condition:
+                self._lane_active.discard(lane_binding.attempt_id)
+                self._lane_cancelled.discard(lane_binding.attempt_id)
+                self._lane_owner_condition.notify_all()
+
+    def _attempt_owned(self, pick: Pick, *, lane_binding: LaneBinding | None = None, final_grant=None) -> _Held:
         """One Attempt: open it with recon, take turns until something ends it, close it.
 
         The Attempt is the hold rather than the turn, which is `CONTEXT.md`'s definition read
@@ -431,15 +502,25 @@ class Run:
         because that is not something that ends anything.
         """
         challenge = pick.challenge
-        attempt_id = pick.order_attempt_id or f"{challenge.challenge_id}-{pick.attempt_sequence}"
+        attempt_id = (
+            lane_binding.attempt_id
+            if lane_binding is not None
+            else pick.order_attempt_id or f"{challenge.challenge_id}-{pick.attempt_sequence}"
+        )
         generation = (
-            self._recorder.acquire_order_generation(pick)
-            if pick.order_generation_id
-            else self._recorder.acquire_generation(
-                work_id=str(challenge.challenge_id),
-                attempt_id=attempt_id,
+            lane_binding.generation
+            if lane_binding is not None
+            else (
+                self._recorder.acquire_order_generation(pick)
+                if pick.order_generation_id
+                else self._recorder.acquire_generation(
+                    work_id=str(challenge.challenge_id),
+                    attempt_id=attempt_id,
+                )
             )
         )
+        if final_grant is not None:
+            self._final_interval.spend_final_chance(final_grant)
         try:
             # Restarted before the working directory is settled rather than after it: what staging
             # has to say about a name already taken is a Step of the Attempt it opens, and a counter
@@ -450,12 +531,23 @@ class Run:
                 pick=pick,
                 workdir=workdir,
                 boundary=self._boundaries.setdefault(challenge.challenge_id, Boundary()),
-                deadline=Deadline(budget=pick.deadline),
+                deadline=Deadline(
+                    budget=(
+                        dt.datetime.fromisoformat(lane_binding.hard_deadline)
+                        if lane_binding is not None
+                        else pick.deadline
+                    )
+                ),
                 attempt_id=attempt_id,
                 generation_id=generation.generation_id,
                 began=self._now(),
                 staged=staged,
+                lane_id=lane_binding.lane_id if lane_binding is not None else "lane-1",
             )
+            if lane_binding is not None:
+                with self._lane_owner_condition:
+                    if lane_binding.attempt_id in self._lane_cancelled:
+                        held.deadline.shorten(self._now())
             # Before the open, and it has to be: `attempt_open` records the Instance this Attempt
             # was given, and there is no Instance to record until the deploy has answered. So the
             # deploy is a Step of an Attempt whose `attempt-open` line comes after it — that line
@@ -469,7 +561,7 @@ class Run:
                             self._recorder.run_id,
                             self._board_broker_boot_id,
                             held.generation_id,
-                            "lane-1",
+                            held.lane_id,
                             held.attempt_id,
                             f"step-{self._steps.next_index()}",
                         ),
@@ -495,9 +587,10 @@ class Run:
                 generation_id=held.generation_id,
             )
         except Exception:
-            self._close_generation(generation.generation_id, CRASHED)
+            if lane_binding is None:
+                self._close_generation(generation.generation_id, CRASHED)
             raise
-        self._in_flight = held.deadline
+        self._in_flight[held.lane_id] = held.deadline
         try:
             found = self._recon(held, challenge)
             held.recon_block, held.pictures = found.block(), found.pictures
@@ -508,14 +601,16 @@ class Run:
             # no terminator is a Run the eval cannot read at all, and #16's schema is meant stable
             # from v1 — so the crash is recorded here, on the Attempt, and again at Run close.
             held.cause = CRASHED
-            self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
-        self._in_flight = None
+            if lane_binding is None:
+                self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
+        self._in_flight.pop(held.lane_id, None)
         self._attempts += 1
         try:
             self._end_lease(held)
         except Exception as broken:
             held.cause = CRASHED
-            self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
+            if lane_binding is None:
+                self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
         finally:
             self._recorder.attempt_close(
                 attempt_id=held.attempt_id,
@@ -613,7 +708,7 @@ class Run:
                     self._recorder.run_id,
                     self._board_broker_boot_id,
                     held.generation_id,
-                    "lane-1",
+                    held.lane_id,
                     held.attempt_id,
                     request_id + ":quota",
                 )
@@ -638,7 +733,7 @@ class Run:
                         self._recorder.run_id,
                         self._board_broker_boot_id,
                         held.generation_id,
-                        "lane-1",
+                        held.lane_id,
                         held.attempt_id,
                         request_id,
                     )
@@ -692,7 +787,7 @@ class Run:
                             run_id=self._recorder.run_id,
                             boot_id=self._board_broker_boot_id,
                             generation_id=held.generation_id,
-                            lane_id="lane-1",
+                            lane_id=held.lane_id,
                             attempt_id=held.attempt_id,
                             work_id=str(challenge.challenge_id),
                             budget_seconds=int(held.pick.budget_s),
@@ -818,9 +913,19 @@ class Run:
         if spent := sum(1 for one in outcome.graded if one.verdict.spent_a_slot):
             self._slots_spent[challenge.challenge_id] = slots.spent + spent
         if outcome.held:
+            if self._final_candidate_preparation is not None:
+                for candidate in outcome.held:
+                    self._final_candidate_preparation.prepare(
+                        candidate,
+                        attempt_id=held.attempt_id,
+                        challenge_id=int(challenge.challenge_id),
+                        generation_id=held.generation_id,
+                    )
             waiting = self._pending.get(challenge.challenge_id)
             carried = (waiting.candidates if waiting else ()) + outcome.held
-            self._pending[challenge.challenge_id] = Pending(challenge.challenge_id, held.workdir, carried)
+            self._pending[challenge.challenge_id] = Pending(
+                challenge.challenge_id, held.workdir, carried, held.attempt_id, held.generation_id
+            )
         if outcome.solved:
             # `Outcome.solved` is *there is nothing left to win here*, which is true of
             # `already_solved` too — a teammate got there first, and Order wants it gone whether or
@@ -1006,9 +1111,12 @@ class Run:
         the Cut path — and holding one past the Attempt costs mana nobody reclaims."""
         if held.lease is None:
             return
-        self._instances.terminate(held.lease.challenge_id, attempt_id=held.attempt_id, generation_id=held.generation_id)
-        self._leases.pop(held.lease.challenge_id, None)
-        held.lease = None
+        answer = self._instances.terminate(
+            held.lease.challenge_id, attempt_id=held.attempt_id, generation_id=held.generation_id
+        )
+        if answer.released:
+            self._leases.pop(held.lease.challenge_id, None)
+            held.lease = None
 
     def _spent(self, held: _Held) -> float:
         """Wall-clock under this hold, which is what the ledger's anti-livelock term is made of. A

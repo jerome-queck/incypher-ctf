@@ -104,16 +104,18 @@ def verify_legacy_view(store: EventStore, events: list[CommittedEvent]) -> None:
 
 def _candidates(indexed: LegacyRows, event: CommittedEvent) -> list[tuple[int, dict[str, Any]]]:
     begin_sequence = _begin_sequence(event)
-    if begin_sequence is not None and (by_sequence := indexed.by_sequence.get(begin_sequence + 1)):
-        return by_sequence
     identity = (event.payload["attempt_id"], event.payload["step_index"])
-    by_identity = [
-        item
-        for item in indexed.by_identity.get(identity, [])
-        if begin_sequence is None or _sequence_after(item[1], begin_sequence)
-    ]
+    if begin_sequence is not None and (by_sequence := indexed.by_sequence.get(begin_sequence + 1)):
+        sequenced_identity = [
+            item for item in by_sequence if (item[1].get("attempt_id"), item[1].get("step_index")) == identity
+        ]
+        if sequenced_identity:
+            return sequenced_identity
+    by_identity = indexed.by_identity.get(identity, [])
     if by_identity:
         return by_identity
+    if begin_sequence is not None:
+        return []
     return indexed.by_blob.get((event.blob_digest, event.blob_bytes), [])
 
 
@@ -142,11 +144,6 @@ def _begin_sequence(event: CommittedEvent) -> int | None:
         return int(event_id.rsplit(":", 1)[1])
     except (IndexError, ValueError):
         return None
-
-
-def _sequence_after(row: Mapping[str, Any], begin_sequence: int) -> bool:
-    sequence = row.get("seq")
-    return isinstance(sequence, int) and not isinstance(sequence, bool) and sequence > begin_sequence
 
 
 def _relative_reference(reference: str) -> bool:

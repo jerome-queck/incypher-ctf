@@ -409,6 +409,12 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
     attempt_pool: AttemptPool | None = None
     cpa_credential: bytearray | None = None
     try:
+        from solver.clock import qualification_from_environment
+
+        try:
+            qualification_from_environment(environ)
+        except ValueError as error:
+            raise Refusal(f"{boot.MARK} qualification clock refused — {error}") from None
         run_id = boot.run_identity(environ)
         redactor = Redactor.for_declared_secrets(environ)
         if not isinstance(environ, MutableMapping):

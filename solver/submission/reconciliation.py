@@ -60,7 +60,8 @@ def broker_evidence_probe(open_client: Callable, socket_path, binding):
 
     def probe(pending):
         try:
-            client = open_client(socket_path, binding, scope="board.submit")
+            selected_binding = binding(pending) if callable(binding) else binding
+            client = open_client(socket_path, selected_binding, scope="board.submit")
         except Exception:
             return Evidence.unsettled("board-broker:open-failed")
         evidence = None

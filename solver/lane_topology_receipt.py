@@ -84,7 +84,9 @@ def verify_receipt(path: str | Path, generations: GenerationFence) -> Mapping[st
             raise ValueError("Lane-topology receipt overlaps a Lane or Challenge claim")
         if line["lane_id"] not in {f"lane-{ordinal}" for ordinal in range(1, profile.lanes + 1)}:
             raise ValueError("Lane-topology receipt names a Lane outside its selected profile")
-        if line["lease_id"] in lease_ids or not str(line["lease_id"]).startswith(f"{document['run_id']}:"):
+        if line["lease_id"] and (
+            line["lease_id"] in lease_ids or not str(line["lease_id"]).startswith(f"{document['run_id']}:")
+        ):
             raise ValueError("Lane-topology receipt overlaps or crosses a Run Lease")
         envelope_document = dict(line["envelope"])
         envelope_document["network"] = NetworkPolicy(envelope_document["network"])
@@ -118,7 +120,8 @@ def verify_receipt(path: str | Path, generations: GenerationFence) -> Mapping[st
                 raise ValueError("stalled Lane lacks bounded owner-termination evidence")
         work_ids.add(line["work_id"])
         lane_ids.add(line["lane_id"])
-        lease_ids.add(line["lease_id"])
+        if line["lease_id"]:
+            lease_ids.add(line["lease_id"])
         if line["resource_units"] > profile.global_resource_units:
             raise ValueError("Lane Attempt exceeds global Resource capacity")
     peak = document.get("peak_resource_units")

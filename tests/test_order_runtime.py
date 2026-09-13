@@ -136,6 +136,49 @@ def test_canonical_order_publishes_before_projecting_one_exact_v1_pick(tmp_path)
     scheduler.release(Ended(42, "flag", 20, 0))
 
 
+def test_concurrent_lane_acquire_does_not_replay_the_already_held_pick(tmp_path):
+    recorder = Recorder(tmp_path, "run-1", Redactor({}), now=lambda: NOW)
+    scheduler = CanonicalScheduler(
+        _window(tmp_path),
+        recorder,
+        _canonical_authority(tmp_path),
+        dials=Dials(concurrency=2),
+        now=lambda: NOW,
+    )
+
+    first = scheduler.acquire(_legacy())
+    recorder.acquire_order_generation(first)
+    second = scheduler.acquire(_legacy())
+
+    assert first is not None
+    assert second is None
+
+
+def test_restart_does_not_replay_an_unconsumed_pick_inside_submission_reserve(tmp_path):
+    window = _window(tmp_path)
+    clock = [NOW]
+    recorder = Recorder(tmp_path, "run-1", Redactor({}), now=lambda: clock[0])
+    first = CanonicalScheduler(
+        window,
+        recorder,
+        _canonical_authority(tmp_path),
+        dials=Dials(),
+        now=lambda: clock[0],
+    )
+    assert first.acquire(_legacy()) is not None
+
+    clock[0] = window.ends_at - dt.timedelta(seconds=Dials().tail_seconds) + dt.timedelta(seconds=1)
+    restarted = CanonicalScheduler(
+        window,
+        recorder,
+        _canonical_authority(tmp_path),
+        dials=Dials(),
+        now=lambda: clock[0],
+    )
+
+    assert restarted.acquire(_legacy()) is None
+
+
 def test_production_triage_arrival_batch_accepts_once_and_replays_after_restart(tmp_path):
     recorder = Recorder(tmp_path, "run-1", Redactor({}), now=lambda: NOW)
     calls = []
@@ -215,6 +258,17 @@ def test_boundary_clock_advances_without_intake_refresh_and_enters_final_interva
     assert second is None
     assert decision["interval"] == "final-interval"
     assert decision["input_document"]["run"]["boundary_at"] == clock[0].isoformat()
+
+
+def test_canonical_order_does_not_publish_new_work_after_the_final_reserve(tmp_path):
+    recorder = Recorder(tmp_path, "run-1", Redactor({}), now=lambda: clock[0])
+    window = _window(tmp_path)
+    cutoff = window.ends_at - dt.timedelta(seconds=Dials().tail_seconds)
+    clock = [cutoff + dt.timedelta(seconds=1)]
+    scheduler = CanonicalScheduler(window, recorder, _canonical_authority(tmp_path), now=lambda: clock[0])
+
+    assert scheduler.acquire(_legacy()) is None
+    assert not [event for event in recorder.event_store.events() if event.event_type == "order-input.recorded"]
 
 
 def test_canonical_complete_generation_keeps_solved_work_out_before_intake_refresh(tmp_path):

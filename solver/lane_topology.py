@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import RLock
 
 from solver.event_store_contracts import GenerationDisposition
+from solver.final_interval import FinalIntervalController
 from solver.lane_topology_contracts import (
     LaneBinding,
     LaneCycleResult,
@@ -88,6 +89,7 @@ class LaneController:
         generations: GenerationFence,
         timestamp: Callable[[], str],
         terminate: Callable[[LaneBinding], OwnerTermination],
+        final_interval: FinalIntervalController | None = None,
         hook: Callable[[str], None] | None = None,
     ) -> None:
         if not run_id:
@@ -98,6 +100,7 @@ class LaneController:
         self.generations = generations
         self._timestamp = timestamp
         self._terminate = terminate
+        self._final_interval = final_interval
         self._hook = hook or (lambda point: None)
         self._lock = RLock()
         self._attempt_sequence = len(generations.projection().generations)
@@ -202,8 +205,19 @@ class LaneController:
         candidate = next((item for item in ranked if item.work_id not in claimed), None)
         if candidate is None or not self._fits(candidate, active_bindings, active_resources):
             return None
+        final_budget = remaining_global_seconds
+        final_grant = None
+        if self._final_interval is not None:
+            mode = self._final_interval.admission_mode(lane_id)
+            if mode in {"submission-reserve", "closed"}:
+                return None
+            if mode == "final-chance":
+                final_grant = self._final_interval.reserve_final_chance(lane_id, candidate.work_id)
+                if final_grant is None:
+                    return None
+                final_budget = min(final_budget, self._final_interval.scoreable_seconds())
         admitted_at = self._timestamp()
-        budget_seconds = min(candidate.budget_seconds, remaining_global_seconds)
+        budget_seconds = min(candidate.budget_seconds, final_budget)
         hard_deadline = (dt.datetime.fromisoformat(admitted_at) + dt.timedelta(seconds=budget_seconds)).isoformat()
         with self._lock:
             self._attempt_sequence += 1
@@ -230,6 +244,8 @@ class LaneController:
             hard_deadline=hard_deadline,
         )
         self._journal.bind(binding)
+        if final_grant is not None:
+            self._final_interval.spend_final_chance(final_grant)
         self._hook("after_admission")
         return binding
 
@@ -291,7 +307,7 @@ class LaneController:
             attempt_id=binding.attempt_id,
             generation_id=binding.generation.generation_id,
             envelope_id=binding.envelope_id,
-            lease_id=f"{binding.lease.run_id}:{binding.lease.lease_seq}",
+            lease_id=(f"{binding.lease.run_id}:{binding.lease.lease_seq}" if binding.lease is not None else ""),
             envelope=binding.envelope.document(),
             order_rank=binding.order_rank,
             budget_seconds=binding.budget_seconds,

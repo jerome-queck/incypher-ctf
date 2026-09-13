@@ -11,6 +11,7 @@ from pathlib import Path
 
 from solver.event_store import WORK_GENERATION_RECORDED, GenerationRecord
 from solver.event_store_storage import canonical_bytes, digest_bytes
+from solver.final_interval import FinalIntervalController
 from solver.order_contracts import ORDER_PUBLICATION_RECORDED
 from solver.order_input_contracts import ORDER_INPUT_RECORDED, OrderInputRecord, OrderInputRecorded
 from solver.order_journal import OrderJournal, replay_order_publication
@@ -48,6 +49,8 @@ class CanonicalScheduler:
         judge: Judge = unasked,
         now: Callable[[], dt.datetime] | None = None,
         triage_judge: TriageJudgeController | None = None,
+        final_interval: FinalIntervalController | None = None,
+        final_lane_ids: tuple[str, ...] = ("lane-1",),
     ) -> None:
         self.window = window
         self.dials = dials
@@ -56,6 +59,8 @@ class CanonicalScheduler:
         self._judge = judge
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self._triage_judge = triage_judge
+        self._final_interval = final_interval
+        self._final_lane_ids = final_lane_ids
         state = Path(recorder.run_dir).parents[1]
         self._journal = OrderJournal(
             state,
@@ -69,8 +74,10 @@ class CanonicalScheduler:
     def acquire(
         self, snapshot, *, leased: Collection[int | str] = (), solved: Collection[int | str] = ()
     ) -> Pick | None:
-        if self._held:
-            raise ValueError("[order] release the acquired Attempt before acquiring another")
+        if len(self._held) >= self.dials.concurrency:
+            raise ValueError("[order] release an acquired Attempt before exceeding Lane capacity")
+        if self._scoreable_left() <= 0:
+            return None
         if pending := self._unconsumed_pick(snapshot):
             self._held[_typed_key(pending.challenge.challenge_id)] = pending
             return pending
@@ -121,9 +128,10 @@ class CanonicalScheduler:
         from solver.order_receipt import write_decision_receipt
 
         write_decision_receipt(Path(self._recorder.run_dir).parents[1], self._recorder.run_id, replayed.publication_id)
-        return _project_pick(
+        pick = _project_pick(
             snapshot, {**replayed.boundary["decision"], "rows": list(replayed.rows)}, replayed.publication_id
         )
+        return None if _typed_key(pick.challenge.challenge_id) in self._held else pick
 
     def _run_facts(
         self,
@@ -187,6 +195,11 @@ class CanonicalScheduler:
             durable_tiers=durable_tiers,
             admission=admission,
             prior_order_fence=prior_fence,
+            final_chance_available=(
+                any(self._final_interval.chance_available(lane_id) for lane_id in self._final_lane_ids)
+                if self._final_interval is not None
+                else False
+            ),
         )
 
     def _record_boundary_clock(self, authority: OrderAuthority) -> tuple[dt.datetime, str]:
