@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
+from solver.event_store_storage import atomic_write, canonical_bytes
 from solver.write_reservation import (
     Capacity,
     EffectIdentity,
-    ReservedEffect,
     RetentionPolicy,
     WriteAuthority,
 )
@@ -34,8 +34,7 @@ MANIFEST_RECEIPT_REF = f"receipt:{RECEIPT_TYPE}"
 FENCE_SECONDS = 60.0
 PROBE_OFFSETS = (0.0, 15.0, 30.0, 60.0)
 AMBIGUITY_EVENT = "submission.ambiguity-event"
-EVENT_NEED = Capacity(4096, 1, 3)
-AMBIGUITY_PATH_NEED = Capacity(64 * 1024, 8, 24)
+AMBIGUITY_PATH_NEED = Capacity(12_800, 1, 24)
 AMBIGUITY_PATH_OPERATION = "submission.ambiguity-path"
 
 
@@ -89,6 +88,8 @@ class AmbiguousSubmissionFence:
         reservation = self._authority.current(f"ambiguity-path:{identity.effect_id}")
         if reservation is None:
             raise ValueError("ambiguity path must be reserved before wire send")
+        if reservation.state.value == "reserved":
+            reservation = self._authority.start(reservation)
         starts = [
             row
             for row in self._events()
@@ -115,7 +116,7 @@ class AmbiguousSubmissionFence:
         effect_id = identity.effect_id
         challenge_id = identity.challenge_id
         budget = self._authority.current(f"ambiguity-path:{effect_id}")
-        if budget is None or budget.state.value != "reserved" or budget.need != AMBIGUITY_PATH_NEED:
+        if budget is None or budget.state.value not in {"started", "possibly-sent"} or budget.need != AMBIGUITY_PATH_NEED:
             raise ValueError("complete ambiguity path was not reserved before the Board effect")
         with self._lock:
             if candidate_id in self._states():
@@ -265,12 +266,11 @@ class AmbiguousSubmissionFence:
                 "provenance": source,
             }
         )
-        for reservation in self._authority.reservations():
-            if reservation.identity.operation == AMBIGUITY_EVENT and reservation.state.value == "committed":
-                self._authority.release_retained(reservation, "ambiguity-receipt-projectable")
         budget = self._authority.current(f"ambiguity-path:{state.effect_id}")
-        if budget is not None and budget.state.value == "reserved":
-            self._authority.abort(budget, "ambiguity-path-closed")
+        if budget is not None and budget.state.value in {"started", "possibly-sent"}:
+            if budget.state.value == "started":
+                budget = self._authority.possibly_sent(budget, "ambiguity-lifecycle-active")
+            self._authority.refuse_indeterminate(budget, disposition.value)
 
     @property
     def barrier_open(self) -> bool:
@@ -337,29 +337,26 @@ class AmbiguousSubmissionFence:
         )
 
     def _append(self, event: Mapping[str, object]) -> None:
-        ordinal = len(self._events()) + 1
-        key = f"ambiguity:{event['effect_id']}:{ordinal}"
-        identity = EffectIdentity(AMBIGUITY_EVENT, str(event["effect_id"]), digest_bytes(canonical_bytes(event)))
-        ReservedEffect(self._authority).execute(
-            key,
-            identity,
-            EVENT_NEED,
-            lambda: dict(event),
-            encode=lambda value: value,
-            decode=lambda value: dict(value),
-            retention=RetentionPolicy.RECORD,
-        )
+        reservation = self._authority.current(f"ambiguity-path:{event['effect_id']}")
+        if reservation is None:
+            raise ValueError("ambiguity lifecycle lacks its pre-wire authority")
+        path = self._authority.object_path(reservation)
+        events = json.loads(path.read_text()) if path.exists() and path.stat().st_size else []
+        events.append(dict(event))
+        body = canonical_bytes(events) + b"\n"
+        if len(body) > AMBIGUITY_PATH_NEED.bytes:
+            raise ValueError("bounded ambiguity lifecycle exceeded its reserved authority")
+        self._authority.persist_reserved_record(reservation, body)
 
     def _events(self) -> list[dict[str, object]]:
         events = []
         for item in self._authority.reservations():
-            if item.identity.operation != AMBIGUITY_EVENT:
+            if item.identity.operation != AMBIGUITY_PATH_OPERATION:
                 continue
-            trace = self._authority.trace(item.key)
-            committed = next((row for row in trace if row["state"] == "committed"), None)
-            if committed is not None:
-                events.append((committed["ordinal"], dict(committed["observation"])))
-        return [event for _ordinal, event in sorted(events)]
+            path = self._authority.object_path(item)
+            if path.exists() and path.stat().st_size:
+                events.extend(json.loads(path.read_text()))
+        return events
 
     def _states(self, events=None) -> dict[str, PendingSubmission]:
         states: dict[str, PendingSubmission] = {}

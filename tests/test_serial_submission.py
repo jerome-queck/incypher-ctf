@@ -369,7 +369,7 @@ def test_ambiguous_post_blocks_serial_posts_then_releases_other_work_at_sixty(tm
     budget = recorder.write_authority.trace(f"ambiguity-path:{identity(ready()).effect_id}")
     post = recorder.write_authority.trace(identity(ready()).reservation_id)
     assert budget[0]["ordinal"] < post[0]["ordinal"]
-    assert budget[0]["need"] == {"bytes": 65536, "objects": 8, "operations": 24}
+    assert budget[0]["need"] == {"bytes": 12800, "objects": 1, "operations": 24}
     other = replace(ready("2" * 64), candidate_digest="d" * 64)
     with pytest.raises(EffectIndeterminate, match="barrier"):
         submission.dispatch(queued(other), binding=BINDING)
@@ -385,7 +385,7 @@ def test_complete_ambiguity_reservation_failure_prevents_board_post(tmp_path):
     recorder.write_authority.reserve(
         "controlled-exhaustion",
         EffectIdentity("test.exhaust", "shared"),
-        Capacity(460 * 1024, 1, 3),
+        Capacity(500 * 1024, 1, 3),
     )
     wire = Wire()
     fence = AmbiguousSubmissionFence(
