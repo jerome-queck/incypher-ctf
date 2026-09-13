@@ -151,9 +151,8 @@ three verified in [#49](https://github.com/jerome-queck/incypher-ctf/issues/49):
 3. **one interactive login inside the container before the run** — `codex login --device-auth`,
    approved on a phone, which is setup rather than **Intervention**.
 
-Ask for all three, not just the first. Getting only the first means there is no subscription login,
-so the chain falls straight to the metered break-glass key and the whole 5.5 hours is billed
-per token against a ~$100 ceiling. [#54](https://github.com/jerome-queck/incypher-ctf/issues/54)
+Ask for all three, not just the first. Without the native login, native inference refuses; it never
+falls through to metered billing. [#54](https://github.com/jerome-queck/incypher-ctf/issues/54)
 holds the contingency for the case where a shell is refused.
 
 ### 2. Egress — outbound internet is available, because the challenges are on it
@@ -169,17 +168,10 @@ challenge infrastructure is not on the venue LAN:
 The Solver cannot reach a single challenge without routing to the public internet. A venue network
 that blocked egress would block the competition, so egress exists.
 
-**The residual risk is narrower than "no egress": it is an allowlist.** A venue could permit
-`*.in-cypher.com` and the challenge IP while blocking `api.anthropic.com`. That would be a strange
-choice — the organisers explicitly invite GPT, Claude and Gemini, and an allowlist would break
-every team that took them up on it — but it is the one egress failure the evidence above does not
-rule out.
-
-**Consequence:** build for egress-available and treat the LLM API path as primary. Keep the
-local-model path alive as the contingency, not as the plan. **Day 1 is the designed moment to
-find out** — it is the same first batch on the live on-site environment, which makes it a dress
-rehearsal for exactly this. A `curl` to each provider from inside the container, on the venue
-network, on 21 September, converts this whole section from inference to fact with a day in hand.
+**The residual risk is narrower than "no egress": it is an allowlist.** A venue could permit only
+challenge infrastructure while blocking the ChatGPT/Codex backend needed by both native Codex and
+CPA. Day 1 must probe the exact selected routes from inside the container; no local-model or
+third-party API contingency is part of the Solver.
 
 ### 3. Resource caps — unstated, and probably ours to choose
 
@@ -401,9 +393,8 @@ Ask these, in this order, on whichever channel opens first. The first two decide
 
 1. **On competition day, do we run our own container on our own machine on the venue network, or
    do you take the image and run it on your infrastructure?**
-2. **Will the venue network allow the agent outbound HTTPS to third-party LLM APIs
-   (api.anthropic.com, api.openai.com, generativelanguage.googleapis.com), or is egress restricted
-   to the challenge infrastructure?**
+2. **Will the venue network allow the selected native Codex and private CPA routes, or is egress
+   restricted to the challenge infrastructure?**
 3. **Are there CPU / RAM / GPU / disk limits on the agent container, and any cap on concurrent
    deployed instances beyond mana?**
 4. **Does an automated restart count as human intervention?** If the container's supervisor

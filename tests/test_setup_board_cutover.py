@@ -58,3 +58,13 @@ def test_staging_and_atomic_activation_are_wired_below_the_generated_library():
     assert source[:stages].count("STAGED_ENV_FILE") == 0
     assert ".setup-env-stage-" in source
     assert ".env-stage-" not in source
+
+
+def test_setup_purges_obsolete_inference_credentials_from_its_stage():
+    source = SCRIPT.read_text()
+    purge = source.index("for obsolete_name in ANTHROPIC_API_KEY")
+
+    for obsolete in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME_METERED"):
+        assert 'clear_env "$obsolete_name"' in source
+        assert obsolete in source
+    assert source.index("clear_env() {") < purge < source.index('banner "Point the Solver at a CTF board"')

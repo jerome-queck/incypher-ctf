@@ -18,7 +18,6 @@ from solver.redaction import Redactor
 _OWNER_BY_ENV_NAME = {
     "CTFD_API_TOKEN": Broker.BOARD,
     "TEAM_KEY": Broker.BOARD,
-    "OPENAI_API_KEY": Broker.CODEX,
     "CPA_TOKEN": Broker.CPA,
 }
 

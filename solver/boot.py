@@ -22,7 +22,7 @@ from pathlib import Path
 
 from solver.codex import CODEX_HOME, Credential
 from solver.board_broker_contracts import BOARD_BROKER_HOLDINGS_ENV, BOARD_BROKER_SOCKET_ENV, BOARD_PROFILE_HANDLE_ENV
-from solver.credentials import NOT_SECRETS, SECRETS
+from solver.credentials import FORBIDDEN_ENVIRONMENT, NOT_SECRETS, SECRETS
 
 MARK = "[boot]"
 
@@ -31,17 +31,10 @@ MARK = "[boot]"
 # this module opened is a credential this module could log.
 AUTH = "auth.json"
 
-# The chain, in ADR-0010's order — subscription first, metered last — as directories rather than
-# keys, because the CLI authenticates by file (ADR-0011): a rung *is* a `CODEX_HOME` that has been
-# logged in. The metered one is named by a **variable** and the subscription by a constant, and that
-# asymmetry is the control: `CODEX_HOME_METERED` belongs only in the scored Board's active `.env`
-# beside the metered API keys. A practice `.env` omits it, so that Run cannot reach for metered
-# billing at all — no flag to set and no mode to remember (ADR-0040, `docs/credentials.md`).
 SUBSCRIPTION = "codex-subscription"
-METERED = "codex-metered"
 
-# ADR-0014 gives a Run one brain and switches on exhaustion alone, so this is one value for every
-# rung rather than one per rung, and `CODEX_MODEL` overrides it without a rebuild.
+# Native Codex uses one model for the Run; `CODEX_MODEL` overrides it without a rebuild. CPA model
+# policy is owned by its separate Harness and route controller.
 #
 # **Which ids exist at all is account state, and it moves.** Read live from the container on
 # 26 Aug 2026: `gpt-5` is refused outright — *"The 'gpt-5' model is not supported when using
@@ -62,7 +55,6 @@ DEFAULT_MODEL = "gpt-daybreak-blue-latest"
 RUN_ID = "RUN_ID"
 RUN_SECONDS = "RUN_SECONDS"
 CODEX_MODEL = "CODEX_MODEL"
-CODEX_HOME_METERED = "CODEX_HOME_METERED"
 CTFD_URL = "CTFD_URL"
 CTFD_API_TOKEN = "CTFD_API_TOKEN"
 
@@ -149,8 +141,10 @@ def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None
     The order of the refusals below is the design: everything the environment alone decides is read
     out first, so the refusal a human meets is one they can fix from the file already in front of
     them, and only then is the disk looked at. `homes` is the chain's directories, injected so a
-    test can stand one somewhere real; in the container `_homes` builds them and nobody passes any.
+    test can stand one somewhere real; production supplies only native Codex's private home.
     """
+    if forbidden := sorted(name for name in FORBIDDEN_ENVIRONMENT if name in environ):
+        raise Refusal(f"{MARK} unsupported inference credential configuration: {', '.join(forbidden)}")
     holdings = holdings_of(environ)
     if empties := sorted(name for name, held in holdings.items() if held == EMPTY):
         raise Refusal(
@@ -167,7 +161,7 @@ def setup(environ: Mapping[str, str], *, homes: Mapping[str, Path] | None = None
             f"URL and a token, and an unauthenticated read would be a Run that cannot submit"
         )
     run_id, run_seconds = run_identity(environ), _run_seconds(environ)
-    chain = _chain(environ.get(CODEX_MODEL, "").strip() or DEFAULT_MODEL, homes or _homes(environ))
+    chain = _chain(environ.get(CODEX_MODEL, "").strip() or DEFAULT_MODEL, homes or {SUBSCRIPTION: CODEX_HOME})
     return Setup(
         url=environ[CTFD_URL].strip().rstrip("/"),
         token=environ.get(CTFD_API_TOKEN, "").strip(),
@@ -242,25 +236,11 @@ def _run_seconds(environ: Mapping[str, str]) -> float | None:
     return seconds
 
 
-def _homes(environ: Mapping[str, str]) -> dict[str, Path]:
-    """The chain's directories, in ADR-0010's order and holding only the rungs this Run is offered.
-
-    The metered rung is here only where the environment named one, which is what makes *absence is
-    the control* a mechanism rather than a habit.
-    """
-    homes = {SUBSCRIPTION: CODEX_HOME}
-    if metered := environ.get(CODEX_HOME_METERED, "").strip():
-        homes[METERED] = Path(metered)
-    return homes
-
-
 def _chain(model: str, homes: Mapping[str, Path]) -> tuple[Credential, ...]:
-    """The credential chain, in ADR-0010's order, holding only the rungs that are logged in.
+    """Construct the available native credential; injected homes keep this seam deterministic.
 
-    A rung nobody logged in is left out rather than carried and failed over: the switch costs an
-    invocation, and an empty chain is a Run that will spend its whole window discovering it has no
-    brain. Which is why no rung at all is a refusal — ADR-0011 puts the `codex login` minutes
-    before the Run, with a human present, and this is what makes forgetting it loud.
+    No logged-in native home is a Refusal. CPA authentication belongs to its separate service and
+    never enters this structure.
     """
     rungs = tuple(
         Credential(slot=slot, model=model, home=home) for slot, home in homes.items() if (home / AUTH).is_file()
