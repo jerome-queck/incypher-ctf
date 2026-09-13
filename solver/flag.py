@@ -415,6 +415,7 @@ class Flags:
         now: Callable[[], dt.datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         step_numbers: Callable[[], int] | None = None,
+        candidate_submission: Callable[..., object] | None = None,
     ) -> None:
         self._board = board
         self._recorder = recorder
@@ -433,6 +434,7 @@ class Flags:
         # a count local to the call resets with the turn and an Attempt of N sweeps spends N
         # ceilings. Keyed by Attempt because that is what the bound is a fact about.
         self._wrong: dict[str, int] = {}
+        self._candidate_submission = candidate_submission
 
     def candidates(self, *, attempt_id: str, said: Sequence[str] = ()) -> tuple[Candidate, ...]:
         """Everything that could be this Challenge's Flag, and what authorises each one.
@@ -518,6 +520,7 @@ class Flags:
         workdir: Path,
         lease: Lease | None = None,
         last_call: bool = False,
+        generation_id: str = "",
     ) -> Outcome:
         """Work the candidates in order of strength until one grades or the gate holds the rest.
 
@@ -544,7 +547,12 @@ class Flags:
                     SUBMIT, f"{MARK} hold {candidate.text}", f"{MARK} {refusal}".encode(), attempt_id, ok=False
                 )
                 continue
-            answer = self._graded(candidate, attempt_id=attempt_id, challenge_id=challenge_id)
+            answer = self._graded(
+                candidate,
+                attempt_id=attempt_id,
+                challenge_id=challenge_id,
+                generation_id=generation_id,
+            )
             graded.append(answer)
             spent_here += 1
             self._wrong[attempt_id] = self._wrong.get(attempt_id, 0) + (1 if answer.verdict.incorrect else 0)
@@ -589,7 +597,14 @@ class Flags:
             return candidate
         return replace(candidate, strength=GUESSED)
 
-    def _graded(self, candidate: Candidate, *, attempt_id: str, challenge_id: int | str) -> Graded:
+    def _graded(
+        self,
+        candidate: Candidate,
+        *,
+        attempt_id: str,
+        challenge_id: int | str,
+        generation_id: str,
+    ) -> Graded:
         """Spend one submission slot, paced, and read the verdict out of the body.
 
         The pacing is inside this method rather than beside it because the wait is part of what the
@@ -612,24 +627,37 @@ class Flags:
             )
             self._record(SUBMIT, f"{MARK} submit {candidate.text}", told.encode(), attempt_id, ok=verdict.solved)
 
-        verdict = ReservedEffect(self._recorder.write_authority).execute(
-            key,
-            EffectIdentity("board.submit", str(challenge_id), candidate_digest),
-            SUBMISSION_WRITE_NEED,
-            lambda: self._board.submit(challenge_id, candidate.text),
-            encode=lambda answer: {
-                "outcome": answer.outcome,
-                "message": answer.message.replace(candidate.text, "[submitted-candidate]"),
-                "http_status": answer.http_status,
-            },
-            decode=lambda answer: Verdict(
-                outcome=str(answer["outcome"]),
-                message=str(answer["message"]),
-                http_status=int(answer["http_status"]),
-            ),
-            observe=observe,
-            retention=RetentionPolicy.RECEIPT,
-        )
+        if self._candidate_submission is not None:
+            submitted = self._candidate_submission(
+                candidate,
+                attempt_id=attempt_id,
+                challenge_id=int(challenge_id),
+                generation_id=generation_id,
+            )
+            if submitted is None:
+                verdict = Verdict("unread", "Candidate admission refused the submission")
+            else:
+                verdict = submitted.verdict
+            observe(verdict)
+        else:
+            verdict = ReservedEffect(self._recorder.write_authority).execute(
+                key,
+                EffectIdentity("board.submit", str(challenge_id), candidate_digest),
+                SUBMISSION_WRITE_NEED,
+                lambda: self._board.submit(challenge_id, candidate.text),
+                encode=lambda answer: {
+                    "outcome": answer.outcome,
+                    "message": answer.message.replace(candidate.text, "[submitted-candidate]"),
+                    "http_status": answer.http_status,
+                },
+                decode=lambda answer: Verdict(
+                    outcome=str(answer["outcome"]),
+                    message=str(answer["message"]),
+                    http_status=int(answer["http_status"]),
+                ),
+                observe=observe,
+                retention=RetentionPolicy.RECEIPT,
+            )
         shape = submission_shape({"message": verdict.message})
         return Graded(candidate, verdict, shape)
 

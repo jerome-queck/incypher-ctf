@@ -19,6 +19,7 @@ from solver.candidate_admission_contracts import (
     CandidateProvenance,
     DerivationKind,
     ReadyCandidate,
+    ReadyAdmission,
 )
 from solver.candidate_admission_projection import project_candidate
 from solver.candidate_admission_receipt import write_receipt
@@ -104,7 +105,9 @@ class CandidateAdmission:
             write_receipt(self.state, self.run_id, self._cipher.key)
             return AdmissionOutcome(decision, candidate)
         duplicate = any(
-            ready.challenge_id == proposal.challenge_id and ready.candidate_digest == self._cipher.digest(candidate)
+            ready.challenge_id == proposal.challenge_id
+            and ready.generation_id == proposal.generation_id
+            and ready.candidate_digest == self._cipher.digest(candidate)
             for ready in self.ready()
         )
         decision = AdmissionDecision.DUPLICATE if duplicate else AdmissionDecision.ADMITTED
@@ -148,6 +151,70 @@ class CandidateAdmission:
             project_candidate(event, self._cipher)
             for event in self.store.events()
             if event.event_type == CANDIDATE_ADMISSION_RECORDED and event.payload["decision"] == "admitted"
+        )
+
+    def admit_ready(self, proposal: CandidateProposal) -> ReadyAdmission | None:
+        """Admit and return its canonical queue position without exposing EventStore queries."""
+        outcome = self.admit(proposal)
+        if outcome.decision not in {AdmissionDecision.ADMITTED, AdmissionDecision.DUPLICATE}:
+            return None
+        events = tuple(
+            event
+            for event in self.store.events()
+            if event.event_type == CANDIDATE_ADMISSION_RECORDED
+            and event.payload["decision"] == AdmissionDecision.ADMITTED.value
+            and event.payload["generation_id"] == proposal.generation_id
+        )
+        target = next(
+            (
+                event
+                for event in events
+                if event.payload["challenge_id"] == proposal.challenge_id
+                and event.payload["candidate_digest"] == self._cipher.digest(proposal.candidate)
+            ),
+            None,
+        )
+        if target is None:
+            return None
+        candidate = project_candidate(target, self._cipher)
+        predecessors = tuple(str(event.payload["candidate_id"]) for event in events if event.sequence < target.sequence)
+        return ReadyAdmission(candidate, str(target.payload["ts"]), target.sequence, predecessors)
+
+    def observation_digest(self, *, attempt_id: str, body_digest: str) -> str:
+        """Resolve one projected Observation body at the admission authority boundary."""
+        return next(
+            event.event_digest
+            for event in reversed(self.store.events())
+            if event.event_type == OBSERVATION_RECORDED
+            and event.payload.get("attempt_id") == attempt_id
+            and event.payload.get("blob_digest") == body_digest
+        )
+
+    def lead_provenance(
+        self,
+        references: tuple[str, ...],
+        proposal_id: str,
+        derivation: CandidateDerivation | None,
+    ) -> CandidateProvenance:
+        """Resolve typed Lead evidence without leaking EventStore traversal into adapters."""
+        by_digest = {event.event_digest: event for event in self.store.events()}
+        observations = tuple(
+            ref for ref in references if ref in by_digest and by_digest[ref].event_type == OBSERVATION_RECORDED
+        )
+        tools = tuple(
+            ref for ref in references if ref in by_digest and by_digest[ref].event_type == TOOL_CONTROL_RECORDED
+        )
+        model = next(
+            event
+            for event in reversed(tuple(by_digest.values()))
+            if event.event_type == LEAD_ENGAGEMENT_RECORDED and event.payload.get("proposal_id") == proposal_id
+        )
+        return CandidateProvenance(
+            CandidateDisposition.DERIVED if derivation is not None else CandidateDisposition.OBSERVED,
+            observations,
+            tools,
+            model.event_digest if derivation is not None else "",
+            derivation,
         )
 
     def _validate(self, proposal: CandidateProposal) -> AdmissionDecision | None:

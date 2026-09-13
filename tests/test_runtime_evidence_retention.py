@@ -9,7 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VERIFY = ROOT / "scripts" / "verify_runtime_evidence.py"
-SOURCE = ROOT / "docs/evidence/runtime-qualification-v1/269-strict-isolation-preflight"
+SOURCE = ROOT / "docs/evidence/runtime-qualification-v2/293-serial-submission"
+HISTORICAL = ROOT / "docs/evidence/runtime-qualification-v1/269-strict-isolation-preflight"
 
 
 def clean_checkout(tmp_path: Path, capsule: Path) -> Path:
@@ -20,6 +21,16 @@ def clean_checkout(tmp_path: Path, capsule: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, target)
     return checkout
+
+
+def test_v1_capsule_remains_verifiable_at_its_sealed_historical_fixed_point(tmp_path: Path):
+    result = subprocess.run(
+        ["python3", str(VERIFY), str(HISTORICAL), "--sealed-historical-inputs"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
 
 
 def verify(capsule: Path, checkout: Path) -> subprocess.CompletedProcess[str]:
@@ -58,14 +69,17 @@ def resign_with_substitute_key(capsule: Path, tmp_path: Path) -> None:
 
 
 def test_clean_checkout_verifier_rejects_artifact_input_signature_and_key_tampering(tmp_path: Path):
-    capsule = tmp_path / SOURCE.name
-    shutil.copytree(SOURCE, capsule)
+    evidence = tmp_path / SOURCE.parent.name
+    shutil.copytree(SOURCE.parent, evidence)
+    capsule = evidence / SOURCE.name
     checkout = clean_checkout(tmp_path, capsule)
     assert verify(capsule, checkout).returncode == 0
 
-    artifact_copy = tmp_path / "artifact-copy"
-    shutil.copytree(capsule, artifact_copy)
-    artifact = artifact_copy / "strict-isolation-preflight.receipt.json"
+    artifact_root = tmp_path / "artifact-copy"
+    shutil.copytree(SOURCE.parent, artifact_root)
+    artifact_copy = artifact_root / SOURCE.name
+    artifact_name = next(iter(json.loads((capsule / "capsule.json").read_bytes())["artifacts"]))
+    artifact = artifact_copy / artifact_name
     artifact.write_bytes(artifact.read_bytes() + b"changed")
     assert verify(artifact_copy, checkout).returncode != 0
 
@@ -75,13 +89,15 @@ def test_clean_checkout_verifier_rejects_artifact_input_signature_and_key_tamper
     dockerfile.write_bytes(dockerfile.read_bytes() + b"changed")
     assert verify(capsule, input_copy).returncode != 0
 
-    signature_copy = tmp_path / "signature-copy"
-    shutil.copytree(capsule, signature_copy)
+    signature_root = tmp_path / "signature-copy"
+    shutil.copytree(SOURCE.parent, signature_root)
+    signature_copy = signature_root / SOURCE.name
     signature = signature_copy / "capsule.sig"
     signature.write_bytes(signature.read_bytes() + b"changed")
     assert verify(signature_copy, checkout).returncode != 0
 
-    key_copy = tmp_path / "key-copy"
-    shutil.copytree(capsule, key_copy)
+    key_root = tmp_path / "key-copy"
+    shutil.copytree(SOURCE.parent, key_root)
+    key_copy = key_root / SOURCE.name
     resign_with_substitute_key(key_copy, tmp_path)
     assert verify(key_copy, checkout).returncode != 0

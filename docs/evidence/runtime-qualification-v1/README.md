@@ -21,6 +21,7 @@ catalogue `60f13b3b2e93be0366dd5be52f1642210892cb3b23bab8363bc0d7c707ec613a`.
 | #283 IPC/catalogue/measured Turn/limit provenance | `283-native-codex-control/native-codex-control.receipt.json` |
 | #283 empty executor credential surfaces | native receipt plus the exact-image Attempt deny receipt |
 | #298 seven components / sixteen handles | seven `298-tool-resident/resident.*.json` receipts |
+| #293 serial Candidate authority and crash boundaries | `293-serial-submission/serial-submission.receipt.json` |
 | All candidate-manifest links | externally signed `candidate-manifest.json` |
 
 Verify from a clean checkout:
@@ -37,3 +38,10 @@ python3 scripts/verify_runtime_evidence.py \
 The verifier checks external signatures, exact repository inputs, fixed image/profile/catalogue,
 semantic outcomes, cleanup and candidate-manifest links. Any altered input, fixture, component,
 output, receipt or signature refuses verification.
+
+The #293 controlled runtime trace is self-verifying and deliberately classified separately from
+the externally observed Gate capsules:
+
+```sh
+python3 -c "from pathlib import Path; from solver.submission.receipt import verify_receipt; verify_receipt(Path('docs/evidence/runtime-qualification-v1/293-serial-submission/serial-submission.receipt.json'))"
+```

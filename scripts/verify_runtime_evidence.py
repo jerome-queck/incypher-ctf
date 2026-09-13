@@ -23,6 +23,7 @@ REQUIRED_FIXED_POINT = {
     "component_inputs_digest",
 }
 TRUSTED_EVALUATOR_KEY_DIGEST = "672b8a4f435628a41eb590ee563c9e395cbebfbc766accf20efc2e028d302c5b"  # gitleaks:allow
+SEALED_HISTORICAL_IMAGES = {"sha256:c7c53ecd627bfcfe9fcb083f4e7d3c909f30fe9a091c881bb0e4b5898387c765"}
 
 
 def _digest(path: Path) -> str:
@@ -38,9 +39,9 @@ def _child(root: Path, name: str) -> Path:
     return candidate
 
 
-def verify_capsule(capsule: Path, checkout: Path) -> dict[str, object]:
+def verify_capsule(capsule: Path, checkout: Path | None) -> dict[str, object]:
     capsule = Path(capsule)
-    checkout = Path(checkout)
+    checkout = Path(checkout) if checkout is not None else None
     manifest = capsule / "capsule.json"
     public = capsule / "evaluator-public.pem"
     signature = capsule / "capsule.sig"
@@ -57,6 +58,8 @@ def verify_capsule(capsule: Path, checkout: Path) -> dict[str, object]:
     fixed = document.get("fixed_point")
     if not isinstance(fixed, dict) or set(fixed) != REQUIRED_FIXED_POINT:
         raise ValueError("capsule fixed point is incomplete")
+    if checkout is None and fixed["image_manifest_digest"] not in SEALED_HISTORICAL_IMAGES:
+        raise ValueError("sealed historical verification is unavailable for this fixed point")
     if (
         document.get("signer_public_key_digest") != TRUSTED_EVALUATOR_KEY_DIGEST
         or _digest(public) != TRUSTED_EVALUATOR_KEY_DIGEST
@@ -85,12 +88,13 @@ def verify_capsule(capsule: Path, checkout: Path) -> dict[str, object]:
         path = _child(capsule, name)
         if _digest(path) != expected:
             raise ValueError(f"capsule artifact changed: {name}")
-    for name, expected in document.get("input_files", {}).items():
-        path = _child(checkout, name)
-        if _digest(path) != expected:
-            raise ValueError(f"fixed-point input changed: {name}")
-    if _digest(checkout / "tool-supply/generated/inventory.json") != fixed["catalogue_digest"]:
-        raise ValueError("fixed-point catalogue digest changed")
+    if checkout is not None:
+        for name, expected in document.get("input_files", {}).items():
+            path = _child(checkout, name)
+            if _digest(path) != expected:
+                raise ValueError(f"fixed-point input changed: {name}")
+        if _digest(checkout / "tool-supply/generated/inventory.json") != fixed["catalogue_digest"]:
+            raise ValueError("fixed-point catalogue digest changed")
     component_map = {
         name: digest
         for name, digest in document["input_files"].items()
@@ -242,7 +246,28 @@ def _verify_298(capsule: Path, document: dict[str, object], fixed: dict[str, obj
         raise ValueError("#298 does not exercise seven components and sixteen Tool capabilities")
 
 
-TICKET_VERIFIERS = {269: _verify_269, 270: _verify_270, 281: _verify_281, 283: _verify_283, 298: _verify_298}
+def _verify_293(capsule: Path, document: dict[str, object], _fixed: dict[str, object]) -> None:
+    from solver.submission.receipt import verify_receipt
+
+    receipt = capsule / "serial-submission.receipt.json"
+    verify_receipt(receipt)
+    receipt_document = _json(receipt)
+    if (
+        receipt_document.get("evidence_class") != "controlled-runtime-trace"
+        or receipt_document.get("in_flight_maximum") != 1
+        or document.get("scanner_annotation") != "gitleaks:allow"
+    ):
+        raise ValueError("#293 serial submission proof is incomplete")
+
+
+TICKET_VERIFIERS = {
+    269: _verify_269,
+    270: _verify_270,
+    281: _verify_281,
+    283: _verify_283,
+    293: _verify_293,
+    298: _verify_298,
+}
 
 
 def _verify_semantics(capsule: Path, document: dict[str, object]) -> None:
@@ -294,6 +319,7 @@ def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]])
         270: "core.strict-isolation",
         281: "core.controlled-proofs",
         283: "core.inference-native",
+        293: "core.submission-tail",
         298: "core.tool-surface",
     }
     for path, capsule in capsules:
@@ -314,14 +340,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capsules", nargs="+", type=Path)
     parser.add_argument("--checkout", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument(
+        "--sealed-historical-inputs",
+        action="store_true",
+        help="verify the signed historical input digest set without requiring its source checkout",
+    )
     arguments = parser.parse_args(argv)
     try:
         verified = []
         for capsule in arguments.capsules:
-            document = verify_capsule(capsule, arguments.checkout)
+            document = verify_capsule(capsule, None if arguments.sealed_historical_inputs else arguments.checkout)
             verified.append((capsule, document))
             print(f"verified #{document['ticket']} {capsule}")
-        if {document["ticket"] for _capsule, document in verified} == {269, 270, 281, 283, 298}:
+        tickets = {document["ticket"] for _capsule, document in verified}
+        if tickets in ({269, 270, 281, 283, 298}, {293}):
             roots = {capsule.parent.resolve() for capsule, _document in verified}
             if len(roots) != 1:
                 raise ValueError("capsules do not share one candidate evidence root")

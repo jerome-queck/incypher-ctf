@@ -90,6 +90,14 @@ class ReadyCandidate:
 
 
 @dataclass(frozen=True)
+class ReadyAdmission:
+    candidate: ReadyCandidate
+    ready_at: str
+    ready_order: int
+    predecessor_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AdmissionOutcome:
     decision: AdmissionDecision
     candidate: ReadyCandidate | None = None
