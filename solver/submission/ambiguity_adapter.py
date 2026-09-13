@@ -26,10 +26,14 @@ class AmbiguityAwareSerialSubmission:
             raise ValueError("complete submission identity names another Challenge")
         if complete.candidate_digest != admission.candidate.candidate_digest:
             raise ValueError("complete submission identity names another Candidate value")
-        self._fence.reserve_path(original_id, complete)
+        self._fence.reserve_path(original_id, complete, record_wire=False)
         canonical = replace(admission, candidate=replace(admission.candidate, identity=complete.payload_identity))
         try:
-            result = self._serial.dispatch(canonical, binding=binding)
+            result = self._serial.dispatch(
+                canonical,
+                binding=binding,
+                pre_wire=lambda: self._fence.mark_wire(original_id, complete),
+            )
         except BaseException:
             current = self._fence.effect_state(complete.reservation_id)
             if current is not None and current.state.value == "possibly-sent":

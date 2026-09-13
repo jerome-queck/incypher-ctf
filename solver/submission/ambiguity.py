@@ -64,17 +64,31 @@ class AmbiguousSubmissionFence:
         self._probe = probe
         self._lock = threading.Lock()
 
-    def reserve_path(self, candidate_id: str, identity: CompleteSubmissionIdentity) -> None:
+    def reserve_path(
+        self, candidate_id: str, identity: CompleteSubmissionIdentity, *, record_wire: bool = True
+    ) -> None:
         if not isinstance(identity, CompleteSubmissionIdentity):
             raise TypeError("ambiguity path requires CompleteSubmissionIdentity")
         if not candidate_id:
             raise ValueError("ambiguity needs Candidate identity")
-        reservation = self._authority.reserve(
+        self._authority.reserve(
             f"ambiguity-path:{identity.effect_id}",
             EffectIdentity(AMBIGUITY_PATH_OPERATION, identity.effect_id, identity.payload_identity),
             AMBIGUITY_PATH_NEED,
             retention=RetentionPolicy.RECORD,
         )
+        starts = [
+            row
+            for row in self._events()
+            if row.get("event") == AmbiguityEvent.WIRE_STARTED and row.get("effect_id") == identity.effect_id
+        ]
+        if record_wire and not starts:
+            self.mark_wire(candidate_id, identity)
+
+    def mark_wire(self, candidate_id: str, identity: CompleteSubmissionIdentity) -> None:
+        reservation = self._authority.current(f"ambiguity-path:{identity.effect_id}")
+        if reservation is None:
+            raise ValueError("ambiguity path must be reserved before wire send")
         starts = [
             row
             for row in self._events()

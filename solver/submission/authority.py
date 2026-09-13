@@ -55,7 +55,9 @@ class SerialSubmission:
         with self._queue:
             return len(self._pending)
 
-    def dispatch(self, admission: ReadyAdmission, *, binding: CapabilityBinding) -> SubmissionResult | None:
+    def dispatch(
+        self, admission: ReadyAdmission, *, binding: CapabilityBinding, pre_wire: Callable[[], None] | None = None
+    ) -> SubmissionResult | None:
         candidate = admission.candidate
         if candidate.generation_id != binding.generation_id:
             raise ValueError("Candidate generation does not match submission capability")
@@ -74,13 +76,15 @@ class SerialSubmission:
             self._busy = True
             self._pending.pop(candidate.identity, None)
         try:
-            return self._dispatch(candidate, binding, admission.ready_at)
+            return self._dispatch(candidate, binding, admission.ready_at, pre_wire)
         finally:
             with self._queue:
                 self._busy = False
                 self._queue.notify_all()
 
-    def _dispatch(self, candidate: ReadyCandidate, binding: CapabilityBinding, ready_at: str) -> SubmissionResult:
+    def _dispatch(
+        self, candidate: ReadyCandidate, binding: CapabilityBinding, ready_at: str, pre_wire=None
+    ) -> SubmissionResult:
         if not ready_at:
             raise ValueError("Candidate readiness needs its canonical timestamp")
         try:
@@ -96,6 +100,8 @@ class SerialSubmission:
         client = self._open_client(self._board_broker_path, binding)
 
         def submit() -> Verdict:
+            if pre_wire is not None:
+                pre_wire()
             result = client.submit(candidate.challenge_id, text)
             if result.outcome is not BoardOutcome.ANSWERED or not isinstance(result.value, Verdict):
                 raise RuntimeError(f"Board broker classified submit as {result.outcome.value}")

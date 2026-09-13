@@ -51,7 +51,9 @@ def verify_receipt(path: Path) -> Path:
             if float(event["deadline"]) != float(event["wire_started_at"]) + FENCE_SECONDS:
                 raise ValueError("ambiguous-submission deadline is invalid")
             complete = event.get("complete_identity")
-            if complete:
+            if not isinstance(complete, Mapping):
+                raise ValueError("ambiguous-submission complete identity is required")
+            else:
                 basis = {
                     key: complete[key]
                     for key in (
@@ -87,14 +89,18 @@ def verify_receipt(path: Path) -> Path:
             raise ValueError("Evaluator POST trace does not match ambiguous effects")
     if any(item not in starts for item in closed):
         raise ValueError("ambiguous-submission close lacks a possibly-sent effect")
-    exact_dispositions = {"accepted": "correct", "rejected": "incorrect"}
+    exact_dispositions = {
+        "accepted": {"correct"},
+        "rejected": {"incorrect"},
+        "refused-and-spent": {"refused", "paused", "rate-limited"},
+    }
     for candidate, event in closed.items():
         disposition = str(event.get("disposition", ""))
         if disposition in exact_dispositions and not any(
             probe.get("authenticated") is True
             and probe.get("candidate_match") is True
             and probe.get("kind") == "exact-candidate-verdict"
-            and probe.get("verdict") == exact_dispositions[disposition]
+            and probe.get("verdict") in exact_dispositions[disposition]
             and probe.get("source") == event.get("provenance")
             and all(
                 probe.get(field)
