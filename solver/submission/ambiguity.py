@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
@@ -17,7 +17,17 @@ from solver.write_reservation import (
     RetentionPolicy,
     WriteAuthority,
 )
-from solver.board_broker_contracts import BoardBrokerResult, BoardOutcome
+from solver.submission.ambiguity_types import (
+    AmbiguityEvent,
+    AuthenticatedSubmissionEvidence,
+    CompleteSubmissionIdentity,
+    Evidence,
+    FenceClosed,
+    LedgerRowType,
+    PendingSubmission,
+    SubmissionDisposition,
+    SubmissionVerdict,
+)
 
 SCHEMA_VERSION = 1
 RECEIPT_TYPE = "ambiguous-submission"
@@ -30,147 +40,6 @@ AMBIGUITY_EVENT = "submission.ambiguity-event"
 EVENT_NEED = Capacity(4096, 1, 3)
 AMBIGUITY_PATH_NEED = Capacity(64 * 1024, 8, 24)
 AMBIGUITY_PATH_OPERATION = "submission.ambiguity-path"
-
-
-class FenceClosed(RuntimeError):
-    """The Candidate's at-most-once authority has already been consumed."""
-
-
-@dataclass(frozen=True)
-class CompleteSubmissionIdentity:
-    board_identity: str
-    challenge_id: int
-    challenge_revision: str
-    instance_provenance: str
-    candidate_digest: str
-    submission_epoch: int
-
-    def __post_init__(self):
-        if (
-            any(
-                not item
-                for item in (
-                    self.board_identity,
-                    self.challenge_revision,
-                    self.instance_provenance,
-                    self.candidate_digest,
-                )
-            )
-            or self.challenge_id < 1
-            or self.submission_epoch < 1
-        ):
-            raise ValueError("complete submission identity is incomplete")
-
-    @property
-    def payload_identity(self):
-        return digest_bytes(canonical_bytes(self.__dict__))
-
-    @property
-    def reservation_id(self):
-        return f"serial-submit:{self.payload_identity}"
-
-    @property
-    def effect_id(self):
-        return EffectIdentity("board.submit-candidate", str(self.challenge_id), self.payload_identity).fingerprint
-
-    def document(self):
-        return {**self.__dict__, "reservation_id": self.reservation_id, "effect_id": self.effect_id}
-
-
-@dataclass(frozen=True)
-class Evidence:
-    kind: str
-    source: str
-
-    @classmethod
-    def score_change(cls, source: str) -> Evidence:
-        return cls("score-change", source)
-
-    @classmethod
-    def unsettled(cls, source: str) -> Evidence:
-        return cls("unsettled", source)
-
-
-@dataclass(frozen=True)
-class AuthenticatedSubmissionEvidence:
-    kind: str
-    source: str
-    verdict: str
-    candidate_id: str
-    request_id: str
-    classified_event_id: str
-    binding_digest: str
-    peer_identity_digest: str
-    effect_id: str
-    submission_epoch: int
-    supplied_value_digest: str
-    board_row_id: str
-    row_type: str
-    submitted_at: str
-    complete_identity: Mapping[str, object]
-
-    @classmethod
-    def from_broker(
-        cls,
-        result: BoardBrokerResult,
-    ):
-        provenance = result.provenance
-        row = result.value
-        required = {
-            "board_row_id",
-            "row_type",
-            "submitted_at",
-            "request_id",
-            "verdict",
-            "candidate_id",
-            "supplied_value_digest",
-            "effect_id",
-            "submission_epoch",
-            "complete_identity",
-        }
-        if not isinstance(row, Mapping) or set(row) != required or not isinstance(row["complete_identity"], Mapping):
-            raise ValueError("submission ledger row shape is invalid")
-        verdict = str(row["verdict"])
-        if verdict not in {"correct", "incorrect", "refused", "paused", "rate-limited"}:
-            raise ValueError("unsupported submission-ledger verdict")
-        if (
-            result.outcome is not BoardOutcome.ANSWERED
-            or not result.request_id
-            or row["request_id"] != result.request_id
-            or not provenance.classified_event_id
-            or not provenance.binding_digest
-            or not provenance.peer_identity_digest
-        ):
-            raise ValueError("submission ledger evidence is not broker-authenticated")
-        return cls(
-            "exact-candidate-verdict",
-            provenance.endpoint,
-            verdict,
-            str(row["candidate_id"]),
-            result.request_id,
-            provenance.classified_event_id,
-            provenance.binding_digest,
-            provenance.peer_identity_digest,
-            str(row["effect_id"]),
-            int(row["submission_epoch"]),
-            str(row["supplied_value_digest"]),
-            str(row["board_row_id"]),
-            str(row["row_type"]),
-            str(row["submitted_at"]),
-            dict(row["complete_identity"]),
-        )
-
-
-@dataclass(frozen=True)
-class PendingSubmission:
-    candidate_id: str
-    effect_id: str
-    challenge_id: int
-    wire_started_at: float
-    deadline: float
-    disposition: str = "pending"
-    provenance: str = ""
-    complete_identity: Mapping[str, object] | None = None
 
 
 class AmbiguousSubmissionFence:
@@ -212,13 +81,13 @@ class AmbiguousSubmissionFence:
         starts = [
             row
             for row in self._events()
-            if row.get("event") == "wire-started" and row.get("effect_id") == identity.effect_id
+            if row.get("event") == AmbiguityEvent.WIRE_STARTED and row.get("effect_id") == identity.effect_id
         ]
         if not starts:
             wire_started_at = self._wall()
             self._append(
                 {
-                    "event": "wire-started",
+                    "event": AmbiguityEvent.WIRE_STARTED,
                     "boot_id": self._boot_id,
                     "candidate_id": candidate_id,
                     "effect_id": identity.effect_id,
@@ -243,7 +112,7 @@ class AmbiguousSubmissionFence:
             starts = [
                 row
                 for row in self._events()
-                if row.get("event") == "wire-started" and row.get("effect_id") == effect_id
+                if row.get("event") == AmbiguityEvent.WIRE_STARTED and row.get("effect_id") == effect_id
             ]
             if len(starts) != 1:
                 raise ValueError("submission has no unique durable wire start")
@@ -259,7 +128,7 @@ class AmbiguousSubmissionFence:
             self._anchors[candidate_id] = (self._clock(), 0.0)
             self._append(
                 {
-                    "event": "possibly-sent",
+                    "event": AmbiguityEvent.POSSIBLY_SENT,
                     "boot_id": self._boot_id,
                     "candidate_id": candidate_id,
                     "effect_id": effect_id,
@@ -277,7 +146,7 @@ class AmbiguousSubmissionFence:
             state = self._states().get(pending.candidate_id)
             if state is None or state.effect_id != pending.effect_id:
                 raise ValueError("Candidate ambiguity does not match canonical replay")
-            if state.disposition != "pending":
+            if state.disposition is not SubmissionDisposition.PENDING:
                 return state
             events = self._events()
             boots = {row["boot_id"] for row in events if row["candidate_id"] == state.candidate_id}
@@ -295,7 +164,7 @@ class AmbiguousSubmissionFence:
                 self._anchors[state.candidate_id] = (self._clock(), carried)
                 self._append(
                     {
-                        "event": "boot-replayed",
+                        "event": AmbiguityEvent.BOOT_REPLAYED,
                         "boot_id": self._boot_id,
                         "candidate_id": state.candidate_id,
                         "effect_id": state.effect_id,
@@ -306,7 +175,9 @@ class AmbiguousSubmissionFence:
                 anchor = self._anchors[state.candidate_id]
             now = max(anchor[1], anchor[1] + self._clock() - anchor[0])
             attempted = sum(
-                row["event"] == "evidence-probe" for row in events if row["candidate_id"] == state.candidate_id
+                row["event"] == AmbiguityEvent.EVIDENCE_PROBE
+                for row in events
+                if row["candidate_id"] == state.candidate_id
             )
             due = sum(now >= offset for offset in PROBE_OFFSETS)
             while attempted < due:
@@ -314,7 +185,7 @@ class AmbiguousSubmissionFence:
                 attempted += 1
                 self._append(
                     {
-                        "event": "evidence-probe",
+                        "event": AmbiguityEvent.EVIDENCE_PROBE,
                         "boot_id": self._boot_id,
                         "candidate_id": state.candidate_id,
                         "effect_id": state.effect_id,
@@ -343,14 +214,14 @@ class AmbiguousSubmissionFence:
                     self._close(state, disposition, evidence.source, now)
                     return self._states()[state.candidate_id]
             if now >= FENCE_SECONDS and attempted == len(PROBE_OFFSETS):
-                self._close(state, "unknown-and-spent", "fence-expired", state.deadline)
+                self._close(state, SubmissionDisposition.UNKNOWN_AND_SPENT, "fence-expired", state.deadline)
                 return self._states()[state.candidate_id]
             return state
 
     @staticmethod
-    def _definitive(state: PendingSubmission, evidence: Evidence) -> str:
+    def _definitive(state: PendingSubmission, evidence: Evidence) -> SubmissionDisposition | None:
         if not isinstance(evidence, AuthenticatedSubmissionEvidence):
-            return ""
+            return None
         expected = state.complete_identity or {}
         if (
             evidence.candidate_id != state.candidate_id
@@ -358,28 +229,28 @@ class AmbiguousSubmissionFence:
             or evidence.submission_epoch != expected.get("submission_epoch")
             or evidence.supplied_value_digest != expected.get("candidate_digest")
             or evidence.complete_identity != expected
-            or evidence.row_type != "submission"
+            or evidence.row_type is not LedgerRowType.SUBMISSION
             or not evidence.board_row_id
             or not evidence.submitted_at
         ):
-            return ""
+            return None
         return {
-            "correct": "accepted",
-            "incorrect": "rejected",
-            "refused": "refused-and-spent",
-            "paused": "refused-and-spent",
-            "rate-limited": "refused-and-spent",
+            SubmissionVerdict.CORRECT: SubmissionDisposition.ACCEPTED,
+            SubmissionVerdict.INCORRECT: SubmissionDisposition.REJECTED,
+            SubmissionVerdict.REFUSED: SubmissionDisposition.REFUSED_AND_SPENT,
+            SubmissionVerdict.PAUSED: SubmissionDisposition.REFUSED_AND_SPENT,
+            SubmissionVerdict.RATE_LIMITED: SubmissionDisposition.REFUSED_AND_SPENT,
         }[evidence.verdict]
 
-    def _close(self, state: PendingSubmission, disposition: str, source: str, at: float) -> None:
+    def _close(self, state: PendingSubmission, disposition: SubmissionDisposition, source: str, at: float) -> None:
         self._append(
             {
-                "event": "fence-closed",
+                "event": AmbiguityEvent.FENCE_CLOSED,
                 "boot_id": self._boot_id,
                 "candidate_id": state.candidate_id,
                 "effect_id": state.effect_id,
                 "at": at,
-                "disposition": disposition,
+                "disposition": disposition.value,
                 "provenance": source,
             }
         )
@@ -392,13 +263,13 @@ class AmbiguousSubmissionFence:
 
     @property
     def barrier_open(self) -> bool:
-        return any(state.disposition == "pending" for state in self._states().values())
+        return any(state.disposition is SubmissionDisposition.PENDING for state in self._states().values())
 
     def close_boot(self) -> None:
         self._authority.close()
 
     def pending(self) -> tuple[PendingSubmission, ...]:
-        return tuple(state for state in self._states().values() if state.disposition == "pending")
+        return tuple(state for state in self._states().values() if state.disposition is SubmissionDisposition.PENDING)
 
     def effect_state(self, reservation_id: str):
         return self._authority.current(reservation_id)
@@ -413,14 +284,14 @@ class AmbiguousSubmissionFence:
         return (
             candidate_id not in states
             and effect_id not in {state.effect_id for state in states.values()}
-            and not any(state.disposition == "pending" for state in states.values())
+            and not any(state.disposition is SubmissionDisposition.PENDING for state in states.values())
         )
 
     def post_trace(self, candidate_id: str) -> tuple[str, ...]:
         return tuple(
-            "possibly-sent"
+            AmbiguityEvent.POSSIBLY_SENT.value
             for row in self._events()
-            if row["candidate_id"] == candidate_id and row["event"] == "possibly-sent"
+            if row["candidate_id"] == candidate_id and row["event"] == AmbiguityEvent.POSSIBLY_SENT
         )
 
     def write_receipt(self) -> Path:
@@ -483,7 +354,7 @@ class AmbiguousSubmissionFence:
         states: dict[str, PendingSubmission] = {}
         for row in self._events() if events is None else events:
             candidate_id = str(row["candidate_id"])
-            if row["event"] == "possibly-sent":
+            if row["event"] == AmbiguityEvent.POSSIBLY_SENT:
                 states[candidate_id] = PendingSubmission(
                     candidate_id,
                     str(row["effect_id"]),
@@ -492,7 +363,7 @@ class AmbiguousSubmissionFence:
                     float(row["deadline"]),
                     complete_identity=dict(row["complete_identity"]),
                 )
-            elif row["event"] == "fence-closed":
+            elif row["event"] == AmbiguityEvent.FENCE_CLOSED:
                 current = states[candidate_id]
                 states[candidate_id] = PendingSubmission(
                     current.candidate_id,
@@ -500,7 +371,7 @@ class AmbiguousSubmissionFence:
                     current.challenge_id,
                     current.wire_started_at,
                     current.deadline,
-                    str(row["disposition"]),
+                    SubmissionDisposition(str(row["disposition"])),
                     str(row["provenance"]),
                     current.complete_identity,
                 )
