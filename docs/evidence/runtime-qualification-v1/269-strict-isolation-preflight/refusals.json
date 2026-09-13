@@ -1,0 +1,1 @@
+{"drifted_cgroup_mount":{"returncode":2,"stderr":"[boot] isolation:boundary-probe \u2014 dedicated cgroup parent is absent or read-only","stdout":""},"ordinary_docker_run":{"returncode":2,"stderr":"[boot] isolation:image-identity \u2014 INCYPHER_STRICT_IMAGE must name the exact sha256 image","stdout":""},"schema_version":1}

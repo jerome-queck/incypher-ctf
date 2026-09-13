@@ -1,0 +1,340 @@
+"""Independently verify retained, externally signed runtime qualification capsules."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+REQUIRED_FIXED_POINT = {
+    "image_manifest_digest",
+    "image_config_digest",
+    "platform",
+    "runtime_profile_digest",
+    "catalogue_digest",
+    "component_inputs_digest",
+}
+TRUSTED_EVALUATOR_KEY_DIGEST = "672b8a4f435628a41eb590ee563c9e395cbebfbc766accf20efc2e028d302c5b"  # gitleaks:allow
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _child(root: Path, name: str) -> Path:
+    candidate = (root / name).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError as error:
+        raise ValueError(f"capsule path escapes its root: {name}") from error
+    return candidate
+
+
+def verify_capsule(capsule: Path, checkout: Path) -> dict[str, object]:
+    capsule = Path(capsule)
+    checkout = Path(checkout)
+    manifest = capsule / "capsule.json"
+    public = capsule / "evaluator-public.pem"
+    signature = capsule / "capsule.sig"
+    try:
+        raw = manifest.read_bytes()
+        document = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("capsule manifest cannot be read as JSON") from error
+    canonical = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if raw != canonical or not isinstance(document, dict):
+        raise ValueError("capsule manifest is not canonical JSON")
+    if document.get("schema_version") != 1 or document.get("kind") != "runtime-qualification-capsule":
+        raise ValueError("capsule schema is invalid")
+    fixed = document.get("fixed_point")
+    if not isinstance(fixed, dict) or set(fixed) != REQUIRED_FIXED_POINT:
+        raise ValueError("capsule fixed point is incomplete")
+    if (
+        document.get("signer_public_key_digest") != TRUSTED_EVALUATOR_KEY_DIGEST
+        or _digest(public) != TRUSTED_EVALUATOR_KEY_DIGEST
+    ):
+        raise ValueError("capsule signer identity changed")
+    checked = subprocess.run(
+        [
+            "openssl",
+            "pkeyutl",
+            "-verify",
+            "-rawin",
+            "-pubin",
+            "-inkey",
+            str(public),
+            "-in",
+            str(manifest),
+            "-sigfile",
+            str(signature),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if checked.returncode:
+        raise ValueError("capsule signature is invalid")
+    for name, expected in document.get("artifacts", {}).items():
+        path = _child(capsule, name)
+        if _digest(path) != expected:
+            raise ValueError(f"capsule artifact changed: {name}")
+    for name, expected in document.get("input_files", {}).items():
+        path = _child(checkout, name)
+        if _digest(path) != expected:
+            raise ValueError(f"fixed-point input changed: {name}")
+    if _digest(checkout / "tool-supply/generated/inventory.json") != fixed["catalogue_digest"]:
+        raise ValueError("fixed-point catalogue digest changed")
+    component_map = {
+        name: digest
+        for name, digest in document["input_files"].items()
+        if name.startswith("tool-supply/locks/") or name.startswith("tool-supply/fixtures/")
+    }
+    component_digest = hashlib.sha256(
+        (json.dumps(component_map, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    if not component_map or component_digest != fixed["component_inputs_digest"]:
+        raise ValueError("fixed-point component inputs digest changed")
+    cleanup = document.get("cleanup_state")
+    if not isinstance(cleanup, dict) or cleanup.get("owned_residue") != []:
+        raise ValueError("capsule does not retain clean teardown state")
+    if not isinstance(document.get("observed_results"), list) or not document["observed_results"]:
+        raise ValueError("capsule has no observed result")
+    _verify_semantics(capsule, document)
+    return document
+
+
+def _json(path: Path) -> dict[str, object]:
+    value = json.loads(path.read_bytes())
+    if not isinstance(value, dict):
+        raise ValueError(f"evidence is not an object: {path.name}")
+    return value
+
+
+def _verify_evaluator(path: Path) -> dict[str, object]:
+    sealed = _json(path)
+    signature = sealed.pop("signature", None)
+    try:
+        public = base64.b64decode(sealed["signer_public_key"], validate=True)
+        signature_bytes = base64.b64decode(signature, validate=True)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("nested Evaluator signature is invalid") from error
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        body, key, sig = root / "body", root / "key", root / "sig"
+        body.write_bytes((json.dumps(sealed, sort_keys=True, separators=(",", ":")) + "\n").encode())
+        key.write_bytes(public)
+        sig.write_bytes(signature_bytes)
+        result = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-verify",
+                "-rawin",
+                "-pubin",
+                "-inkey",
+                str(key),
+                "-in",
+                str(body),
+                "-sigfile",
+                str(sig),
+            ],
+            capture_output=True,
+            check=False,
+        )
+    if (
+        result.returncode
+        or hashlib.sha256(public).hexdigest() != TRUSTED_EVALUATOR_KEY_DIGEST
+        or sealed.get("signer_public_key_digest") != TRUSTED_EVALUATOR_KEY_DIGEST
+    ):
+        raise ValueError("nested Evaluator signature is invalid")
+    return sealed
+
+
+def _verify_269(capsule: Path, _document: dict[str, object], fixed: dict[str, object]) -> None:
+    receipt = _json(capsule / "strict-isolation-preflight.receipt.json")
+    if receipt.get("image_id") != fixed["image_manifest_digest"] or receipt.get("owned_residue") != []:
+        raise ValueError("#269 receipt is not the clean fixed-point preflight")
+    if set(receipt.get("checks", {}).values()) != {"pass"}:
+        raise ValueError("#269 deny/preflight checks are incomplete")
+    refusals = _json(capsule / "refusals.json")
+    if any(refusals.get(name, {}).get("returncode") != 2 for name in ("ordinary_docker_run", "drifted_cgroup_mount")):
+        raise ValueError("#269 ordinary and drifted Refusal fixtures are absent")
+    if _json(capsule / "residue-inventory.json").get("owned_residue") != []:
+        raise ValueError("#269 host residue inventory is not clean")
+
+
+def _verify_270(capsule: Path, _document: dict[str, object], fixed: dict[str, object]) -> None:
+    receipt = _json(capsule / "attempt-resource-envelope.receipt.json")
+    outcomes = {row.get("outcome") for row in receipt.get("envelopes", [])}
+    required = {
+        "exited",
+        "cpu-limit",
+        "memory-limit",
+        "pid-limit",
+        "filesystem-limit",
+        "network-limit",
+        "wall-clock-limit",
+    }
+    if not required.issubset(outcomes) or receipt.get("binding", {}).get("image_id") != fixed["image_manifest_digest"]:
+        raise ValueError("#270 fixed-point resource outcomes are incomplete")
+    if any(
+        not row.get("cleanup_complete") or row.get("observed", {}).get("processes_after_kill") != 0
+        for row in receipt["envelopes"]
+    ):
+        raise ValueError("#270 cleanup evidence is incomplete")
+    reconciled = _json(capsule / "crash-reconciliation.receipt.json").get("envelopes", [])
+    if (
+        len(reconciled) != 1
+        or reconciled[0].get("outcome") != "reconciled-after-crash"
+        or reconciled[0].get("observed", {}).get("reconciled") is not True
+    ):
+        raise ValueError("#270 has no real crash reconciliation outcome")
+
+
+def _verify_281(capsule: Path, _document: dict[str, object], _fixed: dict[str, object]) -> None:
+    green = _verify_evaluator(capsule / "green.evaluator.json")
+    failure = _verify_evaluator(capsule / "isolation-failure.evaluator.json")
+    if green.get("verdicts") != {"solve": "pass", "isolation": "pass"}:
+        raise ValueError("#281 green verdict is absent")
+    if failure.get("verdicts") != {"solve": "pass", "isolation": "fail"}:
+        raise ValueError("#281 deliberate Isolation failure is absent")
+
+
+def _verify_283(capsule: Path, _document: dict[str, object], _fixed: dict[str, object]) -> None:
+    receipt = _json(capsule / "native-codex-control.receipt.json")
+    if receipt.get("secret_probes") != {"environment": "clear", "event": "clear", "file": "clear"}:
+        raise ValueError("#283 executor credential probes are not clear")
+    expected_catalogue = hashlib.sha256(b'{"catalogue":[{"efforts":["low"],"model":"gpt-5.6-luna"}]}').hexdigest()
+    if receipt.get("turn", {}).get("duration_ms", 0) <= 0 or receipt.get("catalogue_digest") != expected_catalogue:
+        raise ValueError("#283 has no catalogued measured Turn")
+    limits = receipt.get("limits", [])
+    if not limits or limits[0].get("used_percent") is not None or limits[0].get("source") != "native-stream-absent":
+        raise ValueError("#283 limit absence lost its provenance")
+    events = [json.loads(line) for line in (capsule / "events.jsonl").read_text().splitlines()]
+    turns = [
+        event["payload"]
+        for event in events
+        if event.get("event_type") == "observation.recorded" and event.get("payload", {}).get("tool") == "codex"
+    ]
+    if not any(
+        turn.get("exit_code") == 0 and turn.get("tokens_out", 0) > 0 and turn.get("usage_known") is True
+        for turn in turns
+    ):
+        raise ValueError("#283 retained native call did not succeed with measured usage")
+
+
+def _verify_298(capsule: Path, document: dict[str, object], fixed: dict[str, object]) -> None:
+    from solver.tool_supply_receipt import validate_receipt
+
+    receipts = [_json(capsule / name) for name in document["artifacts"] if name.startswith("resident.")]
+    capabilities = set()
+    for receipt in receipts:
+        validate_receipt(receipt, expected_image_manifest_digest=str(fixed["image_manifest_digest"]))
+        capabilities.update(row.get("capability_id") for row in receipt.get("handle_solve", {}).get("capabilities", []))
+    if len(receipts) != 7 or len(capabilities) != 16:
+        raise ValueError("#298 does not exercise seven components and sixteen Tool capabilities")
+
+
+TICKET_VERIFIERS = {269: _verify_269, 270: _verify_270, 281: _verify_281, 283: _verify_283, 298: _verify_298}
+
+
+def _verify_semantics(capsule: Path, document: dict[str, object]) -> None:
+    try:
+        verifier = TICKET_VERIFIERS[document["ticket"]]
+    except KeyError as error:
+        raise ValueError(f"unsupported evidence ticket: {document['ticket']}") from error
+    fixed = document["fixed_point"]
+    assert isinstance(fixed, dict)
+    verifier(capsule, document, fixed)
+
+
+def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]]) -> None:
+    manifest = root / "candidate-manifest.json"
+    signature = root / "candidate-manifest.sig"
+    public = root / "evaluator-public.pem"
+    if not manifest.exists():
+        raise ValueError("candidate manifest is absent")
+    checked = subprocess.run(
+        [
+            "openssl",
+            "pkeyutl",
+            "-verify",
+            "-rawin",
+            "-pubin",
+            "-inkey",
+            str(public),
+            "-in",
+            str(manifest),
+            "-sigfile",
+            str(signature),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if checked.returncode or _digest(public) != TRUSTED_EVALUATOR_KEY_DIGEST:
+        raise ValueError("candidate manifest signature is invalid")
+    from solver.manifest import parse_manifest
+
+    candidate = parse_manifest(manifest.read_bytes())
+    fixed_points = {
+        json.dumps(capsule["fixed_point"], sort_keys=True, separators=(",", ":")) for _path, capsule in capsules
+    }
+    if len(fixed_points) != 1:
+        raise ValueError("capsules do not share one complete fixed point")
+    rows = {row["row_id"]: row for row in candidate["requirements"]}
+    expected_rows = {
+        269: "core.strict-isolation",
+        270: "core.strict-isolation",
+        281: "core.controlled-proofs",
+        283: "core.inference-native",
+        298: "core.tool-surface",
+    }
+    for path, capsule in capsules:
+        fixed = capsule["fixed_point"]
+        if candidate["candidate"]["image_digest"] != fixed["image_manifest_digest"]:
+            raise ValueError("candidate and capsule image bindings differ")
+        selected = candidate["selected_profile"]
+        if selected["isolation"]["profile_digest"] != fixed["runtime_profile_digest"]:
+            raise ValueError("candidate and capsule runtime-profile bindings differ")
+        if selected["tool_policy"] != f"resident-catalogue:{fixed['catalogue_digest']}":
+            raise ValueError("candidate and capsule catalogue bindings differ")
+        reference = "capsule-content:" + _digest(path / "capsule.json")
+        if reference not in rows[expected_rows[capsule["ticket"]]]["evidence_refs"]:
+            raise ValueError(f"candidate manifest does not link #{capsule['ticket']} capsule")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("capsules", nargs="+", type=Path)
+    parser.add_argument("--checkout", type=Path, default=Path(__file__).resolve().parent.parent)
+    arguments = parser.parse_args(argv)
+    try:
+        verified = []
+        for capsule in arguments.capsules:
+            document = verify_capsule(capsule, arguments.checkout)
+            verified.append((capsule, document))
+            print(f"verified #{document['ticket']} {capsule}")
+        if {document["ticket"] for _capsule, document in verified} == {269, 270, 281, 283, 298}:
+            roots = {capsule.parent.resolve() for capsule, _document in verified}
+            if len(roots) != 1:
+                raise ValueError("capsules do not share one candidate evidence root")
+            verify_candidate(next(iter(roots)), verified)
+            print("verified signed candidate manifest links")
+    except (OSError, TypeError, ValueError) as error:
+        print(f"verification failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+__all__ = ["verify_capsule"]
