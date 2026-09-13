@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
+from solver.board_broker_contracts import BoardBrokerResult, BoardOutcome
 
 SCHEMA_VERSION = 1
 RECEIPT_TYPE = "ambiguous-submission"
@@ -25,22 +26,39 @@ class FenceClosed(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CompleteSubmissionIdentity:
+    board_identity: str
+    challenge_revision: str
+    instance_provenance: str
+    candidate_digest: str
+    reservation_id: str
+    submission_epoch: int
+
+    def __post_init__(self):
+        if (
+            any(
+                not item
+                for item in (
+                    self.board_identity,
+                    self.challenge_revision,
+                    self.instance_provenance,
+                    self.candidate_digest,
+                    self.reservation_id,
+                )
+            )
+            or self.submission_epoch < 1
+        ):
+            raise ValueError("complete submission identity is incomplete")
+
+    @property
+    def effect_id(self):
+        return digest_bytes(canonical_bytes(self.__dict__))
+
+
+@dataclass(frozen=True)
 class Evidence:
     kind: str
     source: str
-    verdict: str = ""
-    candidate_id: str = ""
-    authenticated: bool = False
-
-    @classmethod
-    def exact_verdict(cls, verdict: str, *, source: str, candidate_id: str) -> Evidence:
-        if verdict not in {"correct", "incorrect", "refused", "paused", "rate-limited"}:
-            raise ValueError("unsupported exact submission verdict")
-        return cls("exact-candidate-verdict", source, verdict, candidate_id, True)
-
-    @classmethod
-    def authenticated_solve(cls, source: str) -> Evidence:
-        return cls("authenticated-solve", source, authenticated=True)
 
     @classmethod
     def score_change(cls, source: str) -> Evidence:
@@ -49,6 +67,56 @@ class Evidence:
     @classmethod
     def unsettled(cls, source: str) -> Evidence:
         return cls("unsettled", source)
+
+
+@dataclass(frozen=True)
+class AuthenticatedSubmissionEvidence:
+    kind: str
+    source: str
+    verdict: str
+    candidate_id: str
+    authenticated: bool
+    request_id: str
+    classified_event_id: str
+    binding_digest: str
+    peer_identity_digest: str
+    effect_id: str
+    submission_epoch: int
+
+    @classmethod
+    def from_broker(
+        cls,
+        result: BoardBrokerResult,
+        *,
+        verdict: str,
+        candidate_id: str,
+        effect_id: str,
+        submission_epoch: int,
+    ):
+        provenance = result.provenance
+        if verdict not in {"correct", "incorrect", "refused", "paused", "rate-limited"}:
+            raise ValueError("unsupported submission-ledger verdict")
+        if (
+            result.outcome is not BoardOutcome.ANSWERED
+            or not result.request_id
+            or not provenance.classified_event_id
+            or not provenance.binding_digest
+            or not provenance.peer_identity_digest
+        ):
+            raise ValueError("submission ledger evidence is not broker-authenticated")
+        return cls(
+            "exact-candidate-verdict",
+            provenance.endpoint,
+            verdict,
+            candidate_id,
+            True,
+            result.request_id,
+            provenance.classified_event_id,
+            provenance.binding_digest,
+            provenance.peer_identity_digest,
+            effect_id,
+            submission_epoch,
+        )
 
 
 @dataclass(frozen=True)
@@ -72,13 +140,16 @@ class AmbiguousSubmissionFence:
         run_id: str,
         boot_id: str,
         monotonic: Callable[[], float],
-        probe: Callable[[PendingSubmission], Evidence],
+        wall_time: Callable[[], float] | None = None,
+        probe: Callable[[PendingSubmission], Evidence | AuthenticatedSubmissionEvidence],
     ) -> None:
         self._root = Path(state)
         self._path = self._root / "runs" / run_id / "canonical" / "ambiguous-submission.events.jsonl"
         self._run_id = run_id
         self._boot_id = boot_id
         self._clock = monotonic
+        self._wall = wall_time or monotonic
+        self._anchors: dict[str, tuple[float, float]] = {}
         self._probe = probe
         self._lock = threading.Lock()
 
@@ -91,8 +162,9 @@ class AmbiguousSubmissionFence:
             if candidate_id in self._states():
                 raise FenceClosed(f"Candidate {candidate_id!r} is already spent")
             pending = PendingSubmission(
-                candidate_id, effect_id, challenge_id, wire_started_at, wire_started_at + FENCE_SECONDS
+                candidate_id, effect_id, challenge_id, self._wall(), self._wall() + FENCE_SECONDS
             )
+            self._anchors[candidate_id] = (self._clock(), 0.0)
             self._append(
                 {
                     "event": "possibly-sent",
@@ -100,12 +172,20 @@ class AmbiguousSubmissionFence:
                     "candidate_id": candidate_id,
                     "effect_id": effect_id,
                     "challenge_id": challenge_id,
-                    "wire_started_at": wire_started_at,
+                    "wire_started_at": pending.wire_started_at,
                     "deadline": pending.deadline,
                     "posts": 1,
                 }
             )
             return pending
+
+    def begin_identity(self, candidate_id: str, identity: CompleteSubmissionIdentity, *, challenge_id: int):
+        return self.begin(
+            candidate_id,
+            identity.effect_id,
+            challenge_id=challenge_id,
+            wire_started_at=self._clock(),
+        )
 
     def reconcile(self, pending: PendingSubmission) -> PendingSubmission:
         with self._lock:
@@ -118,13 +198,29 @@ class AmbiguousSubmissionFence:
             boots = {row["boot_id"] for row in events if row["candidate_id"] == state.candidate_id}
             if self._boot_id not in boots:
                 self._append_identity(state, "boot-replayed")
-            now = self._clock()
+            anchor = self._anchors.get(state.candidate_id)
+            if anchor is None:
+                carried = max(0.0, self._wall() - state.wire_started_at)
+                self._anchors[state.candidate_id] = (self._clock(), carried)
+                self._append(
+                    {
+                        "event": "boot-replayed",
+                        "boot_id": self._boot_id,
+                        "candidate_id": state.candidate_id,
+                        "effect_id": state.effect_id,
+                        "wall_at_boot": self._wall(),
+                        "elapsed_carried": carried,
+                    }
+                )
+                anchor = self._anchors[state.candidate_id]
+            now = max(anchor[1], anchor[1] + self._clock() - anchor[0])
             attempted = sum(
                 row["event"] == "evidence-probe" for row in events if row["candidate_id"] == state.candidate_id
             )
-            due = sum(now >= state.wire_started_at + offset for offset in PROBE_OFFSETS)
-            if attempted < due:
+            due = sum(now >= offset for offset in PROBE_OFFSETS)
+            while attempted < due:
                 evidence = self._probe(state)
+                attempted += 1
                 self._append(
                     {
                         "event": "evidence-probe",
@@ -132,27 +228,34 @@ class AmbiguousSubmissionFence:
                         "candidate_id": state.candidate_id,
                         "effect_id": state.effect_id,
                         "at": now,
+                        "scheduled_offset": PROBE_OFFSETS[attempted - 1],
                         "kind": evidence.kind,
                         "source": evidence.source,
-                        "authenticated": evidence.authenticated,
-                        "candidate_match": evidence.candidate_id == state.candidate_id,
-                        "verdict": evidence.verdict,
+                        "authenticated": isinstance(evidence, AuthenticatedSubmissionEvidence),
+                        "candidate_match": getattr(evidence, "candidate_id", "") == state.candidate_id,
+                        "verdict": getattr(evidence, "verdict", ""),
+                        "request_id": getattr(evidence, "request_id", ""),
+                        "classified_event_id": getattr(evidence, "classified_event_id", ""),
+                        "binding_digest": getattr(evidence, "binding_digest", ""),
+                        "peer_identity_digest": getattr(evidence, "peer_identity_digest", ""),
+                        "submission_epoch": getattr(evidence, "submission_epoch", 0),
+                        "evidence_effect_id": getattr(evidence, "effect_id", ""),
                     }
                 )
                 disposition = self._definitive(state, evidence)
                 if disposition:
                     self._close(state, disposition, evidence.source, now)
                     return self._states()[state.candidate_id]
-            if now >= state.deadline:
+            if now >= FENCE_SECONDS and attempted == len(PROBE_OFFSETS):
                 self._close(state, "unknown-and-spent", "fence-expired", state.deadline)
                 return self._states()[state.candidate_id]
             return state
 
     @staticmethod
     def _definitive(state: PendingSubmission, evidence: Evidence) -> str:
-        if not evidence.authenticated or evidence.kind != "exact-candidate-verdict":
+        if not isinstance(evidence, AuthenticatedSubmissionEvidence):
             return ""
-        if evidence.candidate_id != state.candidate_id:
+        if evidence.candidate_id != state.candidate_id or evidence.effect_id != state.effect_id:
             return ""
         return {
             "correct": "accepted",
@@ -179,9 +282,16 @@ class AmbiguousSubmissionFence:
     def barrier_open(self) -> bool:
         return any(state.disposition == "pending" for state in self._states().values())
 
-    def can_submit(self, candidate_id: str) -> bool:
+    def pending(self) -> tuple[PendingSubmission, ...]:
+        return tuple(state for state in self._states().values() if state.disposition == "pending")
+
+    def can_submit(self, candidate_id: str, effect_id: str = "") -> bool:
         states = self._states()
-        return candidate_id not in states and not any(state.disposition == "pending" for state in states.values())
+        return (
+            candidate_id not in states
+            and effect_id not in {state.effect_id for state in states.values()}
+            and not any(state.disposition == "pending" for state in states.values())
+        )
 
     def post_trace(self, candidate_id: str) -> tuple[str, ...]:
         return tuple(
@@ -299,6 +409,11 @@ def verify_receipt(path: Path) -> Path:
             and probe.get("kind") == "exact-candidate-verdict"
             and probe.get("verdict") == exact_dispositions[disposition]
             and probe.get("source") == event.get("provenance")
+            and all(
+                probe.get(field)
+                for field in ("request_id", "classified_event_id", "binding_digest", "peer_identity_digest")
+            )
+            and probe.get("evidence_effect_id") == starts[candidate].get("effect_id")
             for probe in probes.get(candidate, [])
         ):
             raise ValueError("definitive ambiguity lacks exact authenticated provenance")
@@ -321,6 +436,7 @@ def link_manifest(manifest: Mapping[str, object], path: Path) -> Mapping[str, ob
 
 __all__ = [
     "AmbiguousSubmissionFence",
+    "CompleteSubmissionIdentity",
     "Evidence",
     "FenceClosed",
     "PendingSubmission",

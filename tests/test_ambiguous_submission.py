@@ -6,11 +6,13 @@ import pytest
 from solver.manifest import generate_manifest
 from solver.submission.ambiguity import (
     AmbiguousSubmissionFence,
+    AuthenticatedSubmissionEvidence,
     Evidence,
     FenceClosed,
     link_manifest,
     verify_receipt,
 )
+from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome, BoardProvenance
 from test_manifest import release_candidate_profile
 
 RETAINED = (
@@ -27,14 +29,36 @@ class Clock:
         return self.value
 
 
-def fence(tmp_path, clock, probes=(), boot="boot-1"):
+def fence(tmp_path, clock, probes=(), boot="boot-1", wall=None):
     answers = iter(probes)
     return AmbiguousSubmissionFence(
         tmp_path,
         run_id="run-1",
         boot_id=boot,
         monotonic=clock,
+        wall_time=wall or clock,
         probe=lambda _pending: next(answers, Evidence.unsettled("authenticated-submission-ledger")),
+    )
+
+
+def exact(verdict, candidate="candidate-1", effect="effect-1"):
+    result = BoardBrokerResult(
+        BoardOperation.SUBMIT,
+        BoardOutcome.ANSWERED,
+        provenance=BoardProvenance(
+            endpoint="/api/v1/submissions",
+            classified_event_id="board-event-1",
+            binding_digest="binding-digest",
+            peer_identity_digest="peer-digest",
+        ),
+        request_id="request-1",
+    )
+    return AuthenticatedSubmissionEvidence.from_broker(
+        result,
+        verdict=verdict,
+        candidate_id=candidate,
+        effect_id=effect,
+        submission_epoch=1,
     )
 
 
@@ -44,14 +68,14 @@ def test_exact_authenticated_candidate_evidence_closes_inside_fence(tmp_path, ve
     service = fence(
         tmp_path,
         clock,
-        [Evidence.exact_verdict(verdict, source="authenticated-submission-ledger", candidate_id="candidate-1")],
+        [exact(verdict)],
     )
     pending = service.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=clock())
 
     closed = service.reconcile(pending)
 
     assert closed.disposition == disposition
-    assert closed.provenance == "authenticated-submission-ledger"
+    assert closed.provenance == "/api/v1/submissions"
 
 
 def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_sixty(tmp_path):
@@ -77,10 +101,13 @@ def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_si
 
 @pytest.mark.parametrize("restart_at", [100.0, 114.0, 159.0, 160.0, 190.0])
 def test_restart_replays_original_deadline_without_resending(tmp_path, restart_at):
-    clock = Clock(100.0)
-    pending = fence(tmp_path, clock).begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=100.0)
-    clock.value = restart_at
-    restarted = fence(tmp_path, clock, boot="boot-2")
+    first_monotonic = Clock(4000.0)
+    first_wall = Clock(100.0)
+    pending = fence(tmp_path, first_monotonic, wall=first_wall).begin(
+        "candidate-1", "effect-1", challenge_id=7, wire_started_at=4000.0
+    )
+    reset_monotonic = Clock(3.0)
+    restarted = fence(tmp_path, reset_monotonic, boot="boot-2", wall=Clock(restart_at))
 
     state = restarted.reconcile(pending)
 
@@ -91,7 +118,7 @@ def test_restart_replays_original_deadline_without_resending(tmp_path, restart_a
 
 def test_receipt_is_sanitized_replay_verified_and_manifest_linked(tmp_path):
     clock = Clock()
-    service = fence(tmp_path, clock, [Evidence.exact_verdict("correct", source="auth-ledger", candidate_id="c")])
+    service = fence(tmp_path, clock, [exact("correct", "c", "e")])
     pending = service.begin("c", "e", challenge_id=7, wire_started_at=clock())
     service.reconcile(pending)
     path = service.write_receipt()
