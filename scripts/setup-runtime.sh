@@ -215,9 +215,9 @@ codex_in_container() {
 
 # mount_reaches_the_vm — whether a bind mount of STATE_DIR actually arrives inside a container.
 #
-# Colima mounts the home directory and nothing else, and a `-v` from anywhere outside it fails
-# silently: the container gets an empty directory rather than an error. A login written there is
-# lost on `docker rm` with nothing said, which is the whole property stage 5 is trying to prove.
+# Colima mounts the home directory and the pinned external competition root. A `-v` from anywhere
+# else fails silently: the container gets an empty directory rather than an error. A login written
+# there is lost on `docker rm` with nothing said, which is the property stage 5 proves.
 mount_reaches_the_vm() {
   local sentinel="$STATE_DIR/.mount-check"
   mkdir -p "$STATE_DIR/codex"
@@ -309,11 +309,11 @@ say "The credential is minted in the container that spends it. Nothing is copied
 say "from this machine, and no browser exists in there (ADR-0011)."
 say ""
 if ! mount_reaches_the_vm; then
-  warn "the host mount is not reaching the container — Colima mounts your home"
-  warn "directory and nothing else, and a path outside it arrives empty and silent."
-  note "Move this repository under $HOME and re-run. Everything below would appear to"
+  warn "the host mount is not reaching the container — Colima mounts your home and"
+  warn "the pinned external competition root; any other path arrives empty and silent."
+  note "Move this repository under an allowed root and re-run. Everything below would appear to"
   note "work and then lose the login on the next docker rm."
-  SKIPPED+=("move the repository under \$HOME, then re-run this wizard")
+  SKIPPED+=("move the repository under an allowed Colima mount, then re-run this wizard")
 else
   step "Building the probe image."
   build_probe_image

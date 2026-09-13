@@ -359,8 +359,8 @@ def test_the_read_contract_is_refused_before_a_recorder_is_ever_made(monkeypatch
 
 
 def test_a_state_mount_that_is_not_there_refuses_rather_than_raising(capsys, monkeypatch, tmp_path, logged_in, boards):
-    """The mount is the one thing outside the image a Run depends on, and Colima mounts `$HOME` and
-    nothing else — a `-v` from outside it hands the container an empty directory in silence."""
+    """The mount is the one thing outside the image a Run depends on; an unmounted host path hands
+    the container an empty directory in silence."""
     blocked = tmp_path / "not-a-directory"
     blocked.write_text("")
     wired(monkeypatch, Wire(listed=[{"id": 1, "name": "alpha", "type": "standard"}], ledger=None, mana=None))

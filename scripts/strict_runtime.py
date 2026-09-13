@@ -277,18 +277,34 @@ def build_image(runner: CommandRunner) -> RuntimeBinding:
     return RuntimeBinding(inspected[0], manifest, config, inspected[1])
 
 
-def _validate_path(label: str, path: Path, home: Path) -> None:
+def _validate_path(
+    label: str,
+    path: Path,
+    allowed_roots: tuple[Path, ...],
+    *,
+    exact: Path | None = None,
+) -> None:
     if not path.is_absolute():
         raise ValueError(f"{label} must be an absolute path")
     if not path.exists():
         raise ValueError(f"{label} does not exist: {path}")
 
-    home_root = home.resolve()
     resolved = path.resolve()
-    try:
-        resolved.relative_to(home_root)
-    except ValueError as error:
-        raise ValueError(f"{label} must be within the user's home: {path}") from error
+    if exact is not None and resolved != exact.resolve():
+        raise ValueError(f"{label} must be the canonical competition path {exact}: {path}")
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return
+        except ValueError:
+            continue
+    roots = ", ".join(str(root) for root in allowed_roots)
+    raise ValueError(f"{label} must be within an allowed Colima mount ({roots}): {path}")
+
+
+def _production_allowed_roots(home: Path, external: Path) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Env may remain private under home; scored state belongs only on Working."""
+    return (home, external), (external,)
 
 
 def _launch(
@@ -303,6 +319,10 @@ def _launch(
         return verified
 
     binding = build_image(runner)
+
+    if not preflight_only:
+        _checked(["docker", "builder", "prune", "--all", "--force"], runner)
+        _checked([sys.executable, str(REPO_ROOT / "scripts/check_host_storage.py"), "competition"], runner)
 
     try:
         _checked(
@@ -382,10 +402,15 @@ def main(
             _checked(["colima", "ssh", "--", "sudo", "rmdir", CGROUP_SOURCE], command_runner)
         return 0
 
-    home_root = Path.home() if home is None else home
+    if home is None:
+        env_roots, state_roots = _production_allowed_roots(Path.home(), runtime.EXTERNAL_PROJECT_ROOT)
+        exact_state = runtime.EXTERNAL_PROJECT_ROOT / "incypher-ctf" / "state"
+    else:
+        env_roots = state_roots = (home,)
+        exact_state = None
     try:
-        _validate_path("--env-file", arguments.env_file, home_root)
-        _validate_path("--state", arguments.state, home_root)
+        _validate_path("--env-file", arguments.env_file, env_roots)
+        _validate_path("--state", arguments.state, state_roots, exact=exact_state)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

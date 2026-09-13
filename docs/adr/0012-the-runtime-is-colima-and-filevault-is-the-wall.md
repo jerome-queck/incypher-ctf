@@ -10,6 +10,9 @@
 > **The allocation was amended on 5 September 2026.** The Owner accepted the observed 8 CPU,
 > 24 GiB memory and 100 GiB disk VM as the pin. Runtime choice, version pins and restart conclusions
 > are unchanged.
+>
+> **The location, mount set and disk allocation are superseded by
+> [ADR-0057](0057-the-competition-runtime-lives-on-the-working-volume-with-bounded-growth.md).**
 
 [#49](https://github.com/jerome-queck/incypher-ctf/issues/49) opened on a fact rather than a
 question: **there was no container runtime on the build machine at all** — no `docker` binary, no
@@ -93,7 +96,7 @@ making it.
   of it.
 - **Three container facts, each of which fails silently.** All three would look like working setups
   and then lose a credential or die mid-run:
-  - **Colima mounts the home directory and nothing else.** A `-v` from any path outside it does not
+  - **Colima mounts only declared host roots.** A `-v` from any path outside them does not
     error — the container gets an *empty directory*. ADR-0011 puts `CODEX_HOME` on that mount, so a
     repository living outside `$HOME` would take the login, appear to work, and lose it on the next
     `docker rm` with nothing said.

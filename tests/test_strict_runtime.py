@@ -210,7 +210,13 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         "{{.Id}} {{.Os}}/{{.Architecture}}",
         strict_runtime.IMAGE_TAG,
     ]
-    assert runner.commands[2] == [
+    assert runner.commands[2] == ["docker", "builder", "prune", "--all", "--force"]
+    assert runner.commands[3] == [
+        strict_runtime.sys.executable,
+        str(strict_runtime.REPO_ROOT / "scripts/check_host_storage.py"),
+        "competition",
+    ]
+    assert runner.commands[4] == [
         "docker",
         "run",
         "--rm",
@@ -220,15 +226,15 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         "/bin/true",
         IMAGE_ID,
     ]
-    assert runner.commands[3] == strict_runtime.container_command(
+    assert runner.commands[5] == strict_runtime.container_command(
         IMAGE_ID,
         env_file=env_file,
         state=state,
         preflight_only=False,
         binding=image_binding(),
     )
-    assert runner.commands[4] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
-    assert all(IMAGE_ID in command for command in (runner.commands[3],))
+    assert runner.commands[6] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+    assert IMAGE_ID in runner.commands[5]
 
 
 def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
@@ -301,7 +307,7 @@ def test_run_rejects_non_absolute_paths_before_any_command(
     assert runner.commands == []
 
 
-def test_run_rejects_missing_and_outside_paths_before_any_command(
+def test_run_rejects_missing_and_unmounted_paths_before_any_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     runner = Runner()
@@ -328,6 +334,36 @@ def test_run_rejects_missing_and_outside_paths_before_any_command(
         == 2
     )
     assert runner.commands == []
+
+
+def test_external_competition_root_is_an_allowed_mount(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    external = tmp_path / "Working" / "001 Projects"
+    state = external / "incypher-ctf" / "state"
+    state.mkdir(parents=True)
+
+    strict_runtime._validate_path("--state", state, (home, external))
+
+
+def test_production_state_is_external_only(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    external = tmp_path / "Working" / "001 Projects"
+
+    env_roots, state_roots = strict_runtime._production_allowed_roots(home, external)
+
+    assert env_roots == (home, external)
+    assert state_roots == (external,)
+
+
+def test_scored_state_must_be_the_budgeted_canonical_directory(tmp_path: Path) -> None:
+    external = tmp_path / "Working" / "001 Projects"
+    canonical = external / "incypher-ctf" / "state"
+    alternate = external / "oversized-state"
+    canonical.mkdir(parents=True)
+    alternate.mkdir()
+
+    with pytest.raises(ValueError, match="canonical competition path"):
+        strict_runtime._validate_path("--state", alternate, (external,), exact=canonical)
 
 
 def test_runtime_drift_stops_before_build(monkeypatch: pytest.MonkeyPatch) -> None:

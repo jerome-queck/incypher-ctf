@@ -22,9 +22,11 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 GIB = 1024**3
+EXTERNAL_PROJECT_ROOT = Path("/Volumes/Working/001 Projects")
 
 # One profile, named by Colima's own default, so every `docker` in this repository and every
 # `colima` typed by hand address the same VM without a flag.
@@ -108,8 +110,52 @@ def observed_vm() -> dict[str, Any] | None:
     return None
 
 
+def storage_drift(
+    colima_home: Path,
+    project_root: Path,
+    *,
+    volume_mounted: bool,
+    mount_reaches_vm: bool | None,
+) -> list[str]:
+    """Every way the external runtime location differs from ADR-0057."""
+    found = []
+    if not volume_mounted:
+        found.append(f"the Working volume is not mounted at {project_root.parent}")
+    expected = project_root / "incypher-colima"
+    if not colima_home.is_symlink() or colima_home.resolve() != expected:
+        found.append(f"{colima_home} does not resolve to {expected}")
+    if not expected.is_dir():
+        found.append(f"the external Colima data directory is absent: {expected}")
+    if mount_reaches_vm is False:
+        found.append(f"the VM cannot write the declared host mount {project_root}")
+    return found
+
+
+def _storage_drift(vm: Mapping[str, Any] | None, *, probe_vm: bool) -> list[str]:
+    reaches_vm = None
+    if probe_vm and vm and vm["status"] == "Running":
+        reaches_vm = (
+            subprocess.run(
+                ["colima", "ssh", "--", "test", "-w", str(EXTERNAL_PROJECT_ROOT)],
+                capture_output=True,
+            ).returncode
+            == 0
+        )
+    return storage_drift(
+        Path.home() / ".colima",
+        EXTERNAL_PROJECT_ROOT,
+        volume_mounted=EXTERNAL_PROJECT_ROOT.parent.is_mount(),
+        mount_reaches_vm=reaches_vm,
+    )
+
+
 def start() -> int:
     vm = observed_vm()
+    found = _storage_drift(vm, probe_vm=False)
+    if found:
+        for line in found:
+            print(f"drift: {line}")
+        return 1
     if vm and vm["status"] == "Running":
         print(f"the {PROFILE} VM is already running")
         return verify()
@@ -122,7 +168,8 @@ def start() -> int:
 
 
 def verify() -> int:
-    found = drift(installed_versions(), observed_vm())
+    vm = observed_vm()
+    found = drift(installed_versions(), vm) + _storage_drift(vm, probe_vm=True)
     for line in found:
         print(f"drift: {line}")
     if found:
@@ -157,6 +204,11 @@ def enable_at_login() -> int:
     (colima#490).
     """
     vm = observed_vm()
+    found = _storage_drift(vm, probe_vm=False)
+    if found:
+        for line in found:
+            print(f"drift: {line}")
+        return 1
     if _starts_at_login() and vm and vm["status"] == "Running":
         # Doing this twice is not merely wasteful: the stop-and-start below would give every
         # container a fresh start time, which is exactly the evidence `restart_probe.py` reads.

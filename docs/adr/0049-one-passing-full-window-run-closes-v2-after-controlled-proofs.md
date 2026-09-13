@@ -1,5 +1,8 @@
 # One passing full-window Run closes v2 after controlled proofs
 
+> **ADR-0057 moves the pinned runtime to the Working volume and keeps its qualified 100 GiB disk;
+> the 20 GiB rig/control/Recovery minimum below remains.**
+
 > **Profile selection and full-window topology are amended by
 > [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Three predeclared
 > descriptive whole-profile pairs replace the Flags-first comparison and select one exact profile.
