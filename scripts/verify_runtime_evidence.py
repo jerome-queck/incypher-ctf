@@ -246,23 +246,79 @@ def _verify_298(capsule: Path, document: dict[str, object], fixed: dict[str, obj
         raise ValueError("#298 does not exercise seven components and sixteen Tool capabilities")
 
 
-def _verify_293(capsule: Path, document: dict[str, object], _fixed: dict[str, object]) -> None:
+def _verify_external_runtime(capsule: Path, fixed: dict[str, object]) -> None:
+    observed = _json(capsule / "runtime-observation.json")
+    preflight = _json(capsule / "strict-preflight.json")
+    runtime_pin = dict(preflight.get("runtime_pin", []))
+    checks = dict(preflight.get("checks", []))
+    vm = observed.get("runtime", {})
+    expected_root = "/Volumes/Working/001 Projects"
+    if (
+        observed.get("schema_version") != 1
+        or observed.get("state_root") != f"{expected_root}/incypher-ctf/state"
+        or observed.get("colima_home") != f"{expected_root}/incypher-colima"
+        or observed.get("colima_data") != f"{expected_root}/incypher-colima"
+        or observed.get("data_disk_bytes") != 200 * 1024**3
+        or not isinstance(vm, dict)
+        or vm.get("status") != "Running"
+        or vm.get("cpus") != 8
+        or vm.get("memory_bytes") != 24 * 1024**3
+        or vm.get("disk_bytes") != 200 * 1024**3
+        or observed.get("image_manifest_digest") != fixed["image_manifest_digest"]
+        or observed.get("image_config_digest") != fixed["image_config_digest"]
+        or observed.get("platform") != fixed["platform"]
+        or preflight.get("profile_id") != "colima-namespace-cgroup-v1"
+        or preflight.get("profile_digest") != fixed["runtime_profile_digest"]
+        or preflight.get("image_id") != fixed["image_manifest_digest"]
+        or runtime_pin != {"colima": "0.10.3", "cpu": 8, "disk_gib": 200, "docker": "29.7.2", "memory_gib": 24}
+        or set(checks.values()) != {"pass"}
+        or preflight.get("owned_residue") != []
+        or preflight.get("processes_after_kill") != 0
+    ):
+        raise ValueError("qualification did not observe the pinned external 200 GiB runtime")
+
+
+def _verify_293(capsule: Path, document: dict[str, object], fixed: dict[str, object]) -> None:
     from solver.submission.receipt import verify_receipt
 
+    _verify_external_runtime(capsule, fixed)
     receipt = capsule / "serial-submission.receipt.json"
     verify_receipt(receipt)
     receipt_document = _json(receipt)
+    trace = _json(capsule / "serial-submission.trace.json")
+    first, earliest, later = "1" * 64, "2" * 64, "3" * 64
     if (
         receipt_document.get("evidence_class") != "controlled-runtime-trace"
         or receipt_document.get("in_flight_maximum") != 1
+        or [row.get("states", [None])[-1] for row in receipt_document.get("submissions", [])]
+        != ["committed", "committed", "committed", "possibly-sent", "aborted"]
+        or trace
+        != {
+            "committed_replay_posts": 3,
+            "competing_dispatch_order": [first, earliest, later],
+            "competing_ready_orders": [0, 2, 1],
+            "first_ready_candidate": earliest,
+            "possibly_sent_replay": "EffectIndeterminate",
+            "possibly_sent_replay_posts": 1,
+            "wire_in_flight_maximum": 1,
+        }
+        or document.get("observed_results")
+        != [
+            "first-ready:pass",
+            "one-in-flight:pass",
+            "crash-before:aborted",
+            "crash-during:possibly-sent",
+            "crash-after:no-resend",
+        ]
         or document.get("scanner_annotation") != "gitleaks:allow"
     ):
         raise ValueError("#293 serial submission proof is incomplete")
 
 
-def _verify_296(capsule: Path, document: dict[str, object], _fixed: dict[str, object]) -> None:
+def _verify_296(capsule: Path, document: dict[str, object], fixed: dict[str, object]) -> None:
     from solver.recovery.incident import verify_receipt
 
+    _verify_external_runtime(capsule, fixed)
     receipt = capsule / "incident-containment.receipt.json"
     verify_receipt(receipt)
     incident = _json(receipt)
@@ -316,7 +372,7 @@ def _verify_semantics(capsule: Path, document: dict[str, object]) -> None:
     verifier(capsule, document, fixed)
 
 
-def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]]) -> None:
+def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]], checkout: Path) -> None:
     manifest = root / "candidate-manifest.json"
     signature = root / "candidate-manifest.sig"
     public = root / "evaluator-public.pem"
@@ -350,6 +406,20 @@ def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]])
     if len(fixed_points) != 1:
         raise ValueError("capsules do not share one complete fixed point")
     rows = {row["row_id"]: row for row in candidate["requirements"]}
+    from solver.resident_tool_receipt import manifest_receipt as resident_manifest_receipt
+
+    inventory = (checkout / "tool-supply/generated/inventory.json").read_bytes()
+    resident = _json(checkout / "tool-supply/receipts/tool-resident.json")
+    resident_receipt = resident_manifest_receipt(resident, inventory)
+    manifest_receipts = {row["ref"]: row for row in candidate["receipts"]}
+    if (
+        resident.get("image_digest") != candidate["candidate"]["image_digest"]
+        or manifest_receipts.get(resident_receipt["ref"]) != resident_receipt
+        or rows["core.tool-surface"]["receipt_ref"] != resident_receipt["ref"]
+        or rows["core.tool-surface"]["status"] != "implemented"
+        or rows["core.tool-surface"]["evidence_refs"]
+    ):
+        raise ValueError("candidate manifest carries stale resident Tool evidence")
     expected_rows = {
         269: "core.strict-isolation",
         270: "core.strict-isolation",
@@ -394,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
             roots = {capsule.parent.resolve() for capsule, _document in verified}
             if len(roots) != 1:
                 raise ValueError("capsules do not share one candidate evidence root")
-            verify_candidate(next(iter(roots)), verified)
+            verify_candidate(next(iter(roots)), verified, arguments.checkout)
             print("verified signed candidate manifest links")
     except (OSError, TypeError, ValueError) as error:
         print(f"verification failed: {error}", file=sys.stderr)

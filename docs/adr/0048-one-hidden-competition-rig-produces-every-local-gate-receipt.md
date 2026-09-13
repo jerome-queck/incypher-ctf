@@ -23,8 +23,8 @@ full-window Runs while exposing only ordinary Board, Target and inference surfac
 It proves local mechanisms and controlled outcomes. It never claims unpublished IN-CYPHER Target,
 PoW, ADK, human-crowd or production-load compatibility.
 
-The rig is a separate product at `jerome-queck/incypher-practice-rig`, checked out beneath the
-operator's home directory so Colima can mount it. It contains Board and Target definitions,
+The rig is a separate product at `jerome-queck/incypher-practice-rig`, checked out at
+`/Volumes/Working/001 Projects/incypher-practice-rig` on the declared Colima mount. It contains Board and Target definitions,
 scenarios, Evaluator, private oracle and corpus metadata, but no Solver code. This repository pins
 the rig commit, exact images and promoted receipts. Neither repository is mounted into a Run.
 

@@ -106,6 +106,7 @@ def service(tmp_path, *, hook=None, wire=None):
 
 def test_first_ready_candidate_dispatches_in_the_admission_call_with_one_post(tmp_path):
     authority, recorder, wire = service(tmp_path)
+    assert authority.pending_count() == 0
 
     result = authority.dispatch(queued(), binding=BINDING)
 
@@ -315,4 +316,10 @@ def test_versioned_sanitized_receipt_replays_and_links_candidate_manifest(tmp_pa
 def test_retained_serial_and_crash_trace_verifies_without_live_authority():
     assert verify_receipt(RETAINED) == RETAINED
     trace = json.loads(RETAINED.read_text())
-    assert [row["states"][-1] for row in trace["submissions"]] == ["committed", "possibly-sent", "aborted"]
+    assert [row["states"][-1] for row in trace["submissions"]] == [
+        "committed",
+        "committed",
+        "committed",
+        "possibly-sent",
+        "aborted",
+    ]

@@ -53,7 +53,8 @@ codex login --device-auth
 ```
 
 The production isolation profile further moves broker credential stores away from hostile mounted
-state. Colima mounts `$HOME` only, so the repository and any host bind source must remain beneath it.
+state. Colima mounts `$HOME` and `/Volumes/Working/001 Projects`; every host bind source must remain
+beneath one of those two pinned roots.
 
 ## Scanner vault
 

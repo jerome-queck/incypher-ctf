@@ -70,7 +70,7 @@ the shortest path to running something.
 It refuses to start rather than run half-configured (`CONTEXT.md`, *Refusal*), so an unset variable
 is a failure at 10:15 with somebody standing there instead of a spent window at 14:00. One thing
 about that `-v` will bite you and is worth reading before you hit it: the runtime mounts `$HOME` and
-nothing else, so a repository living outside it hands the container an empty directory in silence.
+the pinned `/Volumes/Working/001 Projects` root; anything elsewhere arrives empty and silent.
 
 `ruff` and `pytest` are not installed here and the three checks to run before pushing are not the
 ones you would guess — [`AGENTS.md`](AGENTS.md), *Getting it running*, has both.

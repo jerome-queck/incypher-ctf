@@ -5,6 +5,8 @@ only the source of truth while something compares the two. That comparison is de
 which is what puts it here rather than in a script nobody runs.
 """
 
+from pathlib import Path
+
 import runtime
 
 PINNED_VM = {
@@ -21,7 +23,7 @@ PINNED_VERSIONS = {"colima": runtime.PIN.colima, "docker": runtime.PIN.docker}
 
 
 def test_the_accepted_allocation_is_the_pin():
-    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 100)
+    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 200)
 
 
 def test_a_machine_on_the_pin_has_drifted_on_nothing():
@@ -69,3 +71,40 @@ def test_a_version_is_read_out_of_whatever_the_tool_prints_around_it():
     assert runtime.version_in("colima version 0.10.3\ngit commit: 00f6c29") == "0.10.3"
     assert runtime.version_in("Docker version 29.7.2, build a7dcaa6fdb") == "29.7.2"
     assert runtime.version_in("command not found") is None
+
+
+def test_external_location_and_writable_vm_mount_are_part_of_the_pin(tmp_path: Path):
+    project_root = tmp_path / "Working" / "001 Projects"
+    expected = project_root / "incypher-colima"
+    expected.mkdir(parents=True)
+    colima_home = tmp_path / ".colima"
+    colima_home.symlink_to(expected)
+
+    assert runtime.storage_drift(colima_home, project_root, volume_mounted=True, mount_reaches_vm=True) == []
+    assert runtime.storage_drift(colima_home, project_root, volume_mounted=False, mount_reaches_vm=False) == [
+        f"the Working volume is not mounted at {project_root.parent}",
+        f"the VM cannot write the declared host mount {project_root}",
+    ]
+
+
+def test_internal_colima_home_is_location_drift(tmp_path: Path):
+    colima_home = tmp_path / ".colima"
+    colima_home.mkdir()
+    project_root = tmp_path / "Working" / "001 Projects"
+    (project_root / "incypher-colima").mkdir(parents=True)
+
+    assert runtime.storage_drift(colima_home, project_root, volume_mounted=True, mount_reaches_vm=None) == [
+        f"{colima_home} does not resolve to {project_root / 'incypher-colima'}"
+    ]
+
+
+def test_missing_external_colima_data_is_location_drift(tmp_path: Path):
+    project_root = tmp_path / "Working" / "001 Projects"
+    project_root.mkdir(parents=True)
+    expected = project_root / "incypher-colima"
+    colima_home = tmp_path / ".colima"
+    colima_home.symlink_to(expected)
+
+    assert runtime.storage_drift(colima_home, project_root, volume_mounted=True, mount_reaches_vm=None) == [
+        f"the external Colima data directory is absent: {expected}"
+    ]

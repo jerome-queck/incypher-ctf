@@ -10,6 +10,11 @@
 > **The allocation was amended on 5 September 2026.** The Owner accepted the observed 8 CPU,
 > 24 GiB memory and 100 GiB disk VM as the pin. Runtime choice, version pins and restart conclusions
 > are unchanged.
+>
+> **The location, mount set and disk allocation are superseded by
+> [ADR-0057](0057-the-competition-runtime-lives-on-the-working-volume-with-bounded-growth.md).**
+> ADR-0057 increased the sparse external VM disk to 200 GiB on 13 September 2026 without widening
+> its independent storage budgets.
 
 [#49](https://github.com/jerome-queck/incypher-ctf/issues/49) opened on a fact rather than a
 question: **there was no container runtime on the build machine at all** — no `docker` binary, no
@@ -27,7 +32,7 @@ what proving the restart path turned up, and it does not have a happy ending.
 The ticket's three reasons held, and two of them are now measured rather than quoted:
 
 - **The allocation is a reviewable line, not a slider.** `PIN` in `scripts/runtime.py` names 8
-  CPUs, 24 GiB and 100 GiB of disk; `runtime.py verify` fails when the machine has drifted off it.
+  CPUs, 24 GiB and 200 GiB of disk; `runtime.py verify` fails when the machine has drifted off it.
   Docker Desktop's equivalent is GUI state on one laptop that no diff can read. This is the same
   argument [ADR-0008](0008-one-image-for-every-board-and-two-seams-instead-of-one.md) made for the
   event being a config file, and it is the reason the pin is worth more than the runtime choice.
@@ -93,7 +98,7 @@ making it.
   of it.
 - **Three container facts, each of which fails silently.** All three would look like working setups
   and then lose a credential or die mid-run:
-  - **Colima mounts the home directory and nothing else.** A `-v` from any path outside it does not
+  - **Colima mounts only declared host roots.** A `-v` from any path outside them does not
     error — the container gets an *empty directory*. ADR-0011 puts `CODEX_HOME` on that mount, so a
     repository living outside `$HOME` would take the login, appear to work, and lose it on the next
     `docker rm` with nothing said.

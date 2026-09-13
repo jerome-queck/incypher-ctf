@@ -49,6 +49,12 @@ class SerialSubmission:
         self._pending: dict[str, ReadyAdmission] = {}
         self._busy = False
 
+    def pending_count(self) -> int:
+        """Return the number of ready Candidates waiting behind the active POST."""
+
+        with self._queue:
+            return len(self._pending)
+
     def dispatch(self, admission: ReadyAdmission, *, binding: CapabilityBinding) -> SubmissionResult | None:
         candidate = admission.candidate
         if candidate.generation_id != binding.generation_id:

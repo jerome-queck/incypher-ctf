@@ -49,11 +49,15 @@ The container runtime is **Colima**, pinned with the Docker CLI and the VM's all
 reports every way this machine has drifted off it — and nothing builds an image while it is down.
 `bash scripts/setup-runtime.sh` walks the parts that need a human — the reboot, the FileVault
 decision, the Codex login taken *inside* the container. Two constraints an agent will otherwise
-meet the hard way: **Colima mounts `$HOME` and nothing else**, so a `-v` from outside it silently
-hands the container an empty directory, and the repository must live under `$HOME` for the
-`/state` mount to reach. **An unattended reboot recovers in about 40 seconds** — proven, not
+meet the hard way: **Colima mounts `$HOME` and the pinned `/Volumes/Working/001 Projects` root**,
+so a `-v` from anywhere else silently hands the container an empty directory, and competition
+repositories/state live below that external root. **An unattended reboot recovers in about 40
+seconds** — proven, not
 assumed: `python3 scripts/restart_probe.py arm` before a reboot and `check` after one reaches a
 verdict by clock. It cost turning FileVault off; ADR-0013 records what that exposes.
+
+Before a development build run `python3 scripts/check_host_storage.py development`; before a scored
+Run use `competition`. The latter requires zero BuildKit cache. ADR-0057 owns the limits.
 
 ## Conventions
 
