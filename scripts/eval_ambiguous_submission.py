@@ -1,53 +1,45 @@
-"""Host-side Evaluator for the ADR-0052 ambiguity controlled proof."""
+"""Sign ADR-0048's three-record ambiguous-submission reconciliation on the host."""
 
 from __future__ import annotations
 
-import argparse
+import base64
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 from solver.event_store_storage import atomic_write, canonical_bytes
-from solver.submission.ambiguity import verify_receipt as verify_observation
-from solver.submission.receipt import verify_receipt as verify_serial
+from solver.manifest import manifest_digest
+from solver.submission.evaluator_receipt import KIND, SOURCES, verify_receipt
 
 
-def evaluate(observation: Path, serial: Path, destination: Path) -> Path:
-    verify_observation(observation)
-    verify_serial(serial)
-    document = json.loads(observation.read_bytes())
-    serial_document = json.loads(serial.read_bytes())
-    observed = [
-        {"effect_id": row["effect_id"], "posts": 1}
-        for row in serial_document["submissions"]
-        if row["states"][-1] == "possibly-sent"
-    ]
-    expected = sorted(event["effect_id"] for event in document["events"] if event["event"] == "possibly-sent")
-    if sorted(item["effect_id"] for item in observed) != expected:
-        raise ValueError("Evaluator did not observe each ambiguous Board effect exactly once")
-    document.update(
-        producer="external-evaluator",
-        evidence_class="controlled-runtime-trace",
-        observed_effect_trace=observed,
-        source_digests={
-            "solver_observation": hashlib.sha256(observation.read_bytes()).hexdigest(),
-            "serial_authority": hashlib.sha256(serial.read_bytes()).hexdigest(),
+def evaluate(source_root: Path, manifest: dict[str, object], private_key: Path, destination: Path) -> Path:
+    public = subprocess.run(["openssl", "pkey", "-in", private_key, "-pubout"], check=True, capture_output=True).stdout
+    sources = {name: hashlib.sha256((source_root / name).read_bytes()).hexdigest() for name in SOURCES}
+    board = json.loads((source_root / "actual-board-state.json").read_bytes())
+    document = {
+        "schema_version": 1,
+        "kind": KIND,
+        "producer": "external-evaluator",
+        "binding": {"manifest_digest": manifest_digest(manifest)},
+        "sources": sources,
+        "sanitization": {
+            "candidate_value_excluded": True,
+            "credentials_excluded": True,
+            "host_paths_excluded": True,
         },
-    )
-    document["evaluator_seal"] = hashlib.sha256(canonical_bytes(document)).hexdigest()
+        "result": {"effect_id": board["effect_id"], "disposition": "unknown-and-spent"},
+        "signer_public_key": base64.b64encode(public).decode(),
+        "signer_public_key_digest": hashlib.sha256(public).hexdigest(),
+    }
+    unsigned = source_root / ".ambiguous-evaluator-unsigned.json"
+    atomic_write(unsigned, canonical_bytes(document) + b"\n")
+    signature = subprocess.run(
+        ["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", private_key, "-in", unsigned],
+        check=True,
+        capture_output=True,
+    ).stdout
+    unsigned.unlink()
+    document["signature"] = base64.b64encode(signature).decode()
     atomic_write(destination, canonical_bytes(document) + b"\n")
-    return destination
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("observation", type=Path)
-    parser.add_argument("serial", type=Path)
-    parser.add_argument("destination", type=Path)
-    arguments = parser.parse_args(argv)
-    evaluate(arguments.observation, arguments.serial, arguments.destination)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return verify_receipt(destination, source_root)

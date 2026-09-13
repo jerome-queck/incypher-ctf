@@ -1,10 +1,12 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from solver.manifest import generate_manifest
 from solver.manifest import parse_manifest
+from solver.submission.evaluator_receipt import verify_receipt as verify_evaluator_receipt
 from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.submission.ambiguity import (
@@ -244,10 +246,29 @@ def test_same_candidate_can_never_begin_twice(tmp_path):
 
 
 def test_retained_ambiguity_receipt_verifies_independently():
-    assert verify_receipt(RETAINED) == RETAINED
+    assert verify_evaluator_receipt(RETAINED) == RETAINED
     receipt = json.loads(RETAINED.read_text())
     assert receipt["producer"] == "external-evaluator"
     manifest = parse_manifest(json.loads((RETAINED.parent / "candidate-manifest.json").read_text()))
     row = next(row for row in manifest["requirements"] if row["row_id"] == "core.submission-tail")
     descriptor = next(item for item in manifest["receipts"] if item["ref"] == row["receipt_ref"])
     assert descriptor["digest"] == __import__("hashlib").sha256(RETAINED.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "intended-event.json",
+        "actual-board-state.json",
+        "serial-authority.json",
+        "solver-observation.json",
+        "ambiguous-submission.receipt.json",
+    ],
+)
+def test_signed_evaluator_proof_rejects_every_tampered_source(tmp_path, name):
+    copied = tmp_path / "proof"
+    shutil.copytree(RETAINED.parent, copied)
+    target = copied / name
+    target.write_bytes(target.read_bytes() + b" ")
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        verify_evaluator_receipt(copied / RETAINED.name)
