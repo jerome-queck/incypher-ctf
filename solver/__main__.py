@@ -16,6 +16,7 @@ Standard library only — this runs inside the Solver image, which has nothing i
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import signal
 import sys
@@ -68,6 +69,11 @@ from solver.order_runtime import CanonicalScheduler
 from solver.lead_controller import LeadController
 from solver.lead_v1_adapter import V1LeadAdapter
 from solver.tool_control import AttemptToolRuntime, ToolController, resident_components
+from solver.candidate_admission import CandidateAdmission
+from solver.submission.authority import SerialSubmission
+from solver.submission.bridge import CandidateSubmissionBridge, ObservedCandidateSubmissionBridge
+from solver.submission.receipt import link_manifest as link_submission_manifest
+from solver.submission.receipt import write_receipt as write_submission_receipt
 
 # Where **Run state** goes: ADR-0008's one writable path, host-mounted, holding what a Run produces
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
@@ -362,7 +368,34 @@ def _run_admitted(
             peer=tool_peer,
         )
     stack = ExitStack()
-    lead_adapter = _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack)
+    candidate_sink = None
+    observed_candidate_sink = None
+    submission_receipt_inputs = None
+    if board_broker_path is not None:
+        admission = CandidateAdmission(
+            run_state,
+            held.run_id,
+            Redactor.for_declared_secrets(environ),
+            lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+            rules.flag_wrappers,
+            hashlib.sha256(b"candidate-vault-v1\0" + held.token.encode()).digest(),
+            recorder.generations,
+        )
+        submission = SerialSubmission(
+            recorder.run_dir / "canonical",
+            recorder.write_authority,
+            lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+            board_broker_path,
+        )
+        candidate_sink = CandidateSubmissionBridge(admission, submission)
+        observed_candidate_sink = ObservedCandidateSubmissionBridge(
+            admission,
+            submission,
+            run_id=held.run_id,
+            boot_id=boot_id,
+        )
+        submission_receipt_inputs = (recorder.run_dir / "canonical", held.run_id, recorder.write_authority)
+    lead_adapter = _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack, candidate_sink)
     run = Run(
         profile=discovered,
         recorder=recorder,
@@ -379,6 +412,7 @@ def _run_admitted(
             instances=instances,
             pace=Pace(per_minute=discovered.submissions_per_minute),
             step_numbers=steps.spend,
+            candidate_submission=observed_candidate_sink,
         ),
         instances=instances,
         steps=steps,
@@ -397,6 +431,16 @@ def _run_admitted(
     try:
         return run.work()
     finally:
+        if submission_receipt_inputs is not None:
+            submission_receipt = write_submission_receipt(*submission_receipt_inputs)
+            manifest_path = recorder.run_dir / "canonical" / "candidate-manifest.json"
+            if manifest_path.exists():
+                from solver.manifest import canonical_manifest_bytes, parse_manifest
+
+                linked = link_submission_manifest(
+                    parse_manifest(manifest_path.read_bytes()), submission_receipt, recorder.write_authority
+                )
+                atomic_write(manifest_path, canonical_manifest_bytes(linked) + b"\n")
         if lease_coordinator is not None:
             canonical = run_state / "runs" / held.run_id / "canonical"
             lease_coordinator.write_receipt(
@@ -516,7 +560,7 @@ def _admit_lease_effect(recorder, generation_id, effect):
     return result
 
 
-def _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack):
+def _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack, candidate_sink=None):
     credential_fd = environ.get(CPA_CREDENTIAL_FD_ENV, "")
     if not credential_fd:
         return None
@@ -551,7 +595,7 @@ def _compose_cpa_lead(environ, run_state, held, boot_id, recorder, stack):
         CPALeadPort(cpa_service),
         fence=recorder.generations,
     )
-    return V1LeadAdapter(lead, harness=CPA_ROUTE, route=CPA_ROUTE)
+    return V1LeadAdapter(lead, harness=CPA_ROUTE, route=CPA_ROUTE, candidate_sink=candidate_sink)
 
 
 def _on_signal(run: Run) -> None:

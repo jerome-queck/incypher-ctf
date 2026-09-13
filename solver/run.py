@@ -704,7 +704,12 @@ class Run:
                     if status and status != "proposed":
                         evidence = digest_bytes(status.encode())
                         raise RouteTransportFailure.classified(status, InferenceRoute.CPA, evidence)
-                    values = [outcome.proposal.value] if isinstance(outcome.proposal, CandidateProposal) else []
+                    values = (
+                        [outcome.proposal.value]
+                        if isinstance(outcome.proposal, CandidateProposal)
+                        and not self._lead_adapter.candidate_sink_enabled
+                        else []
+                    )
                     return {"said": values, "stream": [], "quota": []}
 
                 transports[InferenceRoute(self._lead_adapter.route)] = cpa_turn
@@ -805,6 +810,7 @@ class Run:
             slots=slots,
             workdir=held.workdir,
             lease=held.lease,
+            generation_id=held.generation_id,
         )
         # Counted onto the number the gate was handed rather than onto the Board's own: that one is
         # already the higher of the two, so the tally re-bases itself on every fresher reading and

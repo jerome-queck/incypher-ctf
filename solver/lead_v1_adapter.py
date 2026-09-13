@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from solver.carry import Boundary
@@ -32,12 +33,20 @@ class V1LeadTurn:
 class V1LeadAdapter:
     """Bind v1's real prompt, carry and route facts to the pure Lead seam."""
 
-    def __init__(self, controller: LeadController, *, harness: str = "native-codex", route: str | None = None) -> None:
+    def __init__(
+        self,
+        controller: LeadController,
+        *,
+        harness: str = "native-codex",
+        route: str | None = None,
+        candidate_sink: Callable[[V1LeadTurn, LeadOutcome], object] | None = None,
+    ) -> None:
         self._controller = controller
         self._harness = harness
         self._route = route
         self._bindings: dict[str, LeadBinding] = {}
         self._turns: dict[str, int] = {}
+        self._candidate_sink = candidate_sink
 
     @property
     def route(self) -> str:
@@ -46,6 +55,10 @@ class V1LeadAdapter:
     @property
     def transport_status(self) -> str | None:
         return self._controller.model_status
+
+    @property
+    def candidate_sink_enabled(self) -> bool:
+        return self._candidate_sink is not None
 
     def __call__(self, incoming: V1LeadTurn) -> LeadOutcome:
         if not incoming.chain:
@@ -63,6 +76,8 @@ class V1LeadAdapter:
         outcome = self._controller.handle(request)
         if outcome.classification.value in {"accepted", "already-accepted"}:
             self._turns[incoming.attempt_id] = turn_index
+            if self._candidate_sink is not None:
+                self._candidate_sink(incoming, outcome)
         return outcome
 
     def _binding(self, incoming: V1LeadTurn) -> LeadBinding:

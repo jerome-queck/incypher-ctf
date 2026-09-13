@@ -167,8 +167,10 @@ def _validate_requirement(row: object, index: int, receipt_refs: set[str]) -> tu
     if not isinstance(reason, str):
         _fail(f"{row_id}.reason must be a string")
 
-    if status in {"planned", "missing"} and (receipt_ref is not None or evidence_refs):
-        _fail(f"{row_id} cannot attach evidence before it is implemented")
+    if status == "missing" and (receipt_ref is not None or evidence_refs):
+        _fail(f"{row_id} cannot attach evidence while it is missing")
+    if status == "planned" and (receipt_ref is not None or evidence_refs) and not reason:
+        _fail(f"{row_id} needs a partial-delivery reason when planned evidence is attached")
     if status == "missing" and not reason:
         _fail(f"{row_id} marks a missing requirement without a reason")
     if status in {"implemented", "proved"} and receipt_ref is None:

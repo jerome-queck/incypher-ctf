@@ -131,6 +131,34 @@ def attach_requirement_receipt(
     )
 
 
+def attach_partial_requirement_receipt(
+    manifest: Mapping[str, object],
+    row_id: str,
+    receipt: ManifestReceipt,
+    *,
+    reason: str,
+) -> ReleaseCandidateManifestDraft:
+    """Link delivered slice evidence without promoting its broader requirement row."""
+    current = parse_manifest(manifest)
+    requirements = _copy_json(current["requirements"])
+    receipts = _copy_json(current["receipts"])
+    row = next((item for item in requirements if item["row_id"] == row_id), None)
+    if row is None or not reason:
+        _fail("partial requirement evidence needs a known row and reason")
+    row["status"] = "planned"
+    row["receipt_ref"] = receipt["ref"]
+    row["reason"] = reason
+    receipts = [item for item in receipts if item["ref"] != receipt["ref"]]
+    receipts.append(_copy_json(receipt))
+    receipts.sort(key=lambda item: item["ref"])
+    return generate_manifest(
+        image_digest=current["candidate"]["image_digest"],
+        release_candidate_profile=current["selected_profile"],
+        requirements=requirements,
+        receipts=receipts,
+    )
+
+
 def attach_capsule_receipt(
     manifest: Mapping[str, object],
     row_id: str,
