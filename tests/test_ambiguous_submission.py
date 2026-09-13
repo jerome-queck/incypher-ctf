@@ -168,6 +168,48 @@ def test_restart_replays_original_deadline_without_resending(tmp_path, restart_a
     assert state.disposition == ("unknown-and-spent" if restart_at >= 160.0 else "pending")
 
 
+def test_ticking_wall_cannot_advance_same_boot_monotonic_fence(tmp_path):
+    mono, wall = Clock(10.0), Clock(100.0)
+    service = fence(tmp_path, mono, wall=wall)
+    pending = begin(service)
+    wall.value = 10_000.0
+    mono.value = 15.0
+
+    state = service.reconcile(pending)
+
+    assert state.disposition == "pending"
+    assert state.deadline == 160.0
+
+
+def test_wall_rollback_on_new_boot_cannot_extend_fence(tmp_path):
+    mono, wall = Clock(10.0), Clock(100.0)
+    first = fence(tmp_path, mono, wall=wall)
+    pending = begin(first)
+    mono.value = 40.0
+    first.reconcile(pending)
+    first.close_boot()
+    restarted = fence(tmp_path, Clock(1.0), wall=Clock(50.0), boot="boot-2")
+
+    state = restarted.reconcile(pending)
+
+    assert state.disposition == "unknown-and-spent"
+    receipt = json.loads(restarted.write_receipt().read_text())
+    probes = [row["scheduled_offset"] for row in receipt["events"] if row["event"] == "evidence-probe"]
+    assert probes == [0.0, 15.0, 30.0, 60.0]
+
+
+def test_forward_wall_jump_runs_every_overdue_probe_before_expiry(tmp_path):
+    first = fence(tmp_path, Clock(500.0), wall=Clock(100.0))
+    pending = begin(first)
+    first.close_boot()
+    restarted = fence(tmp_path, Clock(2.0), wall=Clock(175.0), boot="boot-2")
+
+    state = restarted.reconcile(pending)
+
+    assert state.disposition == "unknown-and-spent"
+    assert state.deadline == 160.0
+
+
 def test_receipt_is_sanitized_replay_verified_and_manifest_linked(tmp_path):
     clock = Clock()
     service = fence(tmp_path, clock)

@@ -203,12 +203,31 @@ class AmbiguousSubmissionFence:
             raise TypeError("ambiguity path requires CompleteSubmissionIdentity")
         if not candidate_id:
             raise ValueError("ambiguity needs Candidate identity")
-        self._authority.reserve(
+        reservation = self._authority.reserve(
             f"ambiguity-path:{identity.effect_id}",
             EffectIdentity(AMBIGUITY_PATH_OPERATION, identity.effect_id, identity.payload_identity),
             AMBIGUITY_PATH_NEED,
             retention=RetentionPolicy.RECORD,
         )
+        starts = [
+            row
+            for row in self._events()
+            if row.get("event") == "wire-started" and row.get("effect_id") == identity.effect_id
+        ]
+        if not starts:
+            wire_started_at = self._wall()
+            self._append(
+                {
+                    "event": "wire-started",
+                    "boot_id": self._boot_id,
+                    "candidate_id": candidate_id,
+                    "effect_id": identity.effect_id,
+                    "wire_started_at": wire_started_at,
+                    "deadline": wire_started_at + FENCE_SECONDS,
+                    "reservation_id": reservation.key,
+                    "complete_identity": identity.document(),
+                }
+            )
 
     def begin(self, candidate_id: str, identity: CompleteSubmissionIdentity) -> PendingSubmission:
         if not isinstance(identity, CompleteSubmissionIdentity):
@@ -221,7 +240,14 @@ class AmbiguousSubmissionFence:
         with self._lock:
             if candidate_id in self._states():
                 raise FenceClosed(f"Candidate {candidate_id!r} is already spent")
-            wire_started_at = self._wall()
+            starts = [
+                row
+                for row in self._events()
+                if row.get("event") == "wire-started" and row.get("effect_id") == effect_id
+            ]
+            if len(starts) != 1:
+                raise ValueError("submission has no unique durable wire start")
+            wire_started_at = float(starts[0]["wire_started_at"])
             pending = PendingSubmission(
                 candidate_id,
                 effect_id,
@@ -259,7 +285,13 @@ class AmbiguousSubmissionFence:
                 self._append_identity(state, "boot-replayed")
             anchor = self._anchors.get(state.candidate_id)
             if anchor is None:
-                carried = max(0.0, self._wall() - state.wire_started_at)
+                wall_at_boot = self._wall()
+                prior = max(
+                    (float(row.get("at", row.get("elapsed_carried", 0.0))) for row in events),
+                    default=0.0,
+                )
+                wall_elapsed = wall_at_boot - state.wire_started_at
+                carried = FENCE_SECONDS if wall_elapsed < 0 else max(prior, wall_elapsed)
                 self._anchors[state.candidate_id] = (self._clock(), carried)
                 self._append(
                     {
@@ -267,7 +299,7 @@ class AmbiguousSubmissionFence:
                         "boot_id": self._boot_id,
                         "candidate_id": state.candidate_id,
                         "effect_id": state.effect_id,
-                        "wall_at_boot": self._wall(),
+                        "wall_at_boot": wall_at_boot,
                         "elapsed_carried": carried,
                     }
                 )
@@ -351,6 +383,9 @@ class AmbiguousSubmissionFence:
                 "provenance": source,
             }
         )
+        for reservation in self._authority.reservations():
+            if reservation.identity.operation == AMBIGUITY_EVENT and reservation.state.value == "committed":
+                self._authority.release_retained(reservation, "ambiguity-receipt-projectable")
         budget = self._authority.current(f"ambiguity-path:{state.effect_id}")
         if budget is not None and budget.state.value == "reserved":
             self._authority.abort(budget, "ambiguity-path-closed")
@@ -434,11 +469,15 @@ class AmbiguousSubmissionFence:
         )
 
     def _events(self) -> list[dict[str, object]]:
-        return [
-            dict(item.observation or {})
-            for item in self._authority.reservations()
-            if item.identity.operation == AMBIGUITY_EVENT
-        ]
+        events = []
+        for item in self._authority.reservations():
+            if item.identity.operation != AMBIGUITY_EVENT:
+                continue
+            trace = self._authority.trace(item.key)
+            committed = next((row for row in trace if row["state"] == "committed"), None)
+            if committed is not None:
+                events.append((committed["ordinal"], dict(committed["observation"])))
+        return [event for _ordinal, event in sorted(events)]
 
     def _states(self, events=None) -> dict[str, PendingSubmission]:
         states: dict[str, PendingSubmission] = {}
