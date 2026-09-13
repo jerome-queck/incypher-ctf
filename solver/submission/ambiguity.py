@@ -453,6 +453,8 @@ def verify_receipt(path: Path) -> Path:
         raise ValueError("ambiguous-submission receipt is not canonical")
     if document.get("schema_version") != SCHEMA_VERSION or document.get("receipt_type") != RECEIPT_TYPE:
         raise ValueError("ambiguous-submission receipt contract is unsupported")
+    if document.get("fence_seconds") != FENCE_SECONDS:
+        raise ValueError("ambiguous-submission fence dial is invalid")
     if document.get("producer") == "external-evaluator":
         supplied = document.get("evaluator_seal")
         unsigned = dict(document)
@@ -502,6 +504,11 @@ def verify_receipt(path: Path) -> Path:
     expected = [{"candidate_id": item, "posts": 1} for item in sorted(starts)]
     if document.get("no_resend_trace") != expected:
         raise ValueError("ambiguous-submission no-resend trace is invalid")
+    if document.get("producer") == "external-evaluator":
+        observed_ids = sorted(item["effect_id"] for item in document["observed_effect_trace"])
+        started_ids = sorted(str(item["effect_id"]) for item in starts.values())
+        if observed_ids != started_ids:
+            raise ValueError("Evaluator POST trace does not match ambiguous effects")
     if any(item not in starts for item in closed):
         raise ValueError("ambiguous-submission close lacks a possibly-sent effect")
     exact_dispositions = {"accepted": "correct", "rejected": "incorrect"}
@@ -524,6 +531,9 @@ def verify_receipt(path: Path) -> Path:
         if disposition == "unknown-and-spent" and event.get("provenance") == "fence-expired":
             if float(event.get("at", -1)) != float(starts[candidate]["deadline"]):
                 raise ValueError("ambiguity expiry does not match its original deadline")
+            offsets = [probe.get("scheduled_offset") for probe in probes.get(candidate, [])]
+            if offsets != list(PROBE_OFFSETS):
+                raise ValueError("ambiguity expiry lacks the complete reconciliation schedule")
     return receipt
 
 
