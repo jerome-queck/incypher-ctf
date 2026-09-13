@@ -1,0 +1,330 @@
+"""Crash-replayable sixty-second fence for possibly-sent Candidate effects."""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
+
+SCHEMA_VERSION = 1
+RECEIPT_TYPE = "ambiguous-submission"
+RECEIPT_FILENAME = f"{RECEIPT_TYPE}.receipt.json"
+MANIFEST_ROW_ID = "core.submission-tail"
+MANIFEST_RECEIPT_REF = f"receipt:{RECEIPT_TYPE}"
+FENCE_SECONDS = 60.0
+PROBE_OFFSETS = (0.0, 15.0, 30.0, 60.0)
+
+
+class FenceClosed(RuntimeError):
+    """The Candidate's at-most-once authority has already been consumed."""
+
+
+@dataclass(frozen=True)
+class Evidence:
+    kind: str
+    source: str
+    verdict: str = ""
+    candidate_id: str = ""
+    authenticated: bool = False
+
+    @classmethod
+    def exact_verdict(cls, verdict: str, *, source: str, candidate_id: str) -> Evidence:
+        if verdict not in {"correct", "incorrect", "refused", "paused", "rate-limited"}:
+            raise ValueError("unsupported exact submission verdict")
+        return cls("exact-candidate-verdict", source, verdict, candidate_id, True)
+
+    @classmethod
+    def authenticated_solve(cls, source: str) -> Evidence:
+        return cls("authenticated-solve", source, authenticated=True)
+
+    @classmethod
+    def score_change(cls, source: str) -> Evidence:
+        return cls("score-change", source)
+
+    @classmethod
+    def unsettled(cls, source: str) -> Evidence:
+        return cls("unsettled", source)
+
+
+@dataclass(frozen=True)
+class PendingSubmission:
+    candidate_id: str
+    effect_id: str
+    challenge_id: int
+    wire_started_at: float
+    deadline: float
+    disposition: str = "pending"
+    provenance: str = ""
+
+
+class AmbiguousSubmissionFence:
+    """Persist ambiguity before reconciliation; never grants the same Candidate another POST."""
+
+    def __init__(
+        self,
+        state: Path,
+        *,
+        run_id: str,
+        boot_id: str,
+        monotonic: Callable[[], float],
+        probe: Callable[[PendingSubmission], Evidence],
+    ) -> None:
+        self._root = Path(state)
+        self._path = self._root / "runs" / run_id / "canonical" / "ambiguous-submission.events.jsonl"
+        self._run_id = run_id
+        self._boot_id = boot_id
+        self._clock = monotonic
+        self._probe = probe
+        self._lock = threading.Lock()
+
+    def begin(
+        self, candidate_id: str, effect_id: str, *, challenge_id: int, wire_started_at: float
+    ) -> PendingSubmission:
+        if not candidate_id or not effect_id:
+            raise ValueError("ambiguity needs Candidate and effect identities")
+        with self._lock:
+            if candidate_id in self._states():
+                raise FenceClosed(f"Candidate {candidate_id!r} is already spent")
+            pending = PendingSubmission(
+                candidate_id, effect_id, challenge_id, wire_started_at, wire_started_at + FENCE_SECONDS
+            )
+            self._append(
+                {
+                    "event": "possibly-sent",
+                    "boot_id": self._boot_id,
+                    "candidate_id": candidate_id,
+                    "effect_id": effect_id,
+                    "challenge_id": challenge_id,
+                    "wire_started_at": wire_started_at,
+                    "deadline": pending.deadline,
+                    "posts": 1,
+                }
+            )
+            return pending
+
+    def reconcile(self, pending: PendingSubmission) -> PendingSubmission:
+        with self._lock:
+            state = self._states().get(pending.candidate_id)
+            if state is None or state.effect_id != pending.effect_id:
+                raise ValueError("Candidate ambiguity does not match canonical replay")
+            if state.disposition != "pending":
+                return state
+            events = self._events()
+            boots = {row["boot_id"] for row in events if row["candidate_id"] == state.candidate_id}
+            if self._boot_id not in boots:
+                self._append_identity(state, "boot-replayed")
+            now = self._clock()
+            attempted = sum(
+                row["event"] == "evidence-probe" for row in events if row["candidate_id"] == state.candidate_id
+            )
+            due = sum(now >= state.wire_started_at + offset for offset in PROBE_OFFSETS)
+            if attempted < due:
+                evidence = self._probe(state)
+                self._append(
+                    {
+                        "event": "evidence-probe",
+                        "boot_id": self._boot_id,
+                        "candidate_id": state.candidate_id,
+                        "effect_id": state.effect_id,
+                        "at": now,
+                        "kind": evidence.kind,
+                        "source": evidence.source,
+                        "authenticated": evidence.authenticated,
+                        "candidate_match": evidence.candidate_id == state.candidate_id,
+                        "verdict": evidence.verdict,
+                    }
+                )
+                disposition = self._definitive(state, evidence)
+                if disposition:
+                    self._close(state, disposition, evidence.source, now)
+                    return self._states()[state.candidate_id]
+            if now >= state.deadline:
+                self._close(state, "unknown-and-spent", "fence-expired", state.deadline)
+                return self._states()[state.candidate_id]
+            return state
+
+    @staticmethod
+    def _definitive(state: PendingSubmission, evidence: Evidence) -> str:
+        if not evidence.authenticated or evidence.kind != "exact-candidate-verdict":
+            return ""
+        if evidence.candidate_id != state.candidate_id:
+            return ""
+        return {
+            "correct": "accepted",
+            "incorrect": "rejected",
+            "refused": "refused-and-spent",
+            "paused": "refused-and-spent",
+            "rate-limited": "refused-and-spent",
+        }[evidence.verdict]
+
+    def _close(self, state: PendingSubmission, disposition: str, source: str, at: float) -> None:
+        self._append(
+            {
+                "event": "fence-closed",
+                "boot_id": self._boot_id,
+                "candidate_id": state.candidate_id,
+                "effect_id": state.effect_id,
+                "at": at,
+                "disposition": disposition,
+                "provenance": source,
+            }
+        )
+
+    @property
+    def barrier_open(self) -> bool:
+        return any(state.disposition == "pending" for state in self._states().values())
+
+    def can_submit(self, candidate_id: str) -> bool:
+        states = self._states()
+        return candidate_id not in states and not any(state.disposition == "pending" for state in states.values())
+
+    def post_trace(self, candidate_id: str) -> tuple[str, ...]:
+        return tuple(
+            "possibly-sent"
+            for row in self._events()
+            if row["candidate_id"] == candidate_id and row["event"] == "possibly-sent"
+        )
+
+    def write_receipt(self) -> Path:
+        events = self._events()
+        states = self._states(events)
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "receipt_type": RECEIPT_TYPE,
+            "run_id": self._run_id,
+            "evidence_class": "controlled-runtime-trace",
+            "manifest_link": {"row_id": MANIFEST_ROW_ID, "receipt_ref": MANIFEST_RECEIPT_REF},
+            "fence_seconds": FENCE_SECONDS,
+            "events": events,
+            "no_resend_trace": [{"candidate_id": candidate_id, "posts": 1} for candidate_id in sorted(states)],
+            "final_dispositions": [
+                {"candidate_id": item.candidate_id, "disposition": item.disposition, "provenance": item.provenance}
+                for item in sorted(states.values(), key=lambda value: value.candidate_id)
+            ],
+        }
+        destination = self._path.parent / RECEIPT_FILENAME
+        atomic_write(destination, canonical_bytes(document) + b"\n")
+        return destination
+
+    def _append_identity(self, state: PendingSubmission, event: str) -> None:
+        self._append(
+            {
+                "event": event,
+                "boot_id": self._boot_id,
+                "candidate_id": state.candidate_id,
+                "effect_id": state.effect_id,
+            }
+        )
+
+    def _append(self, event: Mapping[str, object]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("ab") as stream:
+            stream.write(canonical_bytes(event) + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def _events(self) -> list[dict[str, object]]:
+        if not self._path.exists():
+            return []
+        return [json.loads(line) for line in self._path.read_bytes().splitlines()]
+
+    def _states(self, events=None) -> dict[str, PendingSubmission]:
+        states: dict[str, PendingSubmission] = {}
+        for row in self._events() if events is None else events:
+            candidate_id = str(row["candidate_id"])
+            if row["event"] == "possibly-sent":
+                states[candidate_id] = PendingSubmission(
+                    candidate_id,
+                    str(row["effect_id"]),
+                    int(row["challenge_id"]),
+                    float(row["wire_started_at"]),
+                    float(row["deadline"]),
+                )
+            elif row["event"] == "fence-closed":
+                current = states[candidate_id]
+                states[candidate_id] = PendingSubmission(
+                    current.candidate_id,
+                    current.effect_id,
+                    current.challenge_id,
+                    current.wire_started_at,
+                    current.deadline,
+                    str(row["disposition"]),
+                    str(row["provenance"]),
+                )
+        return states
+
+
+def verify_receipt(path: Path) -> Path:
+    receipt = Path(path)
+    try:
+        raw = receipt.read_bytes()
+        document = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("ambiguous-submission receipt cannot be read") from error
+    if raw != canonical_bytes(document) + b"\n":
+        raise ValueError("ambiguous-submission receipt is not canonical")
+    if document.get("schema_version") != SCHEMA_VERSION or document.get("receipt_type") != RECEIPT_TYPE:
+        raise ValueError("ambiguous-submission receipt contract is unsupported")
+    starts: dict[str, Mapping[str, object]] = {}
+    closed: dict[str, Mapping[str, object]] = {}
+    probes: dict[str, list[Mapping[str, object]]] = {}
+    for event in document.get("events", []):
+        candidate = str(event.get("candidate_id", ""))
+        if event.get("event") == "possibly-sent":
+            if candidate in starts or event.get("posts") != 1:
+                raise ValueError("ambiguous-submission no-resend trace is invalid")
+            if float(event["deadline"]) != float(event["wire_started_at"]) + FENCE_SECONDS:
+                raise ValueError("ambiguous-submission deadline is invalid")
+            starts[candidate] = event
+        elif event.get("event") == "fence-closed":
+            closed[candidate] = event
+        elif event.get("event") == "evidence-probe":
+            probes.setdefault(candidate, []).append(event)
+    expected = [{"candidate_id": item, "posts": 1} for item in sorted(starts)]
+    if document.get("no_resend_trace") != expected:
+        raise ValueError("ambiguous-submission no-resend trace is invalid")
+    if any(item not in starts for item in closed):
+        raise ValueError("ambiguous-submission close lacks a possibly-sent effect")
+    exact_dispositions = {"accepted": "correct", "rejected": "incorrect"}
+    for candidate, event in closed.items():
+        disposition = str(event.get("disposition", ""))
+        if disposition in exact_dispositions and not any(
+            probe.get("authenticated") is True
+            and probe.get("candidate_match") is True
+            and probe.get("kind") == "exact-candidate-verdict"
+            and probe.get("verdict") == exact_dispositions[disposition]
+            and probe.get("source") == event.get("provenance")
+            for probe in probes.get(candidate, [])
+        ):
+            raise ValueError("definitive ambiguity lacks exact authenticated provenance")
+        if disposition == "unknown-and-spent" and event.get("provenance") == "fence-expired":
+            if float(event.get("at", -1)) != float(starts[candidate]["deadline"]):
+                raise ValueError("ambiguity expiry does not match its original deadline")
+    return receipt
+
+
+def manifest_receipt(path: Path) -> dict[str, str]:
+    verified = verify_receipt(path)
+    return {"ref": MANIFEST_RECEIPT_REF, "kind": RECEIPT_TYPE, "digest": digest_bytes(verified.read_bytes())}
+
+
+def link_manifest(manifest: Mapping[str, object], path: Path) -> Mapping[str, object]:
+    from solver.manifest import attach_requirement_receipt
+
+    return attach_requirement_receipt(manifest, MANIFEST_ROW_ID, manifest_receipt(path))
+
+
+__all__ = [
+    "AmbiguousSubmissionFence",
+    "Evidence",
+    "FenceClosed",
+    "PendingSubmission",
+    "link_manifest",
+    "manifest_receipt",
+    "verify_receipt",
+]
