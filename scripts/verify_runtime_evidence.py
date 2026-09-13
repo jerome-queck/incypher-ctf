@@ -260,12 +260,48 @@ def _verify_293(capsule: Path, document: dict[str, object], _fixed: dict[str, ob
         raise ValueError("#293 serial submission proof is incomplete")
 
 
+def _verify_296(capsule: Path, document: dict[str, object], _fixed: dict[str, object]) -> None:
+    from solver.recovery.incident import verify_receipt
+
+    receipt = capsule / "incident-containment.receipt.json"
+    verify_receipt(receipt)
+    incident = _json(receipt)
+    try:
+        crash = json.loads(incident["evidence"]["projection"])
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("#296 real-process evidence is invalid") from error
+    process = _json(capsule / "process-trace.json")
+    if (
+        incident.get("replay_count", 0) < 1
+        or incident.get("disposition") != "replacement-admitted"
+        or process.get("real_process") is not True
+        or process.get("crashed_exit_code") != 17
+        or process.get("replacement_exit_code") != 0
+        or process.get("crashed_pid") == process.get("replacement_pid")
+        or crash.get("pid") != process.get("crashed_pid")
+        or crash.get("exit_code") != process.get("crashed_exit_code")
+        or crash.get("group_extinguished") is not True
+        or process.get("generation_active_after") is not False
+        or process.get("group_extinguished") is not True
+        or process.get("containment_crash", {}).get("injected") is not True
+        or process.get("containment_crash", {}).get("step") != "evidence-capture"
+        or process.get("replayed_incident_id") != incident.get("incident_id")
+        or process.get("replay_count") != incident.get("replay_count")
+        or process.get("concurrency", {}).get("process_count") != 6
+        or process.get("concurrency", {}).get("duplicate_reports") != 5
+        or len(set(process.get("concurrency", {}).get("incident_ids", []))) != 1
+        or document.get("scanner_annotation") != "gitleaks:allow"
+    ):
+        raise ValueError("#296 Incident containment proof is incomplete")
+
+
 TICKET_VERIFIERS = {
     269: _verify_269,
     270: _verify_270,
     281: _verify_281,
     283: _verify_283,
     293: _verify_293,
+    296: _verify_296,
     298: _verify_298,
 }
 
@@ -320,6 +356,7 @@ def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]])
         281: "core.controlled-proofs",
         283: "core.inference-native",
         293: "core.submission-tail",
+        296: "core.deterministic-recovery",
         298: "core.tool-surface",
     }
     for path, capsule in capsules:
@@ -353,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
             verified.append((capsule, document))
             print(f"verified #{document['ticket']} {capsule}")
         tickets = {document["ticket"] for _capsule, document in verified}
-        if tickets in ({269, 270, 281, 283, 298}, {293}):
+        if tickets in ({269, 270, 281, 283, 298}, {293}, {293, 296}):
             roots = {capsule.parent.resolve() for capsule, _document in verified}
             if len(roots) != 1:
                 raise ValueError("capsules do not share one candidate evidence root")

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import json
 import os
 import signal
 import subprocess
 import sys
 import threading
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,11 +41,13 @@ from solver.event_store_contracts import (
 from solver.isolation import strict_preflight
 from solver.isolation_receipt import write_receipt as write_isolation_receipt
 from solver.redaction import Redactor
+from solver.recovery.incident import Fault, IncidentEngine
 from solver.replay import verify_and_materialize_run_state
 from solver.supervisor_process import ProcessOutcome, ProcessOwner, SpawnedBoot
 from solver.supervisor_services import ServiceName, SupervisorServices
 from solver.supervisor_custody import SupervisorCustody
 from solver.supervisor_lifecycle import LifecycleWriter
+from solver.work_generation import GenerationFence
 
 NORMAL = "normal"
 REFUSED = "refused"
@@ -95,6 +98,57 @@ class SupervisorResult:
     receipt_path: Path
 
 
+class _SupervisorContainment:
+    """Bind Incident effects to facts proved by PID-1 and canonical generations."""
+
+    def __init__(
+        self,
+        state: Path,
+        run_id: str,
+        redactor: Redactor,
+        outcome: ProcessOutcome,
+        replace: Callable[[], ProcessOutcome],
+    ) -> None:
+        self._fence = GenerationFence(
+            state,
+            run_id,
+            redactor,
+            timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+        self._outcome = outcome
+        self._replace = replace
+        self.replacement_outcome: ProcessOutcome | None = None
+
+    def fence(self, _fault: Fault) -> None:
+        self._fence.reconcile_restart()
+        if self._fence.projection().active_by_work:
+            raise RuntimeError("active generation survived incident fence")
+
+    def evidence(self, _fault: Fault) -> bytes:
+        return json.dumps(
+            {
+                "detail": self._outcome.detail,
+                "exit_code": self._outcome.exit_code,
+                "group_extinguished": self._outcome.group_extinguished,
+                "pid": self._outcome.leader_pid,
+                "reaped_children": self._outcome.reaped_children,
+                "signals": self._outcome.signals,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
+    def teardown(self, _fault: Fault) -> None:
+        if not self._outcome.group_extinguished:
+            raise RuntimeError("worker process group survived containment")
+        if self._outcome.exit_code is None and not self._outcome.detail:
+            raise RuntimeError("worker process termination is unclassified")
+
+    def replace(self, _fault: Fault) -> bool:
+        self.replacement_outcome = self._replace()
+        return True
+
+
 class Supervisor:
     """Admit verified state before starting the effect-capable Run controller."""
 
@@ -130,6 +184,7 @@ class Supervisor:
         }
         if monotonic is not None:
             process_options["monotonic"] = monotonic
+        self._process_options = process_options
         self._owner = ProcessOwner(**process_options)
 
     def run(self) -> SupervisorResult:
@@ -149,36 +204,54 @@ class Supervisor:
             return self._finish(result)
         self._lifecycle.ensure_run_open()
         self._lifecycle.reconcile_unclosed_boots()
-        boot_id = self._lifecycle.next_boot_id()
-        for service in started_services:
+
+        def run_boot(boot_id: str, *, initial: bool) -> ProcessOutcome:
+            if not initial:
+                self._owner = ProcessOwner(**self._process_options)
+            for service in started_services if initial else ():
+                self._lifecycle.append(f"{boot_id}:service:{service.value}", ServiceStarted(boot_id, service))
+            self._lifecycle.append(f"{boot_id}:open", BootOpened(boot_id))
+            self._boot_id = boot_id
+            custody = self._services.bootstrap_custody(boot_id)
             self._lifecycle.append(
-                f"{boot_id}:service:{service.value}",
-                ServiceStarted(boot_id=boot_id, service=service),
+                f"{boot_id}:service:{ServiceName.CREDENTIAL_CUSTODY.value}",
+                ServiceStarted(boot_id, ServiceName.CREDENTIAL_CUSTODY),
             )
-        self._lifecycle.append(f"{boot_id}:open", BootOpened(boot_id))
-        self._boot_id = boot_id
-        custody = self._services.bootstrap_custody(boot_id)
-        self._lifecycle.append(
-            f"{boot_id}:service:{ServiceName.CREDENTIAL_CUSTODY.value}",
-            ServiceStarted(boot_id=boot_id, service=ServiceName.CREDENTIAL_CUSTODY),
-        )
-        try:
-            outcome = self._owner.run(boot_id, started=self._record_controller_started)
-        finally:
-            custody.close()
+            try:
+                outcome = self._owner.run(boot_id, started=self._record_controller_started)
+            finally:
+                custody.close()
+            disposition = self._disposition(outcome)
+            self._lifecycle.append(f"{boot_id}:reaped", ChildReaped(boot_id, outcome.reaped_children))
+            self._lifecycle.append(
+                f"{boot_id}:close", BootClosed(boot_id, TerminalDisposition(disposition), outcome.detail)
+            )
+            return outcome
+
+        boot_id = self._lifecycle.next_boot_id()
+        outcome = run_boot(boot_id, initial=True)
         disposition = self._disposition(outcome)
-        self._lifecycle.append(
-            f"{boot_id}:reaped",
-            ChildReaped(boot_id=boot_id, reaped_children=outcome.reaped_children),
-        )
-        self._lifecycle.append(
-            f"{boot_id}:close",
-            BootClosed(
-                boot_id=boot_id,
-                disposition=TerminalDisposition(disposition),
-                detail=outcome.detail,
-            ),
-        )
+        if disposition == CRASHED:
+            replacement_boot_id = self._lifecycle.next_boot_id()
+            ports = _SupervisorContainment(
+                self._state,
+                self._run_id,
+                self._redactor,
+                outcome,
+                lambda: run_boot(replacement_boot_id, initial=False),
+            )
+            incident = IncidentEngine(self._state, self._run_id, ports, self._redactor).report(
+                Fault(
+                    f"{boot_id}:process-exit",
+                    "run-controller",
+                    "all-active",
+                    f"exit_code={outcome.exit_code}; detail={outcome.detail}",
+                )
+            )
+            if incident.disposition == "replacement-admitted" and ports.replacement_outcome is not None:
+                boot_id = replacement_boot_id
+                outcome = ports.replacement_outcome
+                disposition = self._disposition(outcome)
         self._lifecycle.append(
             "run:close",
             RunClosed(disposition=TerminalDisposition(disposition), detail=outcome.detail),
