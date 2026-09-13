@@ -98,7 +98,8 @@ def _submission_identity_composition(intake, ledger, board_identity, store, time
         revisions=revisions,
         instance_ledger=ledger,
     )
-    epoch = SubmissionEpochAuthority(store, timestamp).advance(board_identity)
+    epochs = SubmissionEpochAuthority(store, timestamp)
+    epochs.ensure(board_identity)
 
     def context_for(challenge_id):
         return contexts.resolve(challenge_id, requires_instance=instance_required[challenge_id])
@@ -113,10 +114,10 @@ def _submission_identity_composition(intake, ledger, board_identity, store, time
             context.challenge_revision,
             context.instance_provenance,
             candidate.candidate_digest,
-            epoch,
+            epochs.current(board_identity),
         )
 
-    return context_for, identity_for, epoch
+    return context_for, identity_for, epochs
 
 
 # The two directories this file names under the mount it was pointed at, and they are named the
@@ -421,7 +422,7 @@ def _run_admitted(
             hashlib.sha256(b"candidate-vault-v1\0" + held.token.encode()).digest(),
             recorder.generations,
         )
-        context_for, identity_for, _submission_epoch = _submission_identity_composition(
+        context_for, identity_for, submission_epochs = _submission_identity_composition(
             intake,
             ledger,
             held.url,
@@ -436,6 +437,8 @@ def _run_admitted(
             board_broker_path=board_broker_path,
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
             identity_for=identity_for,
+            epoch_authority=submission_epochs,
+            board_identity=held.url,
         )
         submission = submission_runtime.submission
         stack.callback(submission_runtime.close)

@@ -33,6 +33,8 @@ from solver.submission.bridge import CandidateSubmissionBridge
 from solver.submission.bridge import ObservedCandidateSubmissionBridge
 from solver.submission.receipt import link_manifest, verify_receipt, write_receipt
 from solver.submission.runtime import compose_submission_runtime
+from solver.submission.reconciliation import broker_evidence_probe
+from solver.submission.epoch import SubmissionEpochAuthority
 from solver.write_reservation import EffectIndeterminate
 from solver.write_reservation import Capacity, EffectIdentity, ReservationUnavailable
 from test_manifest import release_candidate_profile
@@ -147,7 +149,7 @@ def test_production_identity_composition_replays_epoch_and_binds_canonical_conte
     )
     store = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
 
-    context_for, identity_for, epoch = _submission_identity_composition(
+    context_for, identity_for, epochs = _submission_identity_composition(
         intake, ledger, "https://board.example", store, Clock()
     )
     context = context_for(7)
@@ -156,7 +158,7 @@ def test_production_identity_composition_replays_epoch_and_binds_canonical_conte
     assert context.challenge_revision == "revision-from-intake"
     assert context.instance_provenance == "static:https://board.example"
     assert context_for(8).instance_provenance == "ledger:row-8:response-digest"
-    assert epoch == 1
+    assert epochs.current("https://board.example") == 1
     assert identity_for(candidate).document() == {
         "board_identity": "https://board.example",
         "challenge_id": 7,
@@ -169,11 +171,109 @@ def test_production_identity_composition_replays_epoch_and_binds_canonical_conte
     }
 
     replayed = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
-    _, restarted_identity_for, restarted_epoch = _submission_identity_composition(
+    _, restarted_identity_for, restarted_epochs = _submission_identity_composition(
         intake, ledger, "https://board.example", replayed, Clock()
     )
-    assert restarted_epoch == 2
-    assert restarted_identity_for(candidate).submission_epoch == 2
+    assert restarted_epochs.current("https://board.example") == 1
+    assert restarted_identity_for(candidate).submission_epoch == 1
+
+
+@pytest.mark.parametrize(
+    ("factory", "source"),
+    [
+        (lambda: (_ for _ in ()).throw(OSError("secret path")), "board-broker:open-failed"),
+        (
+            lambda: SimpleNamespace(
+                submission_ledger=lambda _effect: (_ for _ in ()).throw(OSError("secret row")),
+                close=lambda: None,
+            ),
+            "board-broker:read-failed",
+        ),
+        (
+            lambda: SimpleNamespace(
+                submission_ledger=lambda _effect: BoardBrokerResult(
+                    BoardOperation.SUBMISSION_LEDGER,
+                    BoardOutcome.TIMEOUT,
+                    None,
+                    "request",
+                ),
+                close=lambda: (_ for _ in ()).throw(OSError("secret close")),
+            ),
+            "board-broker:timeout",
+        ),
+    ],
+)
+def test_reconciliation_probe_sanitizes_transport_failures(factory, source):
+    probe = broker_evidence_probe(
+        lambda *_args, **_kwargs: factory(),
+        Path("board.sock"),
+        BINDING,
+    )
+    evidence = probe(SimpleNamespace(effect_id="effect"))
+    assert evidence.source == source
+    assert "secret" not in evidence.source
+
+
+def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire(crash_during=True)
+    mono, wall = [0.0], [100.0]
+    epochs = SubmissionEpochAuthority(recorder.event_store, Clock())
+    epochs.ensure("board-1")
+
+    def identity_for(candidate):
+        return CompleteSubmissionIdentity(
+            "board-1",
+            candidate.challenge_id,
+            candidate.submission_context.challenge_revision,
+            candidate.submission_context.instance_provenance,
+            candidate.candidate_digest,
+            epochs.current("board-1"),
+        )
+
+    runtime = compose_submission_runtime(
+        state=tmp_path / "state",
+        recorder=recorder,
+        run_id="run-1",
+        boot_id="boot-1",
+        board_broker_path=tmp_path / "board.sock",
+        timestamp=Clock(),
+        identity_for=identity_for,
+        epoch_authority=epochs,
+        board_identity="board-1",
+        monotonic=lambda: mono[0],
+        wall_time=lambda: wall[0],
+        open_client=lambda *_args, **_kwargs: wire,
+        reconcile_interval=100,
+    )
+    successor = replace(ready(identity="d" * 64, candidate=b"zephyr{next}"), candidate_digest="e" * 64)
+    other = replace(ready(identity="f" * 64, candidate=b"zephyr{other}"), candidate_digest="1" * 64)
+    try:
+        with pytest.raises(SystemExit):
+            runtime.submission.dispatch(queued(), binding=BINDING)
+        mono[0], wall[0] = 60.0, 160.0
+        runtime.reconciler.cycle()
+        failures = []
+
+        def dispatch(candidate):
+            try:
+                runtime.submission.dispatch(queued(candidate), binding=BINDING)
+            except Exception as error:
+                failures.append(error)
+
+        threads = [threading.Thread(target=dispatch, args=(candidate,)) for candidate in (successor, other)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert failures == []
+        assert epochs.current("board-1") == 2
+        assert [row[1]["submission_epoch"] for row in wire.complete_identities[-2:]] == [2, 2]
+    finally:
+        runtime.close()
+
+    replayed = SubmissionEpochAuthority(EventStore(tmp_path / "state", run_id="run-1", redactor=Redactor({})), Clock())
+    assert replayed.current("board-1") == 2
 
 
 def test_serial_submission_sends_complete_identity_to_board_broker(tmp_path):
@@ -242,6 +342,10 @@ def test_production_runtime_fences_ambiguous_post_then_releases_unrelated_candid
 
         mono[0], wall[0] = 70.0, 160.0
         runtime.reconciler.cycle()
+        probes = [row for row in runtime.fence._events() if row["event"] == "evidence-probe"]
+        assert [row["scheduled_offset"] for row in probes] == [0.0, 15.0, 30.0, 60.0]
+        assert all(row["source"] == "board-broker:unreachable" for row in probes)
+        assert runtime.reconciler.is_alive
         result = runtime.submission.dispatch(queued(second_candidate), binding=BINDING)
 
         assert result is not None
@@ -250,6 +354,7 @@ def test_production_runtime_fences_ambiguous_post_then_releases_unrelated_candid
         assert runtime.fence.barrier_open is False
     finally:
         runtime.close()
+    assert not runtime.reconciler.is_alive
 
 
 def test_production_runtime_resumes_open_fence_with_reset_monotonic_epoch(tmp_path):

@@ -128,6 +128,27 @@ def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_si
     assert service.can_submit("candidate-1") is False
 
 
+def test_unexpected_probe_failures_are_durable_unsettled_cycles_and_expire(tmp_path):
+    clock = Clock()
+    service = fence(tmp_path, clock)
+    service._probe = lambda _pending: (_ for _ in ()).throw(RuntimeError("secret transport detail"))
+    pending = begin(service)
+
+    service.reconcile(pending)
+    clock.value = 115.0
+    service.reconcile(pending)
+    clock.value = 130.0
+    service.reconcile(pending)
+    clock.value = 160.0
+    closed = service.reconcile(pending)
+
+    probes = [row for row in service._events() if row["event"] == "evidence-probe"]
+    assert [row["scheduled_offset"] for row in probes] == [0.0, 15.0, 30.0, 60.0]
+    assert all(row["source"] == "submission-probe:failed" for row in probes)
+    assert closed.disposition == "unknown-and-spent"
+    assert "secret" not in json.dumps(probes)
+
+
 @pytest.mark.parametrize(
     "override",
     [

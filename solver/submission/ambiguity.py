@@ -197,7 +197,10 @@ class AmbiguousSubmissionFence:
             )
             due = sum(now >= offset for offset in PROBE_OFFSETS)
             while attempted < due:
-                evidence = self._probe(state)
+                try:
+                    evidence = self._probe(state)
+                except Exception:
+                    evidence = Evidence.unsettled("submission-probe:failed")
                 attempted += 1
                 self._append(
                     {
@@ -233,6 +236,32 @@ class AmbiguousSubmissionFence:
                 self._close(state, SubmissionDisposition.UNKNOWN_AND_SPENT, "fence-expired", state.deadline)
                 return self._states()[state.candidate_id]
             return state
+
+    def closed_effect_at_epoch(self, epoch: int) -> str | None:
+        """Return the closed ambiguity which authorizes exactly one successor epoch."""
+        matches = [
+            state
+            for state in self._states().values()
+            if state.disposition is not SubmissionDisposition.PENDING
+            and (state.complete_identity or {}).get("submission_epoch") == epoch
+        ]
+        return matches[-1].effect_id if matches else None
+
+    def record_reconciliation_failure(self, pending: PendingSubmission, source: str) -> None:
+        """Retain a sanitized unexpected-cycle fault without terminating reconciliation."""
+        with self._lock:
+            state = self._states().get(pending.candidate_id)
+            if state is None or state.disposition is not SubmissionDisposition.PENDING:
+                return
+            self._append(
+                {
+                    "event": AmbiguityEvent.RECONCILIATION_FAILED,
+                    "boot_id": self._boot_id,
+                    "candidate_id": state.candidate_id,
+                    "effect_id": state.effect_id,
+                    "source": source,
+                }
+            )
 
     @staticmethod
     def _definitive(state: PendingSubmission, evidence: Evidence) -> SubmissionDisposition | None:

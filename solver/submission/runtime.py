@@ -32,6 +32,8 @@ def compose_submission_runtime(
     board_broker_path,
     timestamp,
     identity_for,
+    epoch_authority=None,
+    board_identity=None,
     monotonic=time.monotonic,
     wall_time=time.time,
     open_client=BoardBrokerClient.open,
@@ -62,6 +64,12 @@ def compose_submission_runtime(
         open_client=lambda path, candidate_binding: open_client(path, candidate_binding, scope="board.submit"),
         identity_for=identity_for,
     )
-    submission = AmbiguityAwareSerialSubmission(serial, fence, identity_for)
+    submission = AmbiguityAwareSerialSubmission(
+        serial,
+        fence,
+        identity_for,
+        epoch_authority=epoch_authority,
+        board_identity=board_identity,
+    )
     reconciler = SubmissionReconciler(fence, interval_seconds=reconcile_interval).start()
     return SubmissionRuntime(submission, fence, reconciler)

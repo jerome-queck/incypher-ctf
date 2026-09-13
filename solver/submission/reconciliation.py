@@ -32,13 +32,26 @@ class SubmissionReconciler:
             if self._thread.is_alive():
                 raise RuntimeError("submission reconciliation did not stop")
 
+    @property
+    def is_alive(self):
+        return self._thread is not None and self._thread.is_alive()
+
     def cycle(self):
         for pending in self._fence.pending():
-            self._fence.reconcile(pending)
+            try:
+                self._fence.reconcile(pending)
+            except Exception:
+                try:
+                    self._fence.record_reconciliation_failure(pending, "reconciler:cycle-failed")
+                except Exception:
+                    pass
 
     def _run(self):
         while not self._stop.is_set():
-            self.cycle()
+            try:
+                self.cycle()
+            except Exception:
+                pass
             self._stop.wait(self._interval)
 
 
@@ -46,16 +59,29 @@ def broker_evidence_probe(open_client: Callable, socket_path, binding):
     """Build one authenticated submission-ledger probe with broker-side secrets."""
 
     def probe(pending):
-        client = open_client(socket_path, binding, scope="board.submit")
         try:
-            result = client.submission_ledger(pending.effect_id)
-            if result.outcome is not BoardOutcome.ANSWERED:
-                return Evidence.unsettled(f"board-broker:{result.outcome.value}")
+            client = open_client(socket_path, binding, scope="board.submit")
+        except Exception:
+            return Evidence.unsettled("board-broker:open-failed")
+        evidence = None
+        try:
             try:
-                return AuthenticatedSubmissionEvidence.from_broker(result)
-            except ValueError:
-                return Evidence.unsettled("board-broker:unsettled-ledger")
+                result = client.submission_ledger(pending.effect_id)
+                if result.outcome is not BoardOutcome.ANSWERED:
+                    evidence = Evidence.unsettled(f"board-broker:{result.outcome.value}")
+                else:
+                    try:
+                        evidence = AuthenticatedSubmissionEvidence.from_broker(result)
+                    except (TypeError, ValueError):
+                        evidence = Evidence.unsettled("board-broker:unreadable-ledger")
+            except Exception:
+                evidence = Evidence.unsettled("board-broker:read-failed")
         finally:
-            client.close()
+            try:
+                client.close()
+            except Exception:
+                if evidence is None:
+                    evidence = Evidence.unsettled("board-broker:close-failed")
+        return evidence or Evidence.unsettled("board-broker:unavailable")
 
     return probe

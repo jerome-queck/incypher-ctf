@@ -17,6 +17,7 @@ class AmbiguityEvent(str, Enum):
     BOOT_REPLAYED = "boot-replayed"
     EVIDENCE_PROBE = "evidence-probe"
     FENCE_CLOSED = "fence-closed"
+    RECONCILIATION_FAILED = "reconciliation-failed"
 
 
 class EvidenceKind(str, Enum):

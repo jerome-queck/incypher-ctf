@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
 
 from solver.event_store_contracts import InvalidEventError
 
@@ -40,6 +41,7 @@ class SubmissionEpochAdvanced:
 class SubmissionEpochAuthority:
     def __init__(self, store, timestamp):
         self._store, self._timestamp = store, timestamp
+        self._lock = threading.Lock()
 
     def current(self, board_identity: str) -> int:
         rows = [
@@ -53,10 +55,27 @@ class SubmissionEpochAuthority:
         return epochs[-1] if epochs else 0
 
     def advance(self, board_identity: str) -> int:
+        with self._lock:
+            return self._append_next(board_identity)
+
+    def ensure(self, board_identity: str) -> int:
+        """Create the first epoch once; Boots only replay it."""
+        with self._lock:
+            return self.current(board_identity) or self._append_next(board_identity)
+
+    def advance_after(self, board_identity: str, closed_effect_id: str, closed_epoch: int) -> int:
+        """Durably and idempotently open the successor epoch after one closed ambiguity."""
+        with self._lock:
+            current = self.current(board_identity)
+            if current != closed_epoch:
+                return current
+            return self._append_next(board_identity, cause=closed_effect_id)
+
+    def _append_next(self, board_identity: str, *, cause: str = "initial") -> int:
         epoch = self.current(board_identity) + 1
         self._store.append(
             SubmissionEpochAdvanced(
-                f"submission-epoch:{board_identity}:{epoch}", board_identity, epoch, self._timestamp()
+                f"submission-epoch:{board_identity}:{epoch}:{cause}", board_identity, epoch, self._timestamp()
             ),
             body=b"",
         )
