@@ -11,6 +11,8 @@ from solver.attempt_executor import AttemptExecutor, RuntimeBinding
 from solver.attempt_executor_contracts import ResourceOutcome, RuntimeObservation
 from solver.attempt_resource_receipt import link_manifest, manifest_receipt, verify_receipt, write_receipt
 from solver.event_store import InvalidReceiptError
+from solver.event_store import EventStore
+from solver.event_store_contracts import ObservationRecorded
 from solver.manifest import generate_manifest
 from solver.redaction import Redactor
 from solver.work_generation import GenerationFence
@@ -124,3 +126,13 @@ def test_receipt_cannot_link_to_a_different_candidate_image(tmp_path: Path) -> N
 
     with pytest.raises(InvalidReceiptError, match="different candidate image"):
         link_manifest(draft, receipt)
+
+
+def test_later_non_envelope_canonical_event_does_not_invalidate_resource_receipt(tmp_path: Path) -> None:
+    receipt = qualified_receipt(tmp_path)
+    EventStore(tmp_path / "state", run_id="run-1").append(
+        ObservationRecorded("controller", 1, "close", "close", "lifecycle"),
+        body=b"",
+    )
+
+    assert verify_receipt(receipt, require_qualified=True) == receipt
