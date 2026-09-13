@@ -8,6 +8,8 @@ from solver.candidate_admission_contracts import (
     CandidateProvenance,
     DerivationKind,
     ReadyCandidate,
+    InstanceProvenanceKind,
+    SubmissionContext,
 )
 from solver.candidate_vault import CandidateVaultCipher
 from solver.event_store_storage import canonical_bytes, digest_bytes
@@ -27,6 +29,7 @@ def project_candidate(event, cipher: CandidateVaultCipher) -> ReadyCandidate:
         "model_digest",
         "derivation",
         "admission_rule",
+        "submission_context",
     }
     if not isinstance(document, dict) or set(document) != expected_fields:
         raise ValueError("Candidate vault has an unsupported schema")
@@ -59,6 +62,7 @@ def project_candidate(event, cipher: CandidateVaultCipher) -> ReadyCandidate:
         or document["generation_id"] != event.payload["generation_id"]
         or document["admission_rule"] != event.payload["admission_rule"]
         or document["candidate_digest"] != event.payload["candidate_digest"]
+        or document["submission_context"] != event.payload["submission_context"]
     ):
         raise ValueError("Candidate vault identity disagrees with canonical admission")
     return ReadyCandidate(
@@ -69,4 +73,9 @@ def project_candidate(event, cipher: CandidateVaultCipher) -> ReadyCandidate:
         event.payload["candidate_digest"],
         provenance,
         event.payload["admission_rule"],
+        SubmissionContext(
+            document["submission_context"]["challenge_revision"],
+            document["submission_context"]["instance_provenance"],
+            InstanceProvenanceKind(document["submission_context"]["instance_kind"]),
+        ),
     )

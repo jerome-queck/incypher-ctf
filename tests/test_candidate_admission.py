@@ -11,10 +11,11 @@ from solver.candidate_admission import (
     CandidateAdmission,
     CandidateDerivation,
     CandidateDisposition,
-    CandidateProposal,
+    CandidateProposal as CandidateProposalContract,
     CandidateProvenance,
     DerivationKind,
 )
+from solver.candidate_admission_contracts import SubmissionContext
 from solver.candidate_admission_receipt import link_manifest, verify_receipt, write_receipt
 from solver.candidate_vault import CandidateVaultCipher
 from solver.event_store import EventStore, InvalidReceiptError, ObservationRecorded
@@ -35,6 +36,27 @@ from test_manifest import release_candidate_profile
 WRAPPERS = (r"zephyr\{[^}]{1,64}\}", r"FLAG-[0-9a-f]{8}")
 CANDIDATE = b"zephyr{earned_not_stated}"
 VAULT_KEY = b"candidate-vault-test-key-material-32-bytes"
+SUBMISSION_CONTEXT = SubmissionContext.static("challenge-revision-1", "board-1")
+
+
+def CandidateProposal(
+    proposal_id,
+    challenge_id,
+    generation_id,
+    candidate,
+    provenance,
+    schema_version=1,
+):
+    """Build proposals with an explicit canonical submission context."""
+    return CandidateProposalContract(
+        proposal_id,
+        challenge_id,
+        generation_id,
+        candidate,
+        provenance,
+        SUBMISSION_CONTEXT,
+        schema_version,
+    )
 
 
 def digest(value: bytes) -> str:
@@ -210,6 +232,11 @@ def test_raw_candidate_is_admitted_with_stable_identity_and_replays_ready_after_
         "model_digest": evidence.model_digest,
         "derivation": evidence.derivation.document(),
         "admission_rule": "candidate-admission-v1",
+        "submission_context": {
+            "challenge_revision": SUBMISSION_CONTEXT.challenge_revision,
+            "instance_provenance": SUBMISSION_CONTEXT.instance_provenance,
+            "instance_kind": SUBMISSION_CONTEXT.instance_kind.value,
+        },
     }
     assert outcome.candidate.identity == digest(json.dumps(expected, sort_keys=True, separators=(",", ":")).encode())
     assert outcome.candidate.candidate == CANDIDATE

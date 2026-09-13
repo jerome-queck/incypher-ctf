@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from solver.candidate_admission import CandidateAdmission
 from solver.candidate_admission_contracts import (
     CandidateDerivation,
@@ -9,6 +11,7 @@ from solver.candidate_admission_contracts import (
     CandidateProposal,
     CandidateProvenance,
     DerivationKind,
+    SubmissionContext,
 )
 from solver.capability import CapabilityBinding
 from solver.event_store_storage import digest_bytes
@@ -22,9 +25,15 @@ from solver.lead_v1_adapter import V1LeadTurn
 class CandidateSubmissionBridge:
     """Consume one durable Lead proposal without another scheduling turn."""
 
-    def __init__(self, admission: CandidateAdmission, submission: SerialSubmission) -> None:
+    def __init__(
+        self,
+        admission: CandidateAdmission,
+        submission: SerialSubmission,
+        context_for: Callable[[int], SubmissionContext],
+    ) -> None:
         self._admission = admission
         self._submission = submission
+        self._context_for = context_for
 
     def __call__(self, incoming: V1LeadTurn, outcome: LeadOutcome) -> SubmissionResult | None:
         proposal = outcome.proposal
@@ -39,6 +48,7 @@ class CandidateSubmissionBridge:
                 incoming.generation_id,
                 proposal.value.encode(),
                 provenance,
+                self._context_for(int(incoming.work_id)),
             )
         )
         if ready is None:
@@ -76,11 +86,13 @@ class ObservedCandidateSubmissionBridge:
         *,
         run_id: str,
         boot_id: str,
+        context_for: Callable[[int], SubmissionContext],
     ) -> None:
         self._admission = admission
         self._submission = submission
         self._run_id = run_id
         self._boot_id = boot_id
+        self._context_for = context_for
 
     def __call__(
         self, candidate: Candidate, *, attempt_id: str, challenge_id: int, generation_id: str
@@ -96,6 +108,7 @@ class ObservedCandidateSubmissionBridge:
                 generation_id,
                 candidate.text.encode(),
                 CandidateProvenance(CandidateDisposition.OBSERVED, (source_digest,), ()),
+                self._context_for(challenge_id),
             )
         )
         if ready is None:

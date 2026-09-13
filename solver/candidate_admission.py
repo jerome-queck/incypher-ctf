@@ -20,6 +20,7 @@ from solver.candidate_admission_contracts import (
     DerivationKind,
     ReadyCandidate,
     ReadyAdmission,
+    SubmissionContext,
 )
 from solver.candidate_admission_projection import project_candidate
 from solver.candidate_admission_receipt import write_receipt
@@ -85,6 +86,11 @@ class CandidateAdmission:
             "generation_id": proposal.generation_id,
             **proposal.provenance.document(),
             "admission_rule": ADMISSION_RULE,
+            "submission_context": {
+                "challenge_revision": proposal.submission_context.challenge_revision,
+                "instance_provenance": proposal.submission_context.instance_provenance,
+                "instance_kind": proposal.submission_context.instance_kind.value,
+            },
         }
         candidate_id = digest_bytes(canonical_bytes(identity_document))
         provenance_digest = digest_bytes(canonical_bytes(proposal.provenance.document()))
@@ -128,6 +134,7 @@ class CandidateAdmission:
                     provenance_digest=provenance_digest,
                     admission_rule=ADMISSION_RULE,
                     decision=decision,
+                    submission_context=proposal.submission_context,
                     duplicate_class="equivalent" if duplicate else "",
                     ts=self._timestamp(),
                 ),
@@ -218,6 +225,8 @@ class CandidateAdmission:
         )
 
     def _validate(self, proposal: CandidateProposal) -> AdmissionDecision | None:
+        if not isinstance(proposal.submission_context, SubmissionContext):
+            return AdmissionDecision.UNSUPPORTED
         if not isinstance(proposal, CandidateProposal):
             return AdmissionDecision.UNSUPPORTED
         if type(proposal.schema_version) is not int or proposal.schema_version != 1:

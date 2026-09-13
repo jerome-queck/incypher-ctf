@@ -14,6 +14,7 @@ from solver.candidate_admission_contracts import (
     CandidateProvenance,
     ReadyAdmission,
     ReadyCandidate,
+    SubmissionContext,
 )
 from solver.record import Recorder
 from solver.redaction import Redactor
@@ -92,6 +93,7 @@ def ready(identity="a" * 64, candidate=FLAG):
         candidate_digest="b" * 64,
         provenance=CandidateProvenance(CandidateDisposition.OBSERVED, ("c" * 64,), ()),
         admission_rule="candidate-admission-v1",
+        submission_context=SubmissionContext.static("challenge-revision-1", "board-1"),
     )
 
 
@@ -139,7 +141,9 @@ def test_durable_lead_candidate_is_admitted_and_dispatched_before_adapter_return
         tmp_path / "board.sock",
         open_client=lambda _path, _binding: wire,
     )
-    bridge = CandidateSubmissionBridge(admission, submission)
+    bridge = CandidateSubmissionBridge(
+        admission, submission, lambda _challenge_id: SubmissionContext.static("r1", "b1")
+    )
     incoming = SimpleNamespace(
         run_id="run-1",
         boot_id="boot-1",
@@ -178,6 +182,7 @@ def test_observed_flag_sweep_enters_candidate_admission_before_typed_board_dispa
         submission,
         run_id="run-1",
         boot_id="boot-1",
+        context_for=lambda _challenge_id: SubmissionContext.static("r1", "b1"),
     )
     observation_ref = "observations/1.bin"
     (admission.store.run_dir / observation_ref).parent.mkdir(exist_ok=True)
