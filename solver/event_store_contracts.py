@@ -733,6 +733,7 @@ else:
 
 
 def event_contract(event_type: str):
+    from solver.recovery.contracts import INCIDENT_RECORDED, IncidentRecorded
     from solver.attempt_progress_contracts import ATTEMPT_PROGRESS_RECORDED, AttemptProgressRecorded
     from solver.candidate_admission_contracts import CANDIDATE_ADMISSION_RECORDED, CandidateAdmissionRecorded
     from solver.cpa_contracts import CPA_HARNESS_RECORDED, CPAHarnessRecorded
@@ -762,6 +763,7 @@ def event_contract(event_type: str):
     from solver.research_broker_contracts import RESEARCH_BROKER_RECORDED, ResearchBrokerRecorded
 
     contracts = {
+        INCIDENT_RECORDED: IncidentRecorded,
         ATTEMPT_PROGRESS_RECORDED: AttemptProgressRecorded,
         OBSERVATION_RECORDED: ObservationRecorded,
         LIFECYCLE_RECORDED: LifecycleRecorded,

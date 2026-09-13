@@ -36,6 +36,10 @@ class SpawnedBoot:
         except subprocess.TimeoutExpired as error:
             raise TimeoutError from error
 
+    @property
+    def pid(self) -> int:
+        return self._process.pid
+
     def forward(self, signal_number: int) -> None:
         try:
             os.killpg(self._process.pid, signal_number)
@@ -64,6 +68,8 @@ class ProcessOutcome:
     signals: tuple[int, ...]
     reaped_children: int
     detail: str
+    leader_pid: int | None = None
+    group_extinguished: bool = False
 
 
 class ProcessOwner:
@@ -107,6 +113,7 @@ class ProcessOwner:
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
         reaped = self._extinguish_and_reap()
+        group_extinguished = self._process is None or not self._process.group_alive()
         self._drain_signals()
         self._terminal = True
         return ProcessOutcome(
@@ -114,6 +121,8 @@ class ProcessOwner:
             signals=tuple(self._signals),
             reaped_children=reaped,
             detail=detail,
+            leader_pid=getattr(self._process, "pid", None),
+            group_extinguished=group_extinguished,
         )
 
     def request_stop(self, signal_number: int) -> None:

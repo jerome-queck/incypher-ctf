@@ -197,6 +197,22 @@ class WriteAuthority:
     def abort(self, reservation: WriteReservation, reason: str) -> WriteReservation:
         return self._finish(reservation, ReservationState.ABORTED, {"reason": reason})
 
+    def refuse_indeterminate(self, reservation: WriteReservation, reason: str) -> WriteReservation:
+        """Close a reconciled possibly-sent effect without granting another attempt."""
+
+        with self._storage.locked():
+            current = self._require_current_locked(reservation)
+            if current.state is ReservationState.TERMINAL:
+                return current
+            if current.state is not ReservationState.POSSIBLY_SENT:
+                raise ReservationConflict(f"{current.state.value} is not an indeterminate effect")
+            closed = current.transitioned(
+                ReservationState.TERMINAL,
+                {"classification": _bounded_text(reason, self._redactor)},
+            )
+            self._storage.append_locked(closed)
+            return closed
+
     def release_retained(self, reservation: WriteReservation, reason: str) -> WriteReservation:
         with self._storage.locked():
             current = self._require_current_locked(reservation)
@@ -276,7 +292,8 @@ class WriteAuthority:
                 ReservationState.ABORTED: ReservationState.RESERVED,
                 ReservationState.TERMINAL: ReservationState.RESERVED,
             }
-            if allowed.get(state) is not current.state:
+            expected = allowed.get(state)
+            if current.state not in (expected if isinstance(expected, tuple) else (expected,)):
                 raise ReservationConflict(f"{current.state.value} cannot transition to {state.value}")
             retention = RetentionPolicy.RELEASE if state is ReservationState.ABORTED else current.retention
             closed = current.transitioned(
