@@ -10,6 +10,7 @@ from solver.redaction import Redactor
 from solver.submission.ambiguity import (
     AmbiguousSubmissionFence,
     AuthenticatedSubmissionEvidence,
+    CompleteSubmissionIdentity,
     Evidence,
     FenceClosed,
     link_manifest,
@@ -67,6 +68,16 @@ def exact(verdict, candidate="candidate-1", effect="effect-1"):
     )
 
 
+def identity(candidate="candidate-1"):
+    return CompleteSubmissionIdentity("board-1", 7, "revision-1", "instance-1", f"digest:{candidate}", 1)
+
+
+def begin(service, candidate="candidate-1"):
+    complete = identity(candidate)
+    service.reserve_path(candidate, complete)
+    return service.begin(candidate, complete)
+
+
 @pytest.mark.parametrize("verdict,disposition", [("correct", "accepted"), ("incorrect", "rejected")])
 def test_exact_authenticated_candidate_evidence_closes_inside_fence(tmp_path, verdict, disposition):
     clock = Clock()
@@ -75,7 +86,9 @@ def test_exact_authenticated_candidate_evidence_closes_inside_fence(tmp_path, ve
         clock,
         [exact(verdict)],
     )
-    pending = service.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=clock())
+    complete = identity()
+    service._probe = lambda _pending: exact(verdict, effect=complete.effect_id)
+    pending = begin(service)
 
     closed = service.reconcile(pending)
 
@@ -90,7 +103,7 @@ def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_si
         clock,
         [Evidence.score_change("scoreboard"), Evidence.unsettled("authenticated-solve-ledger")],
     )
-    pending = service.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=clock())
+    pending = begin(service)
     assert service.reconcile(pending).disposition == "pending"
     clock.value = 159.999
     assert service.reconcile(pending).disposition == "pending"
@@ -109,7 +122,7 @@ def test_restart_replays_original_deadline_without_resending(tmp_path, restart_a
     first_monotonic = Clock(4000.0)
     first_wall = Clock(100.0)
     first = fence(tmp_path, first_monotonic, wall=first_wall)
-    pending = first.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=4000.0)
+    pending = begin(first)
     first.close_boot()
     reset_monotonic = Clock(3.0)
     restarted = fence(tmp_path, reset_monotonic, boot="boot-2", wall=Clock(restart_at))
@@ -123,8 +136,10 @@ def test_restart_replays_original_deadline_without_resending(tmp_path, restart_a
 
 def test_receipt_is_sanitized_replay_verified_and_manifest_linked(tmp_path):
     clock = Clock()
-    service = fence(tmp_path, clock, [exact("correct", "c", "e")])
-    pending = service.begin("c", "e", challenge_id=7, wire_started_at=clock())
+    service = fence(tmp_path, clock)
+    complete = identity("c")
+    service._probe = lambda _pending: exact("correct", "c", complete.effect_id)
+    pending = begin(service, "c")
     service.reconcile(pending)
     path = service.write_receipt()
 
@@ -147,9 +162,9 @@ def test_receipt_is_sanitized_replay_verified_and_manifest_linked(tmp_path):
 
 def test_same_candidate_can_never_begin_twice(tmp_path):
     service = fence(tmp_path, Clock())
-    service.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=100.0)
+    begin(service)
     with pytest.raises(FenceClosed, match="already spent"):
-        service.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=100.0)
+        service.begin("candidate-1", identity())
 
 
 def test_retained_ambiguity_receipt_verifies_independently():

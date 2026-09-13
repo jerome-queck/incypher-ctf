@@ -29,6 +29,7 @@ from solver.submission.bridge import CandidateSubmissionBridge
 from solver.submission.bridge import ObservedCandidateSubmissionBridge
 from solver.submission.receipt import link_manifest, verify_receipt, write_receipt
 from solver.write_reservation import EffectIndeterminate
+from solver.write_reservation import Capacity, EffectIdentity, ReservationUnavailable
 from test_manifest import release_candidate_profile
 from test_candidate_admission import CANDIDATE as ADMITTED_FLAG
 from test_candidate_admission import service as admission_service
@@ -365,6 +366,10 @@ def test_ambiguous_post_blocks_serial_posts_then_releases_other_work_at_sixty(tm
     submission = AmbiguityAwareSerialSubmission(serial, fence, identity)
     with pytest.raises(SystemExit):
         submission.dispatch(queued(), binding=BINDING)
+    budget = recorder.write_authority.trace(f"ambiguity-path:{identity(ready()).effect_id}")
+    post = recorder.write_authority.trace(identity(ready()).reservation_id)
+    assert budget[0]["ordinal"] < post[0]["ordinal"]
+    assert budget[0]["need"] == {"bytes": 65536, "objects": 8, "operations": 24}
     other = replace(ready("2" * 64), candidate_digest="d" * 64)
     with pytest.raises(EffectIndeterminate, match="barrier"):
         submission.dispatch(queued(other), binding=BINDING)
@@ -373,3 +378,40 @@ def test_ambiguous_post_blocks_serial_posts_then_releases_other_work_at_sixty(tm
     assert fence.reconcile(fence.pending()[0]).disposition == "unknown-and-spent"
     submission.dispatch(queued(other), binding=BINDING)
     assert wire.posts == 2
+
+
+def test_complete_ambiguity_reservation_failure_prevents_board_post(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    recorder.write_authority.reserve(
+        "controlled-exhaustion",
+        EffectIdentity("test.exhaust", "shared"),
+        Capacity(460 * 1024, 1, 3),
+    )
+    wire = Wire()
+    fence = AmbiguousSubmissionFence(
+        tmp_path / "state",
+        recorder.write_authority,
+        run_id="run-1",
+        boot_id="boot-1",
+        monotonic=lambda: 1.0,
+        probe=lambda _: Evidence.unsettled("ledger"),
+    )
+    serial = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+    )
+    wrapped = AmbiguityAwareSerialSubmission(
+        serial,
+        fence,
+        lambda candidate: CompleteSubmissionIdentity(
+            "board", candidate.challenge_id, "revision", "instance", candidate.candidate_digest, 1
+        ),
+    )
+
+    with pytest.raises(ReservationUnavailable):
+        wrapped.dispatch(queued(), binding=BINDING)
+
+    assert wire.posts == 0

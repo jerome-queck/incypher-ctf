@@ -28,6 +28,8 @@ FENCE_SECONDS = 60.0
 PROBE_OFFSETS = (0.0, 15.0, 30.0, 60.0)
 AMBIGUITY_EVENT = "submission.ambiguity-event"
 EVENT_NEED = Capacity(4096, 1, 3)
+AMBIGUITY_PATH_NEED = Capacity(64 * 1024, 8, 24)
+AMBIGUITY_PATH_OPERATION = "submission.ambiguity-path"
 
 
 class FenceClosed(RuntimeError):
@@ -175,22 +177,32 @@ class AmbiguousSubmissionFence:
         self._probe = probe
         self._lock = threading.Lock()
 
-    def begin(
-        self,
-        candidate_id: str,
-        effect_id: str,
-        *,
-        challenge_id: int,
-        wire_started_at: float,
-        complete_identity: Mapping[str, object] | None = None,
-    ) -> PendingSubmission:
-        if not candidate_id or not effect_id:
-            raise ValueError("ambiguity needs Candidate and effect identities")
+    def reserve_path(self, candidate_id: str, identity: CompleteSubmissionIdentity) -> None:
+        if not isinstance(identity, CompleteSubmissionIdentity):
+            raise TypeError("ambiguity path requires CompleteSubmissionIdentity")
+        if not candidate_id:
+            raise ValueError("ambiguity needs Candidate identity")
+        self._authority.reserve(
+            f"ambiguity-path:{identity.effect_id}",
+            EffectIdentity(AMBIGUITY_PATH_OPERATION, identity.effect_id, identity.payload_identity),
+            AMBIGUITY_PATH_NEED,
+            retention=RetentionPolicy.RECORD,
+        )
+
+    def begin(self, candidate_id: str, identity: CompleteSubmissionIdentity) -> PendingSubmission:
+        if not isinstance(identity, CompleteSubmissionIdentity):
+            raise TypeError("ambiguity begin requires CompleteSubmissionIdentity")
+        effect_id = identity.effect_id
+        challenge_id = identity.challenge_id
+        budget = self._authority.current(f"ambiguity-path:{effect_id}")
+        if budget is None or budget.state.value != "reserved" or budget.need != AMBIGUITY_PATH_NEED:
+            raise ValueError("complete ambiguity path was not reserved before the Board effect")
         with self._lock:
             if candidate_id in self._states():
                 raise FenceClosed(f"Candidate {candidate_id!r} is already spent")
+            wire_started_at = self._wall()
             pending = PendingSubmission(
-                candidate_id, effect_id, challenge_id, self._wall(), self._wall() + FENCE_SECONDS
+                candidate_id, effect_id, challenge_id, wire_started_at, wire_started_at + FENCE_SECONDS
             )
             self._anchors[candidate_id] = (self._clock(), 0.0)
             self._append(
@@ -203,19 +215,10 @@ class AmbiguousSubmissionFence:
                     "wire_started_at": pending.wire_started_at,
                     "deadline": pending.deadline,
                     "posts": 1,
-                    "complete_identity": dict(complete_identity or {}),
+                    "complete_identity": identity.document(),
                 }
             )
             return pending
-
-    def begin_identity(self, candidate_id: str, identity: CompleteSubmissionIdentity, *, challenge_id: int):
-        return self.begin(
-            candidate_id,
-            identity.effect_id,
-            challenge_id=challenge_id,
-            wire_started_at=self._clock(),
-            complete_identity=identity.document(),
-        )
 
     def reconcile(self, pending: PendingSubmission) -> PendingSubmission:
         with self._lock:
@@ -307,6 +310,9 @@ class AmbiguousSubmissionFence:
                 "provenance": source,
             }
         )
+        budget = self._authority.current(f"ambiguity-path:{state.effect_id}")
+        if budget is not None and budget.state.value == "reserved":
+            self._authority.abort(budget, "ambiguity-path-closed")
 
     @property
     def barrier_open(self) -> bool:
@@ -320,6 +326,11 @@ class AmbiguousSubmissionFence:
 
     def effect_state(self, reservation_id: str):
         return self._authority.current(reservation_id)
+
+    def release_unused_path(self, effect_id: str) -> None:
+        budget = self._authority.current(f"ambiguity-path:{effect_id}")
+        if budget is not None and budget.state.value == "reserved":
+            self._authority.abort(budget, "definitive-submit-result")
 
     def can_submit(self, candidate_id: str, effect_id: str = "") -> bool:
         states = self._states()
@@ -425,11 +436,16 @@ class AmbiguityAwareSerialSubmission:
 
     def dispatch(self, admission, *, binding):
         complete = self._identity_for(admission.candidate)
+        if not isinstance(complete, CompleteSubmissionIdentity):
+            raise TypeError("production submission requires CompleteSubmissionIdentity")
         original_id = admission.candidate.identity
         if not self._fence.can_submit(original_id, complete.effect_id):
             raise EffectIndeterminate("account submission barrier is active or Candidate is spent")
         if complete.challenge_id != admission.candidate.challenge_id:
             raise ValueError("complete submission identity names another Challenge")
+        if complete.candidate_digest != admission.candidate.candidate_digest:
+            raise ValueError("complete submission identity names another Candidate value")
+        self._fence.reserve_path(original_id, complete)
         canonical = replace(admission, candidate=replace(admission.candidate, identity=complete.payload_identity))
         try:
             result = self._serial.dispatch(canonical, binding=binding)
@@ -437,8 +453,9 @@ class AmbiguityAwareSerialSubmission:
             current = self._fence.effect_state(complete.reservation_id)
             if current is not None and current.state.value == "possibly-sent":
                 if self._fence.can_submit(original_id, complete.effect_id):
-                    self._fence.begin_identity(original_id, complete, challenge_id=admission.candidate.challenge_id)
+                    self._fence.begin(original_id, complete)
             raise
+        self._fence.release_unused_path(complete.effect_id)
         return replace(result, candidate_id=original_id)
 
 
