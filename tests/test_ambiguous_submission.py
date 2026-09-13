@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 from solver.manifest import generate_manifest
+from solver.manifest import parse_manifest
+from solver.record import Recorder
+from solver.redaction import Redactor
 from solver.submission.ambiguity import (
     AmbiguousSubmissionFence,
     AuthenticatedSubmissionEvidence,
@@ -31,8 +34,10 @@ class Clock:
 
 def fence(tmp_path, clock, probes=(), boot="boot-1", wall=None):
     answers = iter(probes)
+    recorder = Recorder(tmp_path, "run-1", Redactor({}))
     return AmbiguousSubmissionFence(
         tmp_path,
+        recorder.write_authority,
         run_id="run-1",
         boot_id=boot,
         monotonic=clock,
@@ -103,9 +108,9 @@ def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_si
 def test_restart_replays_original_deadline_without_resending(tmp_path, restart_at):
     first_monotonic = Clock(4000.0)
     first_wall = Clock(100.0)
-    pending = fence(tmp_path, first_monotonic, wall=first_wall).begin(
-        "candidate-1", "effect-1", challenge_id=7, wire_started_at=4000.0
-    )
+    first = fence(tmp_path, first_monotonic, wall=first_wall)
+    pending = first.begin("candidate-1", "effect-1", challenge_id=7, wire_started_at=4000.0)
+    first.close_boot()
     reset_monotonic = Clock(3.0)
     restarted = fence(tmp_path, reset_monotonic, boot="boot-2", wall=Clock(restart_at))
 
@@ -149,3 +154,9 @@ def test_same_candidate_can_never_begin_twice(tmp_path):
 
 def test_retained_ambiguity_receipt_verifies_independently():
     assert verify_receipt(RETAINED) == RETAINED
+    receipt = json.loads(RETAINED.read_text())
+    assert receipt["producer"] == "external-evaluator"
+    manifest = parse_manifest(json.loads((RETAINED.parent / "candidate-manifest.json").read_text()))
+    row = next(row for row in manifest["requirements"] if row["row_id"] == "core.submission-tail")
+    descriptor = next(item for item in manifest["receipts"] if item["ref"] == row["receipt_ref"])
+    assert descriptor["digest"] == __import__("hashlib").sha256(RETAINED.read_bytes()).hexdigest()

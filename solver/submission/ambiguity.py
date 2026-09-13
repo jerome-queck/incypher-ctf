@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
+from solver.write_reservation import (
+    Capacity,
+    EffectIdentity,
+    EffectIndeterminate,
+    ReservedEffect,
+    RetentionPolicy,
+    WriteAuthority,
+)
 from solver.board_broker_contracts import BoardBrokerResult, BoardOutcome
 
 SCHEMA_VERSION = 1
@@ -19,6 +26,8 @@ MANIFEST_ROW_ID = "core.submission-tail"
 MANIFEST_RECEIPT_REF = f"receipt:{RECEIPT_TYPE}"
 FENCE_SECONDS = 60.0
 PROBE_OFFSETS = (0.0, 15.0, 30.0, 60.0)
+AMBIGUITY_EVENT = "submission.ambiguity-event"
+EVENT_NEED = Capacity(4096, 1, 3)
 
 
 class FenceClosed(RuntimeError):
@@ -28,10 +37,10 @@ class FenceClosed(RuntimeError):
 @dataclass(frozen=True)
 class CompleteSubmissionIdentity:
     board_identity: str
+    challenge_id: int
     challenge_revision: str
     instance_provenance: str
     candidate_digest: str
-    reservation_id: str
     submission_epoch: int
 
     def __post_init__(self):
@@ -43,16 +52,27 @@ class CompleteSubmissionIdentity:
                     self.challenge_revision,
                     self.instance_provenance,
                     self.candidate_digest,
-                    self.reservation_id,
                 )
             )
+            or self.challenge_id < 1
             or self.submission_epoch < 1
         ):
             raise ValueError("complete submission identity is incomplete")
 
     @property
-    def effect_id(self):
+    def payload_identity(self):
         return digest_bytes(canonical_bytes(self.__dict__))
+
+    @property
+    def reservation_id(self):
+        return f"serial-submit:{self.payload_identity}"
+
+    @property
+    def effect_id(self):
+        return EffectIdentity("board.submit-candidate", str(self.challenge_id), self.payload_identity).fingerprint
+
+    def document(self):
+        return {**self.__dict__, "reservation_id": self.reservation_id, "effect_id": self.effect_id}
 
 
 @dataclass(frozen=True)
@@ -136,6 +156,7 @@ class AmbiguousSubmissionFence:
     def __init__(
         self,
         state: Path,
+        authority: WriteAuthority,
         *,
         run_id: str,
         boot_id: str,
@@ -144,7 +165,8 @@ class AmbiguousSubmissionFence:
         probe: Callable[[PendingSubmission], Evidence | AuthenticatedSubmissionEvidence],
     ) -> None:
         self._root = Path(state)
-        self._path = self._root / "runs" / run_id / "canonical" / "ambiguous-submission.events.jsonl"
+        self._path = self._root / "runs" / run_id / "canonical" / RECEIPT_FILENAME
+        self._authority = authority
         self._run_id = run_id
         self._boot_id = boot_id
         self._clock = monotonic
@@ -154,7 +176,13 @@ class AmbiguousSubmissionFence:
         self._lock = threading.Lock()
 
     def begin(
-        self, candidate_id: str, effect_id: str, *, challenge_id: int, wire_started_at: float
+        self,
+        candidate_id: str,
+        effect_id: str,
+        *,
+        challenge_id: int,
+        wire_started_at: float,
+        complete_identity: Mapping[str, object] | None = None,
     ) -> PendingSubmission:
         if not candidate_id or not effect_id:
             raise ValueError("ambiguity needs Candidate and effect identities")
@@ -175,6 +203,7 @@ class AmbiguousSubmissionFence:
                     "wire_started_at": pending.wire_started_at,
                     "deadline": pending.deadline,
                     "posts": 1,
+                    "complete_identity": dict(complete_identity or {}),
                 }
             )
             return pending
@@ -185,6 +214,7 @@ class AmbiguousSubmissionFence:
             identity.effect_id,
             challenge_id=challenge_id,
             wire_started_at=self._clock(),
+            complete_identity=identity.document(),
         )
 
     def reconcile(self, pending: PendingSubmission) -> PendingSubmission:
@@ -282,8 +312,14 @@ class AmbiguousSubmissionFence:
     def barrier_open(self) -> bool:
         return any(state.disposition == "pending" for state in self._states().values())
 
+    def close_boot(self) -> None:
+        self._authority.close()
+
     def pending(self) -> tuple[PendingSubmission, ...]:
         return tuple(state for state in self._states().values() if state.disposition == "pending")
+
+    def effect_state(self, reservation_id: str):
+        return self._authority.current(reservation_id)
 
     def can_submit(self, candidate_id: str, effect_id: str = "") -> bool:
         states = self._states()
@@ -307,7 +343,7 @@ class AmbiguousSubmissionFence:
             "schema_version": SCHEMA_VERSION,
             "receipt_type": RECEIPT_TYPE,
             "run_id": self._run_id,
-            "evidence_class": "controlled-runtime-trace",
+            "evidence_class": "solver-observation",
             "manifest_link": {"row_id": MANIFEST_ROW_ID, "receipt_ref": MANIFEST_RECEIPT_REF},
             "fence_seconds": FENCE_SECONDS,
             "events": events,
@@ -332,16 +368,25 @@ class AmbiguousSubmissionFence:
         )
 
     def _append(self, event: Mapping[str, object]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("ab") as stream:
-            stream.write(canonical_bytes(event) + b"\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        ordinal = len(self._events()) + 1
+        key = f"ambiguity:{event['effect_id']}:{ordinal}"
+        identity = EffectIdentity(AMBIGUITY_EVENT, str(event["effect_id"]), digest_bytes(canonical_bytes(event)))
+        ReservedEffect(self._authority).execute(
+            key,
+            identity,
+            EVENT_NEED,
+            lambda: dict(event),
+            encode=lambda value: value,
+            decode=lambda value: dict(value),
+            retention=RetentionPolicy.RECORD,
+        )
 
     def _events(self) -> list[dict[str, object]]:
-        if not self._path.exists():
-            return []
-        return [json.loads(line) for line in self._path.read_bytes().splitlines()]
+        return [
+            dict(item.observation or {})
+            for item in self._authority.reservations()
+            if item.identity.operation == AMBIGUITY_EVENT
+        ]
 
     def _states(self, events=None) -> dict[str, PendingSubmission]:
         states: dict[str, PendingSubmission] = {}
@@ -369,6 +414,34 @@ class AmbiguousSubmissionFence:
         return states
 
 
+class AmbiguityAwareSerialSubmission:
+    """Adapter whose SerialSubmission reservation uses the complete ADR-0052 identity."""
+
+    def __init__(self, serial, fence: AmbiguousSubmissionFence, identity_for):
+        self._serial, self._fence, self._identity_for = serial, fence, identity_for
+
+    def pending_count(self):
+        return self._serial.pending_count()
+
+    def dispatch(self, admission, *, binding):
+        complete = self._identity_for(admission.candidate)
+        original_id = admission.candidate.identity
+        if not self._fence.can_submit(original_id, complete.effect_id):
+            raise EffectIndeterminate("account submission barrier is active or Candidate is spent")
+        if complete.challenge_id != admission.candidate.challenge_id:
+            raise ValueError("complete submission identity names another Challenge")
+        canonical = replace(admission, candidate=replace(admission.candidate, identity=complete.payload_identity))
+        try:
+            result = self._serial.dispatch(canonical, binding=binding)
+        except BaseException:
+            current = self._fence.effect_state(complete.reservation_id)
+            if current is not None and current.state.value == "possibly-sent":
+                if self._fence.can_submit(original_id, complete.effect_id):
+                    self._fence.begin_identity(original_id, complete, challenge_id=admission.candidate.challenge_id)
+            raise
+        return replace(result, candidate_id=original_id)
+
+
 def verify_receipt(path: Path) -> Path:
     receipt = Path(path)
     try:
@@ -380,6 +453,15 @@ def verify_receipt(path: Path) -> Path:
         raise ValueError("ambiguous-submission receipt is not canonical")
     if document.get("schema_version") != SCHEMA_VERSION or document.get("receipt_type") != RECEIPT_TYPE:
         raise ValueError("ambiguous-submission receipt contract is unsupported")
+    if document.get("producer") == "external-evaluator":
+        supplied = document.get("evaluator_seal")
+        unsigned = dict(document)
+        unsigned.pop("evaluator_seal", None)
+        if supplied != digest_bytes(canonical_bytes(unsigned)):
+            raise ValueError("ambiguous-submission Evaluator seal is invalid")
+        observed = document.get("observed_effect_trace")
+        if not isinstance(observed, list) or any(item.get("posts") != 1 for item in observed):
+            raise ValueError("ambiguous-submission observed POST trace is invalid")
     starts: dict[str, Mapping[str, object]] = {}
     closed: dict[str, Mapping[str, object]] = {}
     probes: dict[str, list[Mapping[str, object]]] = {}
@@ -390,6 +472,28 @@ def verify_receipt(path: Path) -> Path:
                 raise ValueError("ambiguous-submission no-resend trace is invalid")
             if float(event["deadline"]) != float(event["wire_started_at"]) + FENCE_SECONDS:
                 raise ValueError("ambiguous-submission deadline is invalid")
+            complete = event.get("complete_identity")
+            if complete:
+                basis = {
+                    key: complete[key]
+                    for key in (
+                        "board_identity",
+                        "challenge_id",
+                        "challenge_revision",
+                        "instance_provenance",
+                        "candidate_digest",
+                        "submission_epoch",
+                    )
+                }
+                payload = digest_bytes(canonical_bytes(basis))
+                expected_effect = EffectIdentity(
+                    "board.submit-candidate", str(basis["challenge_id"]), payload
+                ).fingerprint
+                if (
+                    complete.get("reservation_id") != f"serial-submit:{payload}"
+                    or complete.get("effect_id") != expected_effect
+                ):
+                    raise ValueError("ambiguous-submission complete effect identity is inconsistent")
             starts[candidate] = event
         elif event.get("event") == "fence-closed":
             closed[candidate] = event
@@ -436,6 +540,7 @@ def link_manifest(manifest: Mapping[str, object], path: Path) -> Mapping[str, ob
 
 __all__ = [
     "AmbiguousSubmissionFence",
+    "AmbiguityAwareSerialSubmission",
     "CompleteSubmissionIdentity",
     "Evidence",
     "FenceClosed",

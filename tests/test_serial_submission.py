@@ -1,5 +1,6 @@
 import json
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -18,6 +19,12 @@ from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.manifest import generate_manifest
 from solver.submission.authority import SerialSubmission
+from solver.submission.ambiguity import (
+    AmbiguityAwareSerialSubmission,
+    AmbiguousSubmissionFence,
+    CompleteSubmissionIdentity,
+    Evidence,
+)
 from solver.submission.bridge import CandidateSubmissionBridge
 from solver.submission.bridge import ObservedCandidateSubmissionBridge
 from solver.submission.receipt import link_manifest, verify_receipt, write_receipt
@@ -323,3 +330,46 @@ def test_retained_serial_and_crash_trace_verifies_without_live_authority():
         "possibly-sent",
         "aborted",
     ]
+
+
+def test_ambiguous_post_blocks_serial_posts_then_releases_other_work_at_sixty(tmp_path):
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire, mono, wall = Wire(crash_during=True), [10.0], [100.0]
+    fence = AmbiguousSubmissionFence(
+        tmp_path / "state",
+        recorder.write_authority,
+        run_id="run-1",
+        boot_id="boot-1",
+        monotonic=lambda: mono[0],
+        wall_time=lambda: wall[0],
+        probe=lambda _: Evidence.unsettled("authenticated-submission-ledger"),
+    )
+
+    def identity(candidate):
+        return CompleteSubmissionIdentity(
+            "board-identity",
+            candidate.challenge_id,
+            "revision-1",
+            "instance-1",
+            candidate.candidate_digest,
+            1,
+        )
+
+    serial = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+    )
+    submission = AmbiguityAwareSerialSubmission(serial, fence, identity)
+    with pytest.raises(SystemExit):
+        submission.dispatch(queued(), binding=BINDING)
+    other = replace(ready("2" * 64), candidate_digest="d" * 64)
+    with pytest.raises(EffectIndeterminate, match="barrier"):
+        submission.dispatch(queued(other), binding=BINDING)
+    assert wire.posts == 1
+    mono[0], wall[0] = 70.0, 160.0
+    assert fence.reconcile(fence.pending()[0]).disposition == "unknown-and-spent"
+    submission.dispatch(queued(other), binding=BINDING)
+    assert wire.posts == 2
