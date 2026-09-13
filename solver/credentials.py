@@ -1,13 +1,12 @@
-"""The one list of credential variable names, and which of them must never be shown.
+"""Live credential names, historical scanner names, and non-secret Run configuration.
 
 It lives here rather than in `scripts/` because of who reads it: the redactor runs *inside* the
 image, and the image copies `solver/` and nothing else. A second copy beside the container would
 be a rule that exists in two places, which is a rule that will disagree — and the direction it
 would disagree in is a credential declared for the reporter and not for the redactor.
 
-Both tuples travel together even though only the first is read in the image. They are one
-classification rather than two lists — a name belongs to exactly one of them, and splitting them
-across files is what would let a name end up in both or in neither.
+The live and historical sets are deliberately distinct: removed inference variables must be
+refused at Boot while their old values remain scanner vocabulary for historical evidence.
 
 [ADR-0010](../docs/adr/0010-the-subscription-is-the-credential-and-nothing-waits-for-a-human.md)
 requires a test asserting this set covers *"every secret variable in `.env.example`"*. Binding it
@@ -17,33 +16,35 @@ and not in the image; the names themselves are here, so both readers have one so
 
 from __future__ import annotations
 
-# Never printed, never logged, never committed. Broader than the template on purpose: over-covering
-# costs a mangled Observation, under-covering costs a leaked run, so a name that is plausibly in
-# play belongs here even where `.env.example` does not declare it. `ANTHROPIC_AUTH_TOKEN` is the
-# standing example — the template names it in prose as the variable to use when the Solver calls the
-# Messages API directly, and prose is not a declaration.
+# Live environment secrets: never printed, logged, or committed.
 SECRETS = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
     "CTFD_API_TOKEN",
-    "OPENAI_API_KEY",
     "CPA_TOKEN",
     "TEAM_KEY",
 )
+
+# Names removed from the live credential surface by ADR-0040. They remain scanner vocabulary so
+# promoted historical evidence can still be checked against credentials that older Runs held.
+HISTORICAL_SECRETS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+)
+SCANNED_SECRETS = (*SECRETS, *HISTORICAL_SECRETS)
+FORBIDDEN_ENVIRONMENT = (*HISTORICAL_SECRETS, "CODEX_HOME_METERED")
 
 # Declared in the template and deliberately *not* secret. `CTFD_URL` is the guard that decides which
 # competition the Solver enters, so a record that redacted it would hide the one field a post-mortem
 # needs to tell "played badly" from "played the wrong board". The other three are the same class of
 # thing — which Run this is, how long it may last, and which model it thinks with — and every one of
-# them is a field a post-mortem reads rather than a value anyone could spend —
-# `CODEX_HOME_METERED` is a path, and the credential it points at is a file the CLI wrote.
+# them is a field a post-mortem reads rather than a value anyone could spend.
 #
 # They are here rather than in a second list beside the boot check for the reason the secrets are:
 # `solver/boot.py` reads *this* tuple to decide what it is looking at, so a name declared in
 # `.env.example` and forgotten in one of the two places is a failing test rather than a Run that
 # started short a value (ADR-0010).
-NOT_SECRETS = ("CTFD_URL", "RUN_ID", "RUN_SECONDS", "CODEX_MODEL", "CODEX_HOME_METERED")
+NOT_SECRETS = ("CTFD_URL", "RUN_ID", "RUN_SECONDS", "CODEX_MODEL")
 
 # The complement, and the reason it lives beside the two lists above rather than in either module
 # that spawns a child: **every** child gets exactly these four names and nothing else. The recon

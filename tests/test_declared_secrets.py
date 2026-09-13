@@ -9,7 +9,6 @@ the one list that settles it.
 """
 
 import declared_secrets
-import pytest
 
 TEMPLATE = declared_secrets.REPO_ROOT / ".env.example"
 
@@ -32,12 +31,11 @@ def test_a_name_is_never_both_a_secret_and_not_one():
     assert not set(declared_secrets.SECRETS) & set(declared_secrets.NOT_SECRETS)
 
 
-@pytest.mark.parametrize("name", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
-def test_the_commented_out_optional_keys_are_found(name: str):
-    """The whole bug. Both are commented out in the template because an empty value is not an unset
-    one, and the obvious parser therefore misses exactly the two keys that cost money."""
-    assert name in declared_secrets.template_declarations(TEMPLATE)
-    assert name in declared_secrets.SECRETS
+def test_obsolete_inference_credentials_are_not_declared():
+    obsolete = {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME_METERED"}
+
+    assert obsolete.isdisjoint(declared_secrets.template_declarations(TEMPLATE))
+    assert obsolete.isdisjoint(declared_secrets.SECRETS)
 
 
 def test_prose_naming_a_variable_is_not_a_declaration(tmp_path):
@@ -60,12 +58,3 @@ def test_the_url_is_declared_and_is_not_a_secret():
     board."""
     assert "CTFD_URL" in declared_secrets.NOT_SECRETS
     assert "CTFD_URL" not in declared_secrets.SECRETS
-
-
-def test_a_credential_named_only_in_prose_is_still_covered():
-    """`ANTHROPIC_AUTH_TOKEN` is the standing case for the subset rule, and the template-to-set test
-    above cannot guard it: the template names it in a sentence rather than declaring it, so deleting
-    it from `SECRETS` would break nothing. The redactor may cover more than the template; this is
-    what stops "more" from quietly becoming "the same"."""
-    assert "ANTHROPIC_AUTH_TOKEN" in declared_secrets.SECRETS
-    assert "ANTHROPIC_AUTH_TOKEN" not in declared_secrets.template_declarations(TEMPLATE)

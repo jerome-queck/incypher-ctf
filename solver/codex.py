@@ -140,12 +140,10 @@ WATCH_SLICE_SECONDS = 1.0
 
 @dataclass(frozen=True)
 class Credential:
-    """One rung of the chain (ADR-0010): a slot name, a model id, and a logged-in `CODEX_HOME`.
+    """A native Codex slot, model id, and logged-in `CODEX_HOME`.
 
-    All three are config values and none is code, which is what lets a practice Run lead with a
-    different model, or the scored Run fall through to metered billing, without a rebuild. There is
-    no key field on purpose: the CLI authenticates by file, and a key in the child's environment
-    would be a secret in the environment of the process running challenge-supplied code.
+    There is no key field: native Codex authenticates by its broker-private file store. CPA is a
+    separate Harness, and no metered/API-key fallback is represented here.
     """
 
     slot: str

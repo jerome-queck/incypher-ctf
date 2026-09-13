@@ -244,6 +244,10 @@ clear_env() {
   printf '  %s✓ removed%s %s from %s\n' "$GREEN" "$RESET" "$1" "$ENV_FILE"
 }
 
+for obsolete_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_HOME_METERED; do
+  clear_env "$obsolete_name"
+done
+
 # Where an event's files live — the profile a Board is resolved through, and the rules snapshot it
 # is diffed against. Spelled once, because a second copy of a path is the copy that drifts.
 PROFILES=docs/competitions
@@ -406,37 +410,12 @@ write_env RUN_ID "$RUN_ID"
 pause
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
-stage "How the Solver pays for inference"
-say "Practice runs go on the subscription: no per-token cost, but a quota that hard-stops"
-say "until it resets. Competition day goes on a metered key: it costs money and never"
-say "hits a cliff mid-run."
-say ""
-warn "Exactly one of these may be set. An empty leftover still shadows the other, and"
-warn "setting both makes the SDK send two auth headers, which the API rejects outright."
-say ""
-if confirm "Practice run on the subscription? (No = metered key for competition day.)"; then
-  step "In another terminal, run:  claude setup-token"
-  step "Complete the browser login it opens, then copy the token it prints."
-  ask_secret CLAUDE_CODE_OAUTH_TOKEN "Paste the token (sk-ant-oat01-...):"
-  if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-    write_env CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_CODE_OAUTH_TOKEN"
-    clear_env ANTHROPIC_API_KEY
-    clear_env ANTHROPIC_AUTH_TOKEN
-  else
-    note "left as-is"
-  fi
-else
-  open_url "https://console.anthropic.com/settings/keys"
-  step "API keys -> Create key -> copy it."
-  ask_secret ANTHROPIC_API_KEY "Paste the metered API key (sk-ant-api03-...):"
-  if [ -n "$ANTHROPIC_API_KEY" ]; then
-    write_env ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
-    clear_env CLAUDE_CODE_OAUTH_TOKEN
-    clear_env ANTHROPIC_AUTH_TOKEN
-  else
-    note "left as-is"
-  fi
-fi
+stage "Prepare inference authentication"
+say "The Solver uses native Codex and the private CPA Harness. Neither takes an API key"
+say "from .env. Native Codex reads its subscription login from CODEX_HOME; CPA owns a"
+say "separate private OAuth store."
+step "Before the Run, authenticate native Codex inside the container with: codex login --device-auth"
+note "Only native Codex and CPA authentication are supported."
 pause
 
 # ── 7 ─────────────────────────────────────────────────────────────────────

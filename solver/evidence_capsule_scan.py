@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from solver.credentials import SECRETS
+from solver.credentials import SCANNED_SECRETS
 from solver.env_file import assignments, environment_sources
 from solver.evidence_capsule_contracts import CapsuleRefused, SanitizationPolicy
 from solver.evidence_capsule_vault import MacOSKeychainScannerVault, ScannerVaultReader, read_scanner_vault
@@ -93,7 +93,7 @@ class HostSanitizationAuthority:
             raise CapsuleRefused("canonical .env is not completely readable") from error
         vault = read_scanner_vault(self._vault_reader)
         current = set(vault.current)
-        for name in SECRETS:
+        for name in SCANNED_SECRETS:
             value = active_values.get(name)
             if value is not None and (not value.strip() or (name, value) not in current):
                 raise CapsuleRefused(f"active credential {name} is absent from the scanner vault current set")

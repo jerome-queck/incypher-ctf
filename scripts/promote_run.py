@@ -76,7 +76,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import credentials_held  # noqa: E402
 import env_file  # noqa: E402
 import stream  # noqa: E402
-from solver.credentials import SECRETS  # noqa: E402
+from solver.credentials import SCANNED_SECRETS  # noqa: E402
 from solver.redaction import Redactor  # noqa: E402
 
 # Where this repository's own instructions tell `conformance/install-gitleaks.sh` to put the pinned
@@ -137,7 +137,7 @@ def held(directory: Path) -> list[tuple[str, str]]:
     values: list[tuple[str, str]] = []
     for path in credentials_held.env_files(directory):
         for name, value in env_file.assignments(path.read_text()).items():
-            if name in SECRETS and value.strip() and (name, value) not in values:
+            if name in SCANNED_SECRETS and value.strip() and (name, value) not in values:
                 values.append((name, value))
     return values
 

@@ -20,13 +20,11 @@ NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
 
 @pytest.fixture
 def homes(tmp_path):
-    """Two `CODEX_HOME` directories, only the first of them logged in — which is the shape a
-    practice Run has, and the shape ADR-0010 calls *absence is the control*."""
-    subscription, metered = tmp_path / "codex", tmp_path / "codex-metered"
+    """The one native Codex credential store offered to a Run."""
+    subscription = tmp_path / "codex"
     subscription.mkdir()
     (subscription / boot.AUTH).write_text("{}")
-    metered.mkdir()
-    return {boot.SUBSCRIPTION: subscription, boot.METERED: metered}
+    return {boot.SUBSCRIPTION: subscription}
 
 
 def env(**overrides):
@@ -78,7 +76,7 @@ def test_a_missing_credential_refuses_the_run_rather_than_beginning_the_loop(nam
         setup(env(**{name: ""}), homes=homes)
 
 
-@pytest.mark.parametrize("name", ["TEAM_KEY", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])
+@pytest.mark.parametrize("name", ["TEAM_KEY", "CPA_TOKEN"])
 def test_an_empty_value_is_not_an_unset_one(name, homes):
     """The trap `docs/credentials.md` names, now enforced. An empty variable occupies its slot in a
     client's credential search the moment it exists, so it authenticates with nothing and falls
@@ -88,30 +86,27 @@ def test_an_empty_value_is_not_an_unset_one(name, homes):
         setup(env(**{name: ""}), homes=homes)
 
 
-def test_absence_is_the_control_and_costs_nothing(homes):
-    """The metered credential lives only in the scored Board's active `.env`, so a practice Run does not
-    hold it at all — and structurally cannot spend money. Its absence must therefore be ordinary."""
+def test_optional_credentials_may_be_absent(homes):
     read = setup(env(), homes=homes)
 
-    assert read.holdings["OPENAI_API_KEY"] == ABSENT
+    assert read.holdings["CPA_TOKEN"] == ABSENT
     assert read.holdings["CTFD_API_TOKEN"] == SET
 
 
-def test_a_metered_rung_nobody_named_is_no_rung_at_all(tmp_path):
-    """*Absence is the control*, as a mechanism rather than a habit. The metered `CODEX_HOME` is
-    named by a variable that belongs only in the scored Board's active `.env`, so a practice Run pointed at
-    another Board cannot reach for metered billing however the disk is arranged — the login can be
-    sitting right there and it is still not in the chain."""
-    subscription, metered = tmp_path / "codex", tmp_path / "metered"
-    for home in (subscription, metered):
-        home.mkdir()
-        (home / boot.AUTH).write_text("{}")
+def test_obsolete_inference_variables_are_not_live_configuration():
+    obsolete = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY"}
 
-    unnamed = setup(env(), homes={boot.SUBSCRIPTION: subscription})
-    named = setup(env(CODEX_HOME_METERED=str(metered)), homes={boot.SUBSCRIPTION: subscription, boot.METERED: metered})
+    assert obsolete.isdisjoint(SECRETS)
+    assert "CODEX_HOME_METERED" not in NOT_SECRETS
 
-    assert [rung.slot for rung in unnamed.chain] == [boot.SUBSCRIPTION]
-    assert [rung.slot for rung in named.chain] == [boot.SUBSCRIPTION, boot.METERED]
+
+@pytest.mark.parametrize(
+    "name",
+    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME_METERED"],
+)
+def test_obsolete_inference_configuration_refuses_before_run_open(name, homes):
+    with pytest.raises(Refusal, match=f"unsupported.*{name}"):
+        setup(env(**{name: "legacy"}), homes=homes)
 
 
 def test_a_credential_this_boards_rules_require_and_we_do_not_hold_refuses(homes):
@@ -139,7 +134,7 @@ def test_the_three_states_are_told_apart():
 
     assert holdings["CTFD_URL"] == SET
     assert holdings["TEAM_KEY"] == EMPTY
-    assert holdings["OPENAI_API_KEY"] == ABSENT
+    assert holdings["CPA_TOKEN"] == ABSENT
 
 
 def test_a_run_id_is_never_minted_here(homes):
@@ -166,20 +161,8 @@ def test_a_chain_with_no_rung_logged_in_refuses(tmp_path):
         setup(env(), homes={boot.SUBSCRIPTION: tmp_path / "nothing"})
 
 
-def test_the_chain_is_subscription_first_and_metered_last(homes):
-    """ADR-0010's order, and the whole meaning of the term: a fallback that waits for a human to
-    reach for it is Intervention, which is the penalised act."""
-    (homes[boot.METERED] / boot.AUTH).write_text("{}")
-
-    read = setup(env(), homes=homes)
-
-    assert [rung.slot for rung in read.chain] == [boot.SUBSCRIPTION, boot.METERED]
-
-
 def test_one_brain_per_run(homes):
-    """v1 switches on exhaustion and on nothing else, so every rung runs the same model — and which
-    model a subscription serves is account state, so it is config rather than a constant."""
-    (homes[boot.METERED] / boot.AUTH).write_text("{}")
+    """Which native model a subscription serves is account state, so it is config rather than a constant."""
 
     read = setup(env(CODEX_MODEL="gpt-5-mini"), homes=homes)
 

@@ -23,7 +23,7 @@ from solver.evidence_capsule_contracts import (
 from solver.evidence_capsule_reader import read_evidence, verify_evidence_content
 from solver.evidence_capsule_scan import HostSanitizationAuthority
 from solver.evidence_capsule_vault import VAULT_KIND, vault_receipt
-from solver.credentials import SECRETS
+from solver.credentials import SCANNED_SECRETS
 from solver.board_broker_contracts import BoardBrokerRecorded, BoardOperation, BoardOutcome, BoardRecord
 from solver.event_store import EventStore
 from solver.event_store_contracts import (
@@ -162,7 +162,7 @@ def vault_body(store, *, current=None, historical=(), source=None, version=1, at
             source = (snapshot.run_id, snapshot.chain_head)
         except RuntimeError:
             source = (store.run_id, "0" * 64)
-    values = {name: {"current": [], "historical": []} for name in SECRETS}
+    values = {name: {"current": [], "historical": []} for name in SCANNED_SECRETS}
     for name, value in (("TEAM_KEY", "fixture-current"),) if current is None else current:
         values[name]["current"].append(value)
     for name, value in historical:

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from solver.credentials import SECRETS
+from solver.credentials import SCANNED_SECRETS
 from solver.evidence_capsule_contracts import CapsuleRefused, ScannerVaultIdentity
 from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.strict_json import StrictJSONError, strict_json_object
@@ -124,12 +124,12 @@ def read_scanner_vault(reader: ScannerVaultReader) -> ScannerVault:
     chain_head = through["chain_head"]
     if len(chain_head) != 64 or any(character not in "0123456789abcdef" for character in chain_head):
         raise CapsuleRefused("scanner vault completeness chain head is invalid")
-    if not isinstance(values, dict) or set(values) != set(SECRETS):
+    if not isinstance(values, dict) or set(values) != set(SCANNED_SECRETS):
         raise CapsuleRefused("scanner vault does not attest every declared credential")
 
     secrets: list[tuple[str, str]] = []
     current_secrets: list[tuple[str, str]] = []
-    for name in SECRETS:
+    for name in SCANNED_SECRETS:
         row = values[name]
         if not isinstance(row, dict) or set(row) != {"current", "historical"}:
             raise CapsuleRefused("scanner vault credential history is incomplete")

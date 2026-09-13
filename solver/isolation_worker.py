@@ -52,7 +52,7 @@ checks["sibling"] = (
 checks["board"] = all(name not in os.environ for name in ("CTFD_URL", "CTFD_API_TOKEN", "TEAM_KEY")) and not Path(
     "/run/board.sock"
 ).exists()
-checks["codex"] = all(name not in os.environ for name in ("CODEX_HOME", "OPENAI_API_KEY")) and all(
+checks["codex"] = "CODEX_HOME" not in os.environ and all(
     not Path(path).exists() for path in ("/root/.codex/auth.json", "/run/codex.sock")
 )
 checks["cpa"] = all(name not in os.environ for name in ("CPA_URL", "CPA_TOKEN")) and not Path("/run/cpa.sock").exists()
