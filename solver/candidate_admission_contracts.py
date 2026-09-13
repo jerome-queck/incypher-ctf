@@ -34,6 +34,36 @@ class DerivationKind(str, enum.Enum):
     OSINT_INFERENCE = "osint-inference"
 
 
+class InstanceProvenanceKind(str, enum.Enum):
+    STATIC_NO_INSTANCE = "static-no-instance"
+    AUTHENTICATED_LEDGER = "authenticated-instance-ledger"
+
+
+@dataclass(frozen=True)
+class SubmissionContext:
+    challenge_revision: str
+    instance_provenance: str
+    instance_kind: InstanceProvenanceKind
+
+    def __post_init__(self):
+        if not self.challenge_revision or not self.instance_provenance:
+            raise ValueError("canonical submission context is incomplete")
+
+    @classmethod
+    def static(cls, challenge_revision: str, board_identity: str):
+        return cls(challenge_revision, f"static:{board_identity}", InstanceProvenanceKind.STATIC_NO_INSTANCE)
+
+    @classmethod
+    def authenticated_instance(cls, challenge_revision: str, row_id: str, response_digest: str):
+        if not row_id or not response_digest:
+            raise ValueError("authenticated Instance provenance is incomplete")
+        return cls(
+            challenge_revision,
+            f"ledger:{row_id}:{response_digest}",
+            InstanceProvenanceKind.AUTHENTICATED_LEDGER,
+        )
+
+
 @dataclass(frozen=True)
 class CandidateDerivation:
     kind: DerivationKind
