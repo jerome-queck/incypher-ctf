@@ -129,11 +129,25 @@ def _fixed_point(
     names.discard("solver/runtime_qualification.py")
     names.update(
         {
+            "scripts/lock_apt_closure.py",
+            "scripts/lock_sage_closure.py",
+            "scripts/qualify_crypto_profile.py",
             "scripts/qualify_runtime_evidence.py",
             "scripts/runtime_qualification.py",
+            "scripts/verify_sage_closure.py",
+            "solver/crypto_tool_contract.py",
+            "solver/crypto_tool_receipt.py",
+            "tool-supply/receipts/tool-crypto.core.json",
+            "tool-supply/receipts/tool-crypto.json",
             "tool-supply/receipts/tool-resident.json",
+            "tool-supply/generated/rootfs/usr/local/libexec/incypher-tool-crypto.py",
         }
     )
+    for root in (
+        ROOT / "tool-supply/fixtures/tool-crypto",
+        ROOT / "tool-supply/generated/rootfs/opt/solver/tool-supply/tool-crypto",
+    ):
+        names.update(str(path.relative_to(ROOT)) for path in root.rglob("*") if path.is_file())
     inputs = {name: _digest(ROOT / name) for name in sorted(names)}
     components = {
         name: digest
@@ -215,6 +229,7 @@ def _candidate_manifest(
     current = parse_manifest((EVIDENCE / "candidate-manifest.json").read_bytes())
     selected_profile = copy.deepcopy(current["selected_profile"])
     selected_profile["isolation"]["profile_digest"] = fixed["runtime_profile_digest"]
+    selected_profile["tool_policy"] = f"resident-catalogue:{fixed['catalogue_digest']}"
     profile_basis = copy.deepcopy(selected_profile)
     profile_basis.pop("profile_digest")
     selected_profile["profile_digest"] = hashlib.sha256(canonical_bytes(profile_basis)).hexdigest()
@@ -238,6 +253,18 @@ def _candidate_manifest(
         ),
     }
     for path, capsule in capsules:
+        if capsule["ticket"] == 299:
+            from solver.crypto_tool_receipt import manifest_receipt as crypto_manifest_receipt
+
+            inventory = (ROOT / "tool-supply/generated/inventory.json").read_bytes()
+            crypto = json.loads((path / "tool-crypto.json").read_bytes())
+            receipt = crypto_manifest_receipt(crypto, inventory)
+            receipts = [row for row in receipts if row["ref"] != receipt["ref"]]
+            receipts.append(receipt)
+            row = next(item for item in requirements if item["row_id"] == "core.tool-surface")
+            row["evidence_refs"] = [item for item in row["evidence_refs"] if not item.startswith("capsule-content:")]
+            row["evidence_refs"].append("capsule-content:" + _digest(path / "capsule.json"))
+            continue
         row_id, reference, kind, receipt_name, reason = links[capsule["ticket"]]
         receipt = path / receipt_name
         receipts = [row for row in receipts if row["ref"] != reference]
@@ -349,6 +376,24 @@ def _incident_capsule(context: _CapsuleContext) -> tuple[Path, dict[str, object]
     )
 
 
+def _crypto_capsule(context: _CapsuleContext) -> tuple[Path, dict[str, object]]:
+    supply = ROOT / "tool-supply"
+    return _capsule(
+        context.private_key,
+        context.public,
+        context.fixed,
+        context.inputs,
+        ticket=299,
+        directory="299-tool-crypto",
+        artifacts={
+            "inventory.json": supply / "generated/inventory.json",
+            "tool-crypto.core.json": supply / "receipts/tool-crypto.core.json",
+            "tool-crypto.json": supply / "receipts/tool-crypto.json",
+        },
+        observed_results=["supply:pass", "solve:pass", "isolation:pass", "profile-size:pass"],
+    )
+
+
 def _retain_evidence(
     private_key: Path,
     public: bytes,
@@ -357,17 +402,22 @@ def _retain_evidence(
     strict: dict[str, object],
     strict_path: Path,
     runtime_observation: Path,
-) -> tuple[tuple[Path, dict[str, object]], tuple[Path, dict[str, object]]]:
+) -> tuple[
+    tuple[Path, dict[str, object]],
+    tuple[Path, dict[str, object]],
+    tuple[Path, dict[str, object]],
+]:
     old = json.loads((EVIDENCE / "293-serial-submission/capsule.json").read_bytes())
     fixed, inputs = _fixed_point(binding, old, strict)
     context = _CapsuleContext(private_key, public, fixed, inputs, observations, runtime_observation, strict_path)
     serial = _serial_capsule(context)
     incident = _incident_capsule(context)
-    _candidate_manifest(private_key, fixed, [serial, incident])
-    return serial, incident
+    crypto = _crypto_capsule(context)
+    _candidate_manifest(private_key, fixed, [serial, incident, crypto])
+    return serial, incident, crypto
 
 
-def _finalize(serial: Path, incident: Path) -> None:
+def _finalize(serial: Path, incident: Path, crypto: Path) -> None:
     subprocess.run(["docker", "builder", "prune", "--all", "--force"], check=True)
     strict_runtime.enforce_host_storage("competition", subprocess.run)
     subprocess.run(
@@ -376,6 +426,7 @@ def _finalize(serial: Path, incident: Path) -> None:
             str(ROOT / "scripts/verify_runtime_evidence.py"),
             str(serial),
             str(incident),
+            str(crypto),
         ],
         check=True,
     )
@@ -388,10 +439,10 @@ def qualify(private_key: Path) -> Path:
     binding = strict_runtime.build_image(subprocess.run)
     work = Path(tempfile.mkdtemp(prefix="runtime-qualification-372-", dir=STATE))
     observations, strict, strict_path, runtime_observation = _run_candidate(binding, work)
-    serial, incident = _retain_evidence(
+    serial, incident, crypto = _retain_evidence(
         private_key, public, binding, observations, strict, strict_path, runtime_observation
     )
-    _finalize(serial[0], incident[0])
+    _finalize(serial[0], incident[0], crypto[0])
     return work
 
 

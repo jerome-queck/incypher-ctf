@@ -64,7 +64,7 @@ def test_every_binary_is_mapped_to_its_own_bytes_on_every_architecture():
     """A per-architecture download is the trap: a URL naming one of them builds green on the runner
     and 404s on the machine that competes. One digest per binary per architecture, all distinct,
     because a digest covering two downloads is a digest checking nothing."""
-    digests = re.findall(r"ARG [A-Z0-9_]*SHA256_[A-Z0-9]+=([0-9a-f]{64})", instructions())
+    digests = re.findall(r"ARG (?:CODEX|CODE_MODE_HOST)_SHA256_[A-Z0-9]+=([0-9a-f]{64})", instructions())
     wanted = len(installed()) * len(ARCHITECTURES)
 
     assert len(digests) == wanted, f"{len(installed())} binaries x {len(ARCHITECTURES)} arches wants {wanted} digests"

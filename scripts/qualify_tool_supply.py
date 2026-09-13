@@ -131,7 +131,7 @@ def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> d
     except (KeyError, StopIteration, TypeError) as error:
         raise ReceiptInvalid(f"no generated component named {component_id}") from error
     handle_solve = None
-    if profile == "resident":
+    if component.get("capability_policies"):
         cache = REPO_ROOT / ".cache"
         cache.mkdir(exist_ok=True)
         runner(

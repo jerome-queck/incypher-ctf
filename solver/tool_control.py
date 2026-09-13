@@ -150,32 +150,75 @@ RESIDENT_COMMANDS = {
     "solver.smt": ("python3", "python3-z3"),
 }
 
+PROFILE_COMMANDS = {
+    "resident": RESIDENT_COMMANDS,
+    "tool-crypto": {
+        "crypto.asymmetric": ("python3", "python3-pycryptodome"),
+        "crypto.cas": ("sage", "sagelib"),
+        "crypto.classical": ("python3", "python3-pycryptodome"),
+        "crypto.encoding": ("python3", "python3-pycryptodome"),
+        "crypto.lattice": ("python3", "python3-fpylll"),
+        "crypto.number-theory": ("python3", "python3-gmpy2"),
+        "crypto.hash-crack": ("john", "john"),
+        "crypto.symmetric-hash": ("python3", "python3-pycryptodome"),
+        "crypto.certificate": ("openssl", "openssl"),
+    },
+}
+
+
+def profile_components(
+    inventory_path: Path, profile_id: str, *, require_complete: bool = True
+) -> tuple[ToolComponent, ...]:
+    """Load one locked Tool profile with its bounded invocation policies."""
+
+    commands = PROFILE_COMMANDS.get(profile_id)
+    if commands is None:
+        raise ValueError(f"unknown Tool profile: {profile_id}")
+    return _profile_components(inventory_path, profile_id, commands, require_complete=require_complete)
+
 
 def resident_components(inventory_path: Path, *, require_complete: bool = True) -> tuple[ToolComponent, ...]:
     """Load the locked resident capability catalogue with bounded invocation policy."""
+
+    return profile_components(inventory_path, "resident", require_complete=require_complete)
+
+
+def attempt_components(inventory_path: Path) -> tuple[ToolComponent, ...]:
+    """Load every Tool profile admitted for production Attempts."""
+
+    return resident_components(inventory_path) + profile_components(inventory_path, "tool-crypto")
+
+
+def _profile_components(
+    inventory_path: Path,
+    profile_id: str,
+    commands: Mapping[str, tuple[str, str]],
+    *,
+    require_complete: bool,
+) -> tuple[ToolComponent, ...]:
 
     inventory = json.loads(Path(inventory_path).read_text())
     components: list[ToolComponent] = []
     seen: set[str] = set()
     for supplied in inventory["components"]:
-        if "resident" not in supplied["profiles"]:
+        if profile_id not in supplied["profiles"]:
             continue
         versions = {item["name"]: item["version"] for item in supplied["packages"]}
         files = {item["destination"]: item for item in supplied["files"]}
         policies = supplied.get("capability_policies", {})
         for capability_id in supplied["capability_ids"]:
-            if capability_id in seen or capability_id not in RESIDENT_COMMANDS:
-                raise ValueError(f"resident capability catalogue is invalid: {capability_id}")
-            _command, package = RESIDENT_COMMANDS[capability_id]
+            if capability_id in seen or capability_id not in commands:
+                raise ValueError(f"{profile_id} capability catalogue is invalid: {capability_id}")
+            _command, package = commands[capability_id]
             policy = policies.get(capability_id)
             if package not in versions or not isinstance(policy, dict):
-                raise ValueError(f"resident capability has no locked component: {capability_id}")
+                raise ValueError(f"{profile_id} capability has no locked component: {capability_id}")
             argv = policy.get("argv")
             if not isinstance(argv, list) or len(argv) != 4 or argv[-1] != "{input}":
-                raise ValueError(f"resident capability has no safe argv policy: {capability_id}")
+                raise ValueError(f"{profile_id} capability has no safe argv policy: {capability_id}")
             adapter = files.get(supplied["entrypoint"])
             if not isinstance(adapter, dict):
-                raise ValueError(f"resident capability has no locked adapter: {capability_id}")
+                raise ValueError(f"{profile_id} capability has no locked adapter: {capability_id}")
             resource_limits = (
                 ("cpu_seconds", policy["cpu_seconds"]),
                 ("filesystem_bytes", policy["filesystem_bytes"]),
@@ -190,7 +233,7 @@ def resident_components(inventory_path: Path, *, require_complete: bool = True) 
                     capability_id=capability_id,
                     component_id=argv[0],
                     version=supplied["version"],
-                    profiles=("resident",),
+                    profiles=(profile_id,),
                     max_arguments=len(argv),
                     max_input_bytes=0,
                     max_output_bytes=policy["max_output_bytes"],
@@ -207,8 +250,8 @@ def resident_components(inventory_path: Path, *, require_complete: bool = True) 
                     policy_digest=_digest(policy),
                 )
             )
-    if require_complete and seen != set(RESIDENT_COMMANDS):
-        raise ValueError("resident capability catalogue is incomplete")
+    if require_complete and seen != set(commands):
+        raise ValueError(f"{profile_id} capability catalogue is incomplete")
     return tuple(sorted(components, key=lambda item: item.capability_id))
 
 
@@ -566,6 +609,7 @@ class AttemptToolRuntime:
         boot_id: str,
         peer: PeerIdentity,
         lane_id: str = "lane-1",
+        enabled_profiles: Sequence[str] = ("resident", "tool-crypto"),
     ) -> None:
         self._controller = controller
         self._executor = executor
@@ -573,6 +617,7 @@ class AttemptToolRuntime:
         self._boot_id = boot_id
         self._peer = peer
         self._lane_id = lane_id
+        self._enabled_profiles = tuple(enabled_profiles)
         executor.add_generation_revocation(controller.revoke_generation)
 
     def invoke(
@@ -593,7 +638,7 @@ class AttemptToolRuntime:
             attempt_id,
             step_id,
         )
-        _view, handle = self._controller.issue_view(binding, self._peer, enabled_profiles=("resident",))
+        _view, handle = self._controller.issue_view(binding, self._peer, enabled_profiles=self._enabled_profiles)
         return self._controller.invoke(
             object(),
             handle,

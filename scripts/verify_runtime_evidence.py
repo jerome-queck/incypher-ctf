@@ -351,6 +351,22 @@ def _verify_296(capsule: Path, document: dict[str, object], fixed: dict[str, obj
         raise ValueError("#296 Incident containment proof is incomplete")
 
 
+def _verify_299(capsule: Path, _document: dict[str, object], fixed: dict[str, object]) -> None:
+    from solver.crypto_tool_receipt import verify_receipt
+
+    receipt = _json(capsule / "tool-crypto.json")
+    inventory = (capsule / "inventory.json").read_bytes()
+    verify_receipt(receipt, inventory)
+    if (
+        receipt.get("image_digest") != fixed["image_manifest_digest"]
+        or receipt.get("catalogue_digest") != fixed["catalogue_digest"]
+        or receipt.get("outcomes") != {"supply": "pass", "solve": "pass", "isolation": "pass"}
+        or len(receipt.get("capability_ids", [])) != 9
+        or receipt.get("profile_size", {}).get("delta_bytes", 4 * 1024**3 + 1) > 4 * 1024**3
+    ):
+        raise ValueError("#299 Crypto profile proof is incomplete")
+
+
 TICKET_VERIFIERS = {
     269: _verify_269,
     270: _verify_270,
@@ -359,6 +375,7 @@ TICKET_VERIFIERS = {
     293: _verify_293,
     296: _verify_296,
     298: _verify_298,
+    299: _verify_299,
 }
 
 
@@ -412,14 +429,23 @@ def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]],
     resident = _json(checkout / "tool-supply/receipts/tool-resident.json")
     resident_receipt = resident_manifest_receipt(resident, inventory)
     manifest_receipts = {row["ref"]: row for row in candidate["receipts"]}
+    crypto_capsules = [path for path, capsule in capsules if capsule["ticket"] == 299]
+    expected_tool_evidence = ["capsule-content:" + _digest(path / "capsule.json") for path in crypto_capsules]
     if (
         resident.get("image_digest") != candidate["candidate"]["image_digest"]
         or manifest_receipts.get(resident_receipt["ref"]) != resident_receipt
         or rows["core.tool-surface"]["receipt_ref"] != resident_receipt["ref"]
         or rows["core.tool-surface"]["status"] != "implemented"
-        or rows["core.tool-surface"]["evidence_refs"]
+        or not set(expected_tool_evidence).issubset(rows["core.tool-surface"]["evidence_refs"])
     ):
         raise ValueError("candidate manifest carries stale resident Tool evidence")
+    if crypto_capsules:
+        from solver.crypto_tool_receipt import manifest_receipt as crypto_manifest_receipt
+
+        crypto = _json(crypto_capsules[0] / "tool-crypto.json")
+        receipt = crypto_manifest_receipt(crypto, inventory)
+        if manifest_receipts.get(receipt["ref"]) != receipt:
+            raise ValueError("candidate manifest carries stale Crypto Tool evidence")
     expected_rows = {
         269: "core.strict-isolation",
         270: "core.strict-isolation",
@@ -428,6 +454,7 @@ def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]],
         293: "core.submission-tail",
         296: "core.deterministic-recovery",
         298: "core.tool-surface",
+        299: "core.tool-surface",
     }
     for path, capsule in capsules:
         fixed = capsule["fixed_point"]
@@ -460,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             verified.append((capsule, document))
             print(f"verified #{document['ticket']} {capsule}")
         tickets = {document["ticket"] for _capsule, document in verified}
-        if tickets in ({269, 270, 281, 283, 298}, {293}, {293, 296}):
+        if tickets in ({269, 270, 281, 283, 298}, {293}, {293, 296}, {293, 296, 299}):
             roots = {capsule.parent.resolve() for capsule, _document in verified}
             if len(roots) != 1:
                 raise ValueError("capsules do not share one candidate evidence root")

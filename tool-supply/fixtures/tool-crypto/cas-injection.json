@@ -1,0 +1,1 @@
+{"expression":"(__import__('os').system('touch /tmp/incypher-cas-injected'),x^2-3*x+2)[1]"}
