@@ -15,6 +15,7 @@ from solver.capability import CapabilityBinding
 from solver.candidate_admission_contracts import ReadyAdmission, ReadyCandidate
 from solver.write_reservation import Capacity, EffectIdentity, ReservedEffect, RetentionPolicy, WriteAuthority
 from solver.submission import SUBMIT_CANDIDATE_OPERATION
+from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 
 
 SUBMISSION_NEED = Capacity(bytes=32 * 1024, objects=1, operations=3)
@@ -38,6 +39,7 @@ class SerialSubmission:
         timestamp: Callable[[], str],
         board_broker_path: Path,
         open_client: Callable[[Path, CapabilityBinding], BoardBrokerClient] | None = None,
+        identity_for: Callable[[ReadyCandidate], CompleteSubmissionIdentity] | None = None,
     ) -> None:
         self._authority = authority
         self._timestamp = timestamp
@@ -45,6 +47,7 @@ class SerialSubmission:
         self._open_client = open_client or (
             lambda path, binding: BoardBrokerClient.open(path, binding, scope="board.submit")
         )
+        self._identity_for = identity_for
         self._queue = threading.Condition()
         self._pending: dict[str, ReadyAdmission] = {}
         self._busy = False
@@ -59,6 +62,7 @@ class SerialSubmission:
         self, admission: ReadyAdmission, *, binding: CapabilityBinding, pre_wire: Callable[[], None] | None = None
     ) -> SubmissionResult | None:
         candidate = admission.candidate
+        complete_identity = self._identity_for(candidate) if self._identity_for is not None else None
         if candidate.generation_id != binding.generation_id:
             raise ValueError("Candidate generation does not match submission capability")
         with self._queue:
@@ -76,14 +80,19 @@ class SerialSubmission:
             self._busy = True
             self._pending.pop(candidate.identity, None)
         try:
-            return self._dispatch(candidate, binding, admission.ready_at, pre_wire)
+            return self._dispatch(candidate, binding, admission.ready_at, pre_wire, complete_identity)
         finally:
             with self._queue:
                 self._busy = False
                 self._queue.notify_all()
 
     def _dispatch(
-        self, candidate: ReadyCandidate, binding: CapabilityBinding, ready_at: str, pre_wire=None
+        self,
+        candidate: ReadyCandidate,
+        binding: CapabilityBinding,
+        ready_at: str,
+        pre_wire=None,
+        complete_identity: CompleteSubmissionIdentity | None = None,
     ) -> SubmissionResult:
         if not ready_at:
             raise ValueError("Candidate readiness needs its canonical timestamp")
@@ -91,9 +100,20 @@ class SerialSubmission:
             text = candidate.candidate.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError("ready Candidate is not UTF-8") from error
-        effect = EffectIdentity(SUBMIT_CANDIDATE_OPERATION, str(candidate.challenge_id), candidate.identity)
+        if complete_identity is not None:
+            if complete_identity.challenge_id != candidate.challenge_id:
+                raise ValueError("complete submission identity names another Challenge")
+            if complete_identity.candidate_digest != candidate.candidate_digest:
+                raise ValueError("complete submission identity names another Candidate")
+        effect = (
+            EffectIdentity(SUBMIT_CANDIDATE_OPERATION, str(candidate.challenge_id), complete_identity.payload_identity)
+            if complete_identity is not None
+            else EffectIdentity(SUBMIT_CANDIDATE_OPERATION, str(candidate.challenge_id), candidate.identity)
+        )
         effect_id = effect.fingerprint
-        key = f"serial-submit:{candidate.identity}"
+        key = (
+            complete_identity.reservation_id if complete_identity is not None else f"serial-submit:{candidate.identity}"
+        )
         self._authority.reserve(key, effect, SUBMISSION_NEED, retention=RetentionPolicy.RECEIPT)
         reserved_at = self._timestamp()
         requested_at = self._timestamp()
@@ -102,7 +122,18 @@ class SerialSubmission:
         def submit() -> Verdict:
             if pre_wire is not None:
                 pre_wire()
-            result = client.submit(candidate.challenge_id, text)
+            result = client.submit(
+                candidate.challenge_id,
+                text,
+                **(
+                    {
+                        "candidate_id": candidate.identity,
+                        "complete_identity": complete_identity.__dict__,
+                    }
+                    if complete_identity is not None
+                    else {}
+                ),
+            )
             if result.outcome is not BoardOutcome.ANSWERED or not isinstance(result.value, Verdict):
                 raise RuntimeError(f"Board broker classified submit as {result.outcome.value}")
             return result.value

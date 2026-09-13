@@ -16,6 +16,9 @@ from solver.candidate_admission_contracts import (
     ReadyCandidate,
     SubmissionContext,
 )
+from solver.__main__ import _submission_identity_composition
+from solver.event_store import EventStore
+from solver.instance_ledger import POPULATED, LedgerResult, LedgerRow
 from solver.record import Recorder
 from solver.redaction import Redactor
 from solver.manifest import generate_manifest
@@ -62,11 +65,13 @@ class Wire:
         self.lock = threading.Lock()
         self.crash_during = crash_during
         self.candidates = []
+        self.complete_identities = []
 
-    def submit(self, challenge_id, flag):
+    def submit(self, challenge_id, flag, *, candidate_id="", complete_identity=None):
         with self.lock:
             self.posts += 1
             self.candidates.append(flag)
+            self.complete_identities.append((candidate_id, complete_identity))
             self.active += 1
             self.maximum = max(self.maximum, self.active)
         if self.crash_during:
@@ -112,6 +117,84 @@ def service(tmp_path, *, hook=None, wire=None):
         open_client=lambda _path, _binding: network,
     )
     return authority, recorder, network
+
+
+def test_production_identity_composition_replays_epoch_and_binds_canonical_context(tmp_path):
+    static = SimpleNamespace(
+        challenge_id=SimpleNamespace(value=7),
+        revision_digest="revision-from-intake",
+        challenge_type="static",
+    )
+    isolated = SimpleNamespace(
+        challenge_id=SimpleNamespace(value=8),
+        revision_digest="isolated-revision",
+        challenge_type="dynamic_iac",
+    )
+    intake = SimpleNamespace(
+        order_authority=lambda: SimpleNamespace(snapshot=SimpleNamespace(challenges=(static, isolated)))
+    )
+    ledger = LedgerResult(
+        POPULATED,
+        "teams",
+        1,
+        2,
+        "ledger-digest",
+        owned=(LedgerRow("row-8", 8, team_id=2, response_digest="response-digest"),),
+    )
+    store = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
+
+    context_for, identity_for, epoch = _submission_identity_composition(
+        intake, ledger, "https://board.example", store, Clock()
+    )
+    context = context_for(7)
+    candidate = replace(ready(), submission_context=context)
+
+    assert context.challenge_revision == "revision-from-intake"
+    assert context.instance_provenance == "static:https://board.example"
+    assert context_for(8).instance_provenance == "ledger:row-8:response-digest"
+    assert epoch == 1
+    assert identity_for(candidate).document() == {
+        "board_identity": "https://board.example",
+        "challenge_id": 7,
+        "challenge_revision": "revision-from-intake",
+        "instance_provenance": "static:https://board.example",
+        "candidate_digest": "b" * 64,
+        "submission_epoch": 1,
+        "reservation_id": identity_for(candidate).reservation_id,
+        "effect_id": identity_for(candidate).effect_id,
+    }
+
+    replayed = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
+    _, restarted_identity_for, restarted_epoch = _submission_identity_composition(
+        intake, ledger, "https://board.example", replayed, Clock()
+    )
+    assert restarted_epoch == 2
+    assert restarted_identity_for(candidate).submission_epoch == 2
+
+
+def test_serial_submission_sends_complete_identity_to_board_broker(tmp_path):
+    complete = CompleteSubmissionIdentity(
+        "https://board.example",
+        7,
+        "revision-from-intake",
+        "static:https://board.example",
+        "b" * 64,
+        1,
+    )
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire()
+    authority = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+        identity_for=lambda _candidate: complete,
+    )
+
+    authority.dispatch(queued(), binding=BINDING)
+
+    assert wire.complete_identities == [(ready().identity, complete.__dict__)]
 
 
 def test_first_ready_candidate_dispatches_in_the_admission_call_with_one_post(tmp_path):
