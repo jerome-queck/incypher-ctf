@@ -97,30 +97,46 @@ class AuthenticatedSubmissionEvidence:
     source: str
     verdict: str
     candidate_id: str
-    authenticated: bool
     request_id: str
     classified_event_id: str
     binding_digest: str
     peer_identity_digest: str
     effect_id: str
     submission_epoch: int
+    supplied_value_digest: str
+    board_row_id: str
+    row_type: str
+    submitted_at: str
+    complete_identity: Mapping[str, object]
 
     @classmethod
     def from_broker(
         cls,
         result: BoardBrokerResult,
-        *,
-        verdict: str,
-        candidate_id: str,
-        effect_id: str,
-        submission_epoch: int,
     ):
         provenance = result.provenance
+        row = result.value
+        required = {
+            "board_row_id",
+            "row_type",
+            "submitted_at",
+            "request_id",
+            "verdict",
+            "candidate_id",
+            "supplied_value_digest",
+            "effect_id",
+            "submission_epoch",
+            "complete_identity",
+        }
+        if not isinstance(row, Mapping) or set(row) != required or not isinstance(row["complete_identity"], Mapping):
+            raise ValueError("submission ledger row shape is invalid")
+        verdict = str(row["verdict"])
         if verdict not in {"correct", "incorrect", "refused", "paused", "rate-limited"}:
             raise ValueError("unsupported submission-ledger verdict")
         if (
             result.outcome is not BoardOutcome.ANSWERED
             or not result.request_id
+            or row["request_id"] != result.request_id
             or not provenance.classified_event_id
             or not provenance.binding_digest
             or not provenance.peer_identity_digest
@@ -130,14 +146,18 @@ class AuthenticatedSubmissionEvidence:
             "exact-candidate-verdict",
             provenance.endpoint,
             verdict,
-            candidate_id,
-            True,
+            str(row["candidate_id"]),
             result.request_id,
             provenance.classified_event_id,
             provenance.binding_digest,
             provenance.peer_identity_digest,
-            effect_id,
-            submission_epoch,
+            str(row["effect_id"]),
+            int(row["submission_epoch"]),
+            str(row["supplied_value_digest"]),
+            str(row["board_row_id"]),
+            str(row["row_type"]),
+            str(row["submitted_at"]),
+            dict(row["complete_identity"]),
         )
 
 
@@ -150,6 +170,7 @@ class PendingSubmission:
     deadline: float
     disposition: str = "pending"
     provenance: str = ""
+    complete_identity: Mapping[str, object] | None = None
 
 
 class AmbiguousSubmissionFence:
@@ -202,7 +223,12 @@ class AmbiguousSubmissionFence:
                 raise FenceClosed(f"Candidate {candidate_id!r} is already spent")
             wire_started_at = self._wall()
             pending = PendingSubmission(
-                candidate_id, effect_id, challenge_id, wire_started_at, wire_started_at + FENCE_SECONDS
+                candidate_id,
+                effect_id,
+                challenge_id,
+                wire_started_at,
+                wire_started_at + FENCE_SECONDS,
+                complete_identity=identity.document(),
             )
             self._anchors[candidate_id] = (self._clock(), 0.0)
             self._append(
@@ -273,6 +299,11 @@ class AmbiguousSubmissionFence:
                         "peer_identity_digest": getattr(evidence, "peer_identity_digest", ""),
                         "submission_epoch": getattr(evidence, "submission_epoch", 0),
                         "evidence_effect_id": getattr(evidence, "effect_id", ""),
+                        "supplied_value_digest": getattr(evidence, "supplied_value_digest", ""),
+                        "board_row_id": getattr(evidence, "board_row_id", ""),
+                        "row_type": getattr(evidence, "row_type", ""),
+                        "submitted_at": getattr(evidence, "submitted_at", ""),
+                        "evidence_complete_identity": getattr(evidence, "complete_identity", {}),
                     }
                 )
                 disposition = self._definitive(state, evidence)
@@ -288,7 +319,17 @@ class AmbiguousSubmissionFence:
     def _definitive(state: PendingSubmission, evidence: Evidence) -> str:
         if not isinstance(evidence, AuthenticatedSubmissionEvidence):
             return ""
-        if evidence.candidate_id != state.candidate_id or evidence.effect_id != state.effect_id:
+        expected = state.complete_identity or {}
+        if (
+            evidence.candidate_id != state.candidate_id
+            or evidence.effect_id != state.effect_id
+            or evidence.submission_epoch != expected.get("submission_epoch")
+            or evidence.supplied_value_digest != expected.get("candidate_digest")
+            or evidence.complete_identity != expected
+            or evidence.row_type != "submission"
+            or not evidence.board_row_id
+            or not evidence.submitted_at
+        ):
             return ""
         return {
             "correct": "accepted",
@@ -410,6 +451,7 @@ class AmbiguousSubmissionFence:
                     int(row["challenge_id"]),
                     float(row["wire_started_at"]),
                     float(row["deadline"]),
+                    complete_identity=dict(row["complete_identity"]),
                 )
             elif row["event"] == "fence-closed":
                 current = states[candidate_id]
@@ -421,6 +463,7 @@ class AmbiguousSubmissionFence:
                     current.deadline,
                     str(row["disposition"]),
                     str(row["provenance"]),
+                    current.complete_identity,
                 )
         return states
 
@@ -542,6 +585,13 @@ def verify_receipt(path: Path) -> Path:
                 for field in ("request_id", "classified_event_id", "binding_digest", "peer_identity_digest")
             )
             and probe.get("evidence_effect_id") == starts[candidate].get("effect_id")
+            and probe.get("submission_epoch") == starts[candidate].get("complete_identity", {}).get("submission_epoch")
+            and probe.get("supplied_value_digest")
+            == starts[candidate].get("complete_identity", {}).get("candidate_digest")
+            and probe.get("evidence_complete_identity") == starts[candidate].get("complete_identity")
+            and probe.get("row_type") == "submission"
+            and probe.get("board_row_id")
+            and probe.get("submitted_at")
             for probe in probes.get(candidate, [])
         ):
             raise ValueError("definitive ambiguity lacks exact authenticated provenance")

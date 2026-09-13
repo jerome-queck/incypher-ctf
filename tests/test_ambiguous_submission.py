@@ -47,10 +47,25 @@ def fence(tmp_path, clock, probes=(), boot="boot-1", wall=None):
     )
 
 
-def exact(verdict, candidate="candidate-1", effect="effect-1"):
+def exact(verdict, candidate="candidate-1", effect="effect-1", **overrides):
+    complete = identity(candidate)
+    row = {
+        "board_row_id": "row-1",
+        "row_type": "submission",
+        "submitted_at": "2026-09-13T00:00:00Z",
+        "request_id": "request-1",
+        "verdict": verdict,
+        "candidate_id": candidate,
+        "supplied_value_digest": complete.candidate_digest,
+        "effect_id": effect,
+        "submission_epoch": complete.submission_epoch,
+        "complete_identity": complete.document(),
+    }
+    row.update(overrides)
     result = BoardBrokerResult(
         BoardOperation.SUBMIT,
         BoardOutcome.ANSWERED,
+        value=row,
         provenance=BoardProvenance(
             endpoint="/api/v1/submissions",
             classified_event_id="board-event-1",
@@ -59,13 +74,7 @@ def exact(verdict, candidate="candidate-1", effect="effect-1"):
         ),
         request_id="request-1",
     )
-    return AuthenticatedSubmissionEvidence.from_broker(
-        result,
-        verdict=verdict,
-        candidate_id=candidate,
-        effect_id=effect,
-        submission_epoch=1,
-    )
+    return AuthenticatedSubmissionEvidence.from_broker(result)
 
 
 def identity(candidate="candidate-1"):
@@ -115,6 +124,31 @@ def test_unsettled_and_score_change_never_infer_solved_then_expire_at_exactly_si
     assert service.barrier_open is False
     assert service.can_submit("candidate-2") is True
     assert service.can_submit("candidate-1") is False
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"candidate_id": "other"},
+        {"effect_id": "other"},
+        {"submission_epoch": 2},
+        {"supplied_value_digest": "other"},
+        {"row_type": "solve"},
+        {"submitted_at": ""},
+        {"board_row_id": ""},
+        {"request_id": "other"},
+        {"complete_identity": {}},
+    ],
+)
+def test_authenticated_broker_row_mismatch_cannot_close_candidate(tmp_path, override):
+    clock = Clock()
+    complete = identity()
+    try:
+        evidence = exact("correct", effect=complete.effect_id, **override)
+    except ValueError:
+        return
+    service = fence(tmp_path, clock, [evidence])
+    assert service.reconcile(begin(service)).disposition == "pending"
 
 
 @pytest.mark.parametrize("restart_at", [100.0, 114.0, 159.0, 160.0, 190.0])
