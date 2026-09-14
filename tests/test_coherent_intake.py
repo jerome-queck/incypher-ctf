@@ -67,7 +67,7 @@ class ScriptedSource:
                 PEER,
             )
         elif kind == "read-control":
-            body = {"success": False, "message": "invalid field"}
+            body = {"message": "Challenge not found"}
         elif kind == "scoreboard":
             body = {"success": True, "data": {"1": {"name": "team", "score": 900}}}
         elif kind == "mana":
@@ -147,7 +147,7 @@ class ScriptedSource:
             pass_no,
             kind,
             path,
-            200,
+            404 if kind == "read-control" else 200,
             "application/json",
             raw,
             len(raw),
@@ -184,7 +184,7 @@ def test_controller_collects_all_pages_twice_then_publishes_and_projects_v1(tmp_
     assert [call[2] for call in source.calls] == [
         "/api/v1/users/me",
         "/",
-        "/api/v1/challenges?field=intake-is-not-a-field&q=a",
+        "/api/v1/challenges/0",
         "/api/v1/challenges?page=1",
         "/api/v1/challenges?page=2",
         "/api/v1/challenges/2",

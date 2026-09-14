@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import datetime as dt
 import json
 import socket
@@ -23,6 +24,7 @@ from solver.event_store import EventStore
 from solver.redaction import Redactor
 from solver.recovery.incident import RECEIPT
 from solver.recovery.runtime import DeterministicRecovery
+from solver.lease_target_broker import LeaseTargetBroker, target_endpoint
 from solver.target_broker import TargetBrokerRuntime
 from solver.target_broker_contracts import (
     TARGET_EXCHANGE_RECORDED,
@@ -31,6 +33,7 @@ from solver.target_broker_contracts import (
     TargetLimits,
     TargetOutcome,
     TargetProtocol,
+    TargetResult,
 )
 from solver.target_broker_ipc import (
     CLIENT_TIMEOUT_SECONDS,
@@ -39,7 +42,7 @@ from solver.target_broker_ipc import (
     TargetBrokerService,
 )
 from solver.target_broker_receipt import capsule_contract, link_manifest, verify_receipt, write_receipt
-from solver.target_broker_transport import TransportResult
+from solver.target_broker_transport import TransportResult, exchange as target_transport_exchange
 from solver.work_generation import GenerationFence
 from test_attempt_executor import (
     IMAGE_ID,
@@ -51,6 +54,144 @@ from test_attempt_executor import (
 from test_manifest import draft
 
 TEST_CANDIDATE = TargetCandidateBinding(IMAGE_ID, "sha256:" + "b" * 64, "sha256:" + "c" * 64, "linux/arm64", "d" * 64)
+
+
+@pytest.mark.parametrize(
+    ("connection", "expected"),
+    (
+        ("nc target.example 31337", TargetEndpoint(TargetProtocol.TCP, "target.example", 31337)),
+        ("target.example:31337", TargetEndpoint(TargetProtocol.TCP, "target.example", 31337)),
+        ("http://target.example", TargetEndpoint(TargetProtocol.HTTP, "target.example", 80)),
+        ("https://target.example:8443", TargetEndpoint(TargetProtocol.HTTPS, "target.example", 8443)),
+    ),
+)
+def test_lease_connection_is_parsed_into_one_exact_target_endpoint(connection, expected):
+    assert target_endpoint(connection) == expected
+
+
+@pytest.mark.parametrize("connection", ("", "ssh target", "http://target.example/path", "nc target 0"))
+def test_unsupported_or_ambiguous_lease_connection_is_refused(connection):
+    with pytest.raises(ValueError, match="Target connection"):
+        target_endpoint(connection)
+
+
+def test_lease_target_router_publishes_only_current_generation_authority(tmp_path):
+    class Authority:
+        current = True
+
+        def reauthorize(self, _grant):
+            return self.current
+
+    class Runtime:
+        def __init__(self, **fields):
+            self.fields = fields
+            self.revoked = []
+
+        def prepare_attempt(self, binding):
+            self.binding = binding
+
+        def claim(self, _connection, generation_id):
+            assert generation_id == self.binding.generation_id
+            return "opaque-handle"
+
+        def exchange(self, _connection, handle, _request):
+            assert handle == "opaque-handle"
+            return TargetResult(TargetOutcome.ANSWERED, b"answer")
+
+        def revoke(self, handle):
+            self.revoked.append(handle)
+
+        def revoke_generation(self, generation_id):
+            self.revoked.append(generation_id)
+
+    authority = Authority()
+    made = []
+
+    def factory(**fields):
+        made.append(Runtime(**fields))
+        return made[-1]
+
+    router = LeaseTargetBroker(
+        state=tmp_path,
+        run_id="run-1",
+        boot_id="boot-1",
+        candidate=TEST_CANDIDATE,
+        target_authority=authority,
+        timestamp=lambda: "now",
+        runtime_factory=factory,
+    )
+    grant = type(
+        "Grant",
+        (),
+        {
+            "generation_id": "generation-000001",
+            "work_id": "integer:42",
+            "exact_connection": "nc target.example 31337",
+            "connection_digest": "a" * 64,
+        },
+    )()
+    binding = CapabilityBinding("run-1", "boot-1", grant.generation_id, "lane-1", "attempt-1", "step-1")
+    left, right = socket.socketpair()
+    try:
+        router.register(grant)
+        assert router.available(grant.generation_id)
+        router.prepare_attempt(binding)
+        handle = router.claim(left, grant.generation_id)
+        assert router.exchange(left, handle, {"body": ""}).outcome is TargetOutcome.ANSWERED
+        authority.current = False
+        assert router.exchange(left, handle, {"body": ""}).outcome is TargetOutcome.REVOKED
+    finally:
+        left.close()
+        right.close()
+
+    assert made[0].fields["challenge_id"] == "integer:42"
+    assert made[0].fields["endpoint"] == TargetEndpoint(TargetProtocol.TCP, "target.example", 31337)
+    assert made[0].revoked == [grant.generation_id]
+
+
+def test_https_target_transport_wraps_the_pinned_address_with_the_declared_hostname(monkeypatch):
+    class Socket:
+        def __init__(self):
+            self.sent = b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def sendall(self, value):
+            self.sent += value
+
+        def makefile(self, _mode):
+            return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+
+        def close(self):
+            pass
+
+    target = Socket()
+    wrapped = []
+
+    class Context:
+        def wrap_socket(self, opened, *, server_hostname):
+            wrapped.append((opened, server_hostname))
+            return opened
+
+    monkeypatch.setattr("solver.target_broker_transport.socket.create_connection", lambda *_args: target)
+    monkeypatch.setattr("solver.target_broker_transport.ssl.create_default_context", Context)
+
+    result = target_transport_exchange(
+        TargetEndpoint(TargetProtocol.HTTPS, "target.example", 443),
+        "192.0.2.1",
+        TargetLimits(1, 1024, 1024, 1),
+        {"method": "GET", "path": "/", "body": ""},
+        b"",
+    )
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert result.body == b"ok"
+    assert wrapped == [(target, "target.example")]
+    assert b"Host: target.example" in target.sent
 
 
 def claim_client(runtime, service, binding):

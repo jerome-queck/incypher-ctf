@@ -49,6 +49,11 @@ LEDGER = """
 MANA_EXHAUSTED = b'{"success": false, "data": {"message": "You or your team used up all your mana."}}'
 
 
+def authenticated_ledger(page=LEDGER, *, user_id=7, team_id=11, mode="teams"):
+    marker = f'<script>window.init = {{userId: {user_id}, teamId: {team_id}, userMode: "{mode}"}};</script>'
+    return page.replace("<html><body>", f"<html><body>{marker}").encode()
+
+
 def board_of(answers, calls=None):
     """A board answering by `(method, path)`, recording what it was asked."""
 
@@ -240,12 +245,32 @@ def test_the_ledger_answers_with_records_and_never_with_html():
 def test_the_ledger_is_read_by_its_own_column_headings_rather_than_by_position():
     """The Category is already the first column, and a Mana Cost column arrives in front of it
     wherever mana is enabled — so a fixed index reads a different field on every board."""
-    with_mana = LEDGER.replace("<b>Category</b>", "<b>Mana Cost</b></td><th><b>Category</b>").replace(
-        "<tr><td>Pwn", "<tr><td>3</td><td>Pwn"
+    with_mana = (
+        LEDGER.replace("<b>Category</b>", "<b>Mana Cost</b></td><th><b>Category</b>")
+        .replace("<tr><td>Pwn", "<tr><td>3</td><td>Pwn")
+        .replace("<tr><td>Web", "<tr><td>3</td><td>Web")
     )
     board = board_of({("GET", "/plugins/ctfd-chall-manager/instances"): (200, with_mana.encode(), "")})
 
     assert board.instances_held()[0].challenge_name == "Silent Skies"
+
+
+def test_the_ledger_recovers_the_live_templates_unclosed_challenge_cell():
+    live_template = LEDGER.replace(
+        "<td>Silent Skies</td><td>nc 10.0.0.1 1337</td>",
+        "<td><div>Silent Skies</div><td><div>nc 10.0.0.1 1337</div></td>",
+    )
+    board = board_of({("GET", "/plugins/ctfd-chall-manager/instances"): (200, live_template.encode(), "")})
+
+    assert board.instances_held()[0].challenge_name == "Silent Skies"
+
+
+def test_a_truncated_ledger_table_is_never_reported_as_empty():
+    truncated = LEDGER.split("<tbody>")[0] + "<tbody><tr><td>Pwn</td><td>Silent"
+    board = board_of({("GET", "/plugins/ctfd-chall-manager/instances"): (200, truncated.encode(), "")})
+
+    with pytest.raises(BoardFailure, match="ledger"):
+        board.instances_held()
 
 
 def test_a_ledger_holding_nothing_is_read_as_holding_nothing():
@@ -269,3 +294,74 @@ def test_a_redirected_ledger_page_is_a_failure_rather_than_an_empty_one():
 
     with pytest.raises(BoardFailure, match="302"):
         board.instances_held()
+
+
+def test_identity_ledger_falls_back_to_an_authenticated_empty_html_page():
+    empty = LEDGER.split("<tbody>")[0] + "<tbody></tbody></table></div></body></html>"
+    board = board_of(
+        {
+            ("GET", "/api/v1/plugins/ctfd-chall-manager/instances?page=1"): (404, b"not found", ""),
+            ("GET", "/plugins/ctfd-chall-manager/instances"): (200, authenticated_ledger(empty), ""),
+        }
+    )
+
+    page = board.instance_ledger_page(1)
+
+    assert page.status == 200
+    assert page.complete
+    assert page.rows == ()
+    assert page.total_rows == 0
+
+
+def test_identity_ledger_maps_owner_scoped_html_names_to_stable_challenge_ids():
+    one_row = LEDGER.replace(
+        "      <tr><td>Web</td><td>Vital Signs</td><td>https://a.example</td><td>2026-08-25 09:30:00</td><td>2026-08-25 10:30:00</td></tr>\n",
+        "",
+    )
+    changed_wire = one_row.replace("nc 10.0.0.1 1337", "nc 10.0.0.2 7331")
+    challenges = b'{"success":true,"data":[{"id":42,"name":"Silent Skies"}]}'
+
+    def projection(html):
+        return board_of(
+            {
+                ("GET", "/api/v1/plugins/ctfd-chall-manager/instances?page=1"): (404, b"not found", ""),
+                ("GET", "/plugins/ctfd-chall-manager/instances"): (200, authenticated_ledger(html), ""),
+                ("GET", "/api/v1/challenges"): (200, challenges, ""),
+            }
+        ).instance_ledger_page(1)
+
+    before = projection(one_row)
+    after = projection(changed_wire)
+
+    assert before.complete and after.complete
+    assert before.rows[0].challenge_id == 42
+    assert before.rows[0].user_id == 7
+    assert before.rows[0].team_id == 11
+    assert before.rows[0].row_id == after.rows[0].row_id
+    assert before.response_digest != after.response_digest
+
+
+@pytest.mark.parametrize(
+    ("html", "challenges"),
+    (
+        (b"<html>Log in</html>", None),
+        (
+            authenticated_ledger(),
+            b'{"success":true,"data":[{"id":42,"name":"Silent Skies"},{"id":43,"name":"Silent Skies"}]}',
+        ),
+    ),
+    ids=("login-page", "ambiguous-name"),
+)
+def test_identity_ledger_never_invents_ownership_from_unsettled_html(html, challenges):
+    answers = {
+        ("GET", "/api/v1/plugins/ctfd-chall-manager/instances?page=1"): (404, b"not found", ""),
+        ("GET", "/plugins/ctfd-chall-manager/instances"): (200, html, ""),
+    }
+    if challenges is not None:
+        answers[("GET", "/api/v1/challenges")] = (200, challenges, "")
+
+    page = board_of(answers).instance_ledger_page(1)
+
+    assert page.status == 200
+    assert not page.complete
+    assert page.rows == ()

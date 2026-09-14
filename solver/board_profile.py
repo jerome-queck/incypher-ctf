@@ -12,6 +12,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from solver.board import ANSWERED, Mana, instance_ledger_rows
+from solver.board_identity import window_init_scalars
+from solver.board_profile_documents import (
+    PROFILE_ENDPOINTS,
+    challenge_detail_name,
+    profile_document_endpoint,
+    profile_document_sort_key,
+)
 from solver.profile import (
     ABSENT,
     ANONYMOUS_ANSWERED,
@@ -26,18 +33,7 @@ from solver.profile import (
     Rules,
 )
 
-SCHEMA_VERSION = 1
-_WINDOW_INIT = re.compile(rb"window\.init\s*=\s*(.*?)</script", re.DOTALL | re.IGNORECASE)
-PROFILE_ENDPOINTS = {
-    "identity": "/api/v1/users/me",
-    "landing": "/",
-    "read_contract": "/api/v1/challenges?field=intake-is-not-a-field&q=a",
-    "challenges": "/api/v1/challenges",
-    "ledger": "/plugins/ctfd-chall-manager/instances",
-    "mana": "/api/v1/plugins/ctfd-chall-manager/mana",
-    "configs": "/api/v1/configs",
-    "anonymous_challenges": "/api/v1/challenges",
-}
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -77,6 +73,7 @@ class ProfileCycle:
     mana: ProfileDocument
     configs: ProfileDocument
     anonymous_challenges: ProfileDocument
+    challenge_details: tuple[ProfileDocument, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -121,6 +118,7 @@ _DOCUMENT_FIELDS = {
     "mana": ("mana",),
     "configs": ("submissions_per_minute", "configs_outcome", "board_window"),
     "anonymous_challenges": ("unauthenticated_read",),
+    "challenge_details": ("instanced_challenges",),
 }
 
 _PROJECTION_FIELDS = {
@@ -153,21 +151,26 @@ def collect_cycle(
     """Collect the fixed public-contract questions; policy remains in ``qualify``."""
 
     prefix = f"{probe_id}:{cycle}"
+    identity = authenticated(f"{prefix}:identity", PROFILE_ENDPOINTS["identity"], True)
+    landing = authenticated(f"{prefix}:landing", PROFILE_ENDPOINTS["landing"], True)
+    read_contract = authenticated(f"{prefix}:read-contract", PROFILE_ENDPOINTS["read_contract"], True)
+    challenges = authenticated(f"{prefix}:challenges", PROFILE_ENDPOINTS["challenges"], True)
+    details = tuple(
+        authenticated(f"{prefix}:challenge-detail-{challenge_id}", f"/api/v1/challenges/{challenge_id}", True)
+        for challenge_id in _collection_ids(challenges)
+    )
     return ProfileCycle(
-        identity=authenticated(f"{prefix}:identity", PROFILE_ENDPOINTS["identity"], True),
-        landing=authenticated(f"{prefix}:landing", PROFILE_ENDPOINTS["landing"], False),
-        read_contract=authenticated(
-            f"{prefix}:read-contract",
-            PROFILE_ENDPOINTS["read_contract"],
-            True,
-        ),
-        challenges=authenticated(f"{prefix}:challenges", PROFILE_ENDPOINTS["challenges"], True),
-        ledger=authenticated(f"{prefix}:ledger", PROFILE_ENDPOINTS["ledger"], False),
+        identity=identity,
+        landing=landing,
+        read_contract=read_contract,
+        challenges=challenges,
+        ledger=authenticated(f"{prefix}:ledger", PROFILE_ENDPOINTS["ledger"], True),
         mana=authenticated(f"{prefix}:mana", PROFILE_ENDPOINTS["mana"], True),
         configs=authenticated(f"{prefix}:configs", PROFILE_ENDPOINTS["configs"], True),
         anonymous_challenges=anonymous(
             f"{prefix}:anonymous-challenges", PROFILE_ENDPOINTS["anonymous_challenges"], True
         ),
+        challenge_details=details,
     )
 
 
@@ -358,11 +361,15 @@ def decision_from_document(document: Mapping[str, object], rules: Rules) -> Prof
 
 
 def _cycle_projection(cycle: ProfileCycle) -> dict[str, Any]:
-    incomplete = tuple(name for name in ProfileCycle.__dataclass_fields__ if not getattr(cycle, name).complete)
+    incomplete = tuple(name for name, document in profile_cycle_documents(cycle) if not document.complete)
     if incomplete:
         raise _Unsettled(
             "profile response was truncated",
-            _ordered_fields(field for name in incomplete for field in _DOCUMENT_FIELDS[name]),
+            _ordered_fields(
+                field
+                for name in incomplete
+                for field in _DOCUMENT_FIELDS["challenge_details" if name.startswith("challenge_detail_") else name]
+            ),
         )
     try:
         return _project_complete_cycle(cycle)
@@ -377,27 +384,42 @@ def _project_complete_cycle(cycle: ProfileCycle) -> dict[str, Any]:
     if landing.status != 200 or landing.media_type != "text/html":
         raise _Unsettled("authenticated landing page is unreadable", PROFILE_FIELDS)
     identity = _settle(AUTHENTICATED_FIELDS, _json_data, cycle.identity, "authenticated identity")
-    if not isinstance(identity, dict) or not isinstance(identity.get("id"), int):
+    if not isinstance(identity, dict) or not _positive_int(identity.get("id")):
         raise _Unsettled("authenticated identity is malformed", AUTHENTICATED_FIELDS)
     marker = _settle(AUTHENTICATED_FIELDS, _window_init, landing)
     if marker.get("userId") != identity["id"]:
         raise _Unsettled("authenticated landing identity disagrees with users/me", AUTHENTICATED_FIELDS)
-    if marker.get("userMode") == "teams" and marker.get("teamId") != identity.get("team_id"):
-        raise _Unsettled("authenticated landing team disagrees with users/me", AUTHENTICATED_FIELDS)
-    _settle(("read_contract",), _read_contract, cycle.read_contract, landing)
-    challenges = _settle(("instanced_challenges",), _json_contract, cycle.challenges, landing, "Challenge list")
-    if (
-        not isinstance(challenges, list)
-        or any(not isinstance(entry, dict) for entry in challenges)
-        or any(
-            not isinstance(entry.get("id"), int)
-            or not isinstance(entry.get("name"), str)
-            or not isinstance(entry.get("type"), str)
-            for entry in challenges
-        )
+    if marker.get("userMode") == "teams" and (
+        not _positive_int(marker.get("teamId"))
+        or not _positive_int(identity.get("team_id"))
+        or marker["teamId"] != identity["team_id"]
     ):
+        raise _Unsettled("authenticated team identity is partial or inconsistent", AUTHENTICATED_FIELDS)
+    challenges = _settle(("instanced_challenges",), _json_contract, cycle.challenges, landing, "Challenge list")
+    if not _valid_challenge_collection(challenges):
         raise _Unsettled("Challenge list is malformed", ("instanced_challenges",))
-    instanced = sum(entry.get("type") == "dynamic_iac" for entry in challenges)
+    detail_rows = _settle(
+        ("instanced_challenges",),
+        _challenge_details,
+        cycle.challenge_details,
+        challenges,
+        landing,
+    )
+    _settle(
+        ("read_contract",),
+        _challenge_absence_control,
+        cycle.read_contract,
+        landing,
+        (cycle.challenges, cycle.anonymous_challenges, *cycle.challenge_details),
+    )
+    anonymous = _settle(
+        ("unauthenticated_read",),
+        _anonymous_outcome,
+        cycle.anonymous_challenges,
+        landing,
+        challenges,
+    )
+    instanced = sum(entry[2] == "dynamic_iac" for entry in detail_rows)
     chall_manager = _settle(("chall_manager",), _ledger_contract, cycle.ledger, landing, identity)
     if instanced and chall_manager != INSTALLED:
         raise _Unsettled(
@@ -411,11 +433,10 @@ def _project_complete_cycle(cycle: ProfileCycle) -> dict[str, Any]:
         cycle.configs,
         landing,
     )
-    anonymous = _settle(("unauthenticated_read",), _anonymous_outcome, cycle.anonymous_challenges, landing)
     return {
         "identity": {"id": identity["id"], "team_id": identity.get("team_id"), "user_mode": marker.get("userMode")},
         "landing_window": _landing_window(marker),
-        "challenges": sorted((entry["id"], entry["name"], entry["type"]) for entry in challenges),
+        "challenges": detail_rows,
         "instanced_challenges": instanced,
         "chall_manager": chall_manager,
         "mana": mana,
@@ -445,31 +466,12 @@ def _json_data(document: ProfileDocument, name: str) -> Any:
 
 
 def _window_init(document: ProfileDocument) -> dict[str, Any]:
-    match = _WINDOW_INIT.search(document.body)
-    if match is None:
+    marker = window_init_scalars(document.body, ("userId", "teamId", "userMode", "start", "end"))
+    if marker is None:
         raise ValueError("authenticated landing identity marker is absent")
-    block = match.group(1)
-    marker = {name: _javascript_scalar(block, name) for name in ("userId", "teamId", "userMode", "start", "end")}
-    marker = {name: value for name, value in marker.items() if value is not _MISSING}
-    if not isinstance(marker.get("userId"), int) or marker.get("userMode") not in {"users", "teams"}:
+    if not _positive_int(marker.get("userId")) or marker.get("userMode") not in {"users", "teams"}:
         raise ValueError("authenticated landing identity marker is malformed")
     return marker
-
-
-_MISSING = object()
-
-
-def _javascript_scalar(block: bytes, name: str):
-    key = re.escape(name.encode())
-    found = re.search(rb"(?:['\"]?" + key + rb"['\"]?)\s*:\s*(null|-?\d+|'[^']*'|\"[^\"]*\")", block)
-    if found is None:
-        return _MISSING
-    raw = found.group(1)
-    if raw == b"null":
-        return None
-    if raw[:1] in (b"'", b'"'):
-        return raw[1:-1].decode("utf-8", "strict")
-    return int(raw)
 
 
 def _landing_window(marker: Mapping[str, Any]) -> dict[str, Any]:
@@ -491,18 +493,63 @@ def _window_observation(values: Mapping[str, Any]) -> dict[str, Any]:
     return {"outcome": outcome, "value": value}
 
 
-def _read_contract(document: ProfileDocument, landing: ProfileDocument) -> None:
-    if document.status not in (400, 403):
-        raise ValueError("read-contract control was not a CTFd field refusal")
-    payload = _negative_contract(document, landing, "read-contract control", {"application/json"})
-    if not isinstance(payload, dict) or payload.get("success") is not False:
-        raise ValueError("read-contract control was not a CTFd field refusal")
+def _challenge_absence_control(
+    document: ProfileDocument,
+    landing: ProfileDocument,
+    other_documents: tuple[ProfileDocument, ...],
+) -> None:
+    if document.endpoint != PROFILE_ENDPOINTS["read_contract"] or document.status != 404:
+        raise ValueError("known-absent Challenge control was not a genuine negative contract")
+    if document.media_type != "application/json" or not document.body:
+        raise ValueError("known-absent Challenge control was not a genuine negative contract")
+    if document.digest == landing.digest or any(document.digest == other.digest for other in other_documents):
+        raise ValueError("known-absent Challenge control was a catch-all response")
+    try:
+        payload = json.loads(document.body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("known-absent Challenge control was malformed") from error
+    if not isinstance(payload, dict) or payload.get("success") is True:
+        raise ValueError("known-absent Challenge control was not a genuine negative contract")
+
+
+def _challenge_details(
+    documents: tuple[ProfileDocument, ...],
+    challenges: list[dict[str, Any]],
+    landing: ProfileDocument,
+) -> list[tuple[int, str, str, str]]:
+    listed = {entry["id"]: entry for entry in challenges}
+    details: dict[int, dict[str, Any]] = {}
+    for document in documents:
+        challenge_id = int(challenge_detail_name(document.endpoint).rsplit("_", 1)[-1])
+        detail = _json_contract(document, landing, f"Challenge detail {challenge_id}")
+        if not isinstance(detail, dict) or challenge_id in details or detail.get("id") != challenge_id:
+            raise ValueError("Challenge detail set does not corroborate the collection")
+        if (
+            not isinstance(detail.get("name"), str)
+            or not isinstance(detail.get("type"), str)
+            or ("category" in detail and not isinstance(detail["category"], str))
+        ):
+            raise ValueError("Challenge detail is malformed")
+        details[challenge_id] = detail
+    if set(details) != set(listed):
+        raise ValueError("Challenge detail set does not corroborate the collection")
+    rows = []
+    for challenge_id, entry in listed.items():
+        detail = details[challenge_id]
+        if detail["name"] != entry["name"] or detail["type"] != entry["type"]:
+            raise ValueError("Challenge detail disagrees with its collection row")
+        if "category" in entry and detail.get("category") != entry["category"]:
+            raise ValueError("Challenge detail disagrees with its collection row")
+        rows.append((challenge_id, detail["name"], detail["type"], detail.get("category", "")))
+    return sorted(rows)
 
 
 def _ledger_contract(document: ProfileDocument, landing: ProfileDocument, identity: dict[str, Any]) -> str:
     if document.status == 404:
         _negative_contract(document, landing, "Instance ledger absence", {"application/json", "text/html"})
         return ABSENT
+    if 300 <= document.status < 400:
+        raise ValueError("Instance ledger redirected instead of preserving authenticated authority")
     if document.status != 200:
         if document.digest == landing.digest:
             raise ValueError("Instance ledger was a landing-page catch-all")
@@ -554,7 +601,11 @@ def _optional_configs(document: ProfileDocument, landing: ProfileDocument) -> di
     return {"outcome": "answered", "values": {str(entry.get("key")): entry.get("value") for entry in data}}
 
 
-def _anonymous_outcome(document: ProfileDocument, landing: ProfileDocument) -> str:
+def _anonymous_outcome(
+    document: ProfileDocument,
+    landing: ProfileDocument,
+    authenticated_challenges: list[dict[str, Any]],
+) -> str:
     if document.status in (401, 403, 404) or 300 <= document.status < 400:
         _negative_contract(document, landing, "anonymous Challenge refusal", {"application/json", "text/html"})
         return ANONYMOUS_REFUSED
@@ -565,9 +616,64 @@ def _anonymous_outcome(document: ProfileDocument, landing: ProfileDocument) -> s
             raise ValueError("anonymous Challenge list was a landing-page catch-all")
         return ANONYMOUS_UNREADABLE
     data = _json_contract(document, landing, "anonymous Challenge list")
-    if not isinstance(data, list):
-        return ANONYMOUS_UNREADABLE
+    if not _valid_challenge_collection(data):
+        raise ValueError("anonymous Challenge list is malformed")
+    if data == authenticated_challenges:
+        if not data:
+            raise ValueError("authenticated Challenge list is indistinguishable from the synthetic empty collection")
+        raise ValueError("authenticated and anonymous Challenge lists agree")
     return ANONYMOUS_ANSWERED
+
+
+def _collection_ids(document: ProfileDocument) -> tuple[int, ...]:
+    try:
+        payload = json.loads(document.body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ()
+    data = payload.get("data") if isinstance(payload, dict) and payload.get("success") is True else None
+    if not isinstance(data, list):
+        return ()
+    ids = [entry.get("id") for entry in data if isinstance(entry, dict)]
+    return tuple(sorted({item for item in ids if _positive_int(item)}))
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _valid_challenge_collection(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and not any(
+            not isinstance(entry, dict)
+            or not _positive_int(entry.get("id"))
+            or not isinstance(entry.get("name"), str)
+            or not isinstance(entry.get("type"), str)
+            or ("category" in entry and not isinstance(entry["category"], str))
+            for entry in value
+        )
+        and len({entry["id"] for entry in value}) == len(value)
+    )
+
+
+def profile_cycle_documents(cycle: ProfileCycle) -> tuple[tuple[str, ProfileDocument], ...]:
+    """Flatten one variable-width profile cycle into canonical observation names."""
+
+    fixed = tuple((name, getattr(cycle, name)) for name in PROFILE_ENDPOINTS)
+    details = [(challenge_detail_name(document.endpoint), document) for document in cycle.challenge_details]
+    return fixed + tuple(sorted(details, key=lambda item: profile_document_sort_key(item[0])))
+
+
+def profile_cycle_from_documents(documents: Mapping[str, ProfileDocument]) -> ProfileCycle:
+    """Build one cycle from its canonical fixed and variable-width document map."""
+
+    remaining = dict(documents)
+    try:
+        fixed = {name: remaining.pop(name) for name in PROFILE_ENDPOINTS}
+        details = tuple(remaining[name] for name in sorted(remaining, key=profile_document_sort_key))
+    except KeyError as error:
+        raise ValueError("Board-profile document set is incomplete") from error
+    return ProfileCycle(**fixed, challenge_details=details)
 
 
 def _negative_contract(
@@ -586,7 +692,7 @@ def _negative_contract(
         payload = json.loads(document.body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"{name} is malformed") from error
-    if not isinstance(payload, dict) or payload.get("success") is not False:
+    if not isinstance(payload, dict) or payload.get("success") is True:
         raise ValueError(f"{name} is malformed")
     return payload
 
@@ -619,6 +725,9 @@ __all__ = [
     "decision_document",
     "decision_from_document",
     "collect_cycle",
+    "profile_cycle_documents",
+    "profile_document_endpoint",
+    "profile_document_sort_key",
     "qualify",
     "qualify_direct",
     "rules_document",

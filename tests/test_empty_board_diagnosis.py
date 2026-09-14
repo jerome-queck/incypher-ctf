@@ -18,10 +18,7 @@ BOARD = "https://board.example"
 HOUR = dt.timedelta(hours=1)
 EMPTY_LIST = b'{"success": true, "data": []}'
 
-BOGUS_FIELD_REJECTION = (
-    b'{"success": false, "errors": {"field": "value is not a valid enumeration member; '
-    b"permitted: 'name', 'description', 'category', 'type'\"}}"
-)
+KNOWN_ABSENT = b'{"success": false, "message": "Challenge not found"}'
 
 
 def now() -> dt.datetime:
@@ -31,16 +28,15 @@ def now() -> dt.datetime:
 def transport_publishing(
     opens: dt.datetime | None,
     closes: dt.datetime | None,
-    control: tuple[int, bytes] = (400, BOGUS_FIELD_REJECTION),
+    control: tuple[int, bytes] = (404, KNOWN_ABSENT),
 ):
     """A transport whose challenge list is empty and whose landing page publishes the given window.
 
     CTFd embeds the window in `window.init` on every HTML page, which is where `board_window`
     reads it and the only place a competitor can.
 
-    `control` defaults to CTFd's own refusal, because a fixture that answered 200 there would be a
-    board no CTFd install behaves like, and would quietly exempt every case below from the control
-    that runs ahead of them.
+    `control` defaults to CTFd's distinct negative-ID answer. A fixture that mirrored the
+    collection there would quietly exempt every case below from the control that runs ahead of it.
     """
     window = "".join(
         f"'{name}': {int(moment.timestamp())},"
@@ -52,8 +48,8 @@ def transport_publishing(
     def transport(request):
         if request.full_url == f"{BOARD}/":
             return (200, page, "")
-        if "field=" in request.full_url:
-            return (*control, "")
+        if request.full_url == f"{BOARD}/api/v1/challenges/0":
+            return (*control, "", "application/json")
         return (200, EMPTY_LIST, "")
 
     return transport
@@ -188,14 +184,14 @@ def board_answering_the_control(
     )
 
 
-def test_a_board_that_accepts_an_invalid_field_is_not_answering_from_ctfd():
-    """CTFd rejects an unknown `field` in `validate_args` before any handler runs, so a 200 to it
-    is proof the reply was composed somewhere else — and an empty collection from that somewhere
-    is evidence of nothing. Measured on the IN-CYPHER arena, where every collection endpoint
-    answers this way while `/api/v1/challenges/8/solves` returns real rows."""
+def test_a_board_that_mirrors_the_collection_at_an_impossible_id_is_not_corroborated():
+    """Challenge IDs are positive, so a collection-shaped 200 at ID 0 is a synthetic catch-all.
+
+    An empty collection from that layer is evidence of nothing.
+    """
     board = board_answering_the_control(200, EMPTY_LIST)
 
-    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from CTFd"):
+    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from a corroborated CTFd read"):
         ctfd_probe.name_the_cause_of_an_empty_list(board)
 
 
@@ -204,17 +200,16 @@ def test_the_interposed_layer_is_named_before_the_clock_or_the_account():
     told it is closed, which is a true statement about a reply CTFd never composed."""
     board = board_answering_the_control(200, EMPTY_LIST, opens=now() - 100 * HOUR, closes=now() - HOUR)
 
-    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from CTFd"):
+    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from a corroborated CTFd read"):
         ctfd_probe.name_the_cause_of_an_empty_list(board)
 
 
-@pytest.mark.parametrize("status,body", [(400, BOGUS_FIELD_REJECTION), (403, b""), (302, b"")])
-def test_a_board_that_refuses_the_invalid_field_is_diagnosed_on_its_own_terms(status: int, body: bytes):
-    """Any refusal is CTFd-shaped enough to proceed. The control exists to catch the reply that is
-    too agreeable, not to certify the stack that produced a normal one."""
+@pytest.mark.parametrize("status,body", [(403, KNOWN_ABSENT), (302, KNOWN_ABSENT), (404, b"")])
+def test_only_a_complete_json_404_negative_is_corroborated(status: int, body: bytes):
+    """Status, media type, and a nonempty JSON negative all belong to the control."""
     board = board_answering_the_control(status, body)
 
-    with pytest.raises(ctfd_probe.ProbeFailure, match="not a credential fault"):
+    with pytest.raises(ctfd_probe.ProbeFailure, match="did not come from a corroborated CTFd read"):
         ctfd_probe.name_the_cause_of_an_empty_list(board)
 
 
@@ -228,4 +223,4 @@ def test_the_control_costs_nothing_on_a_board_that_lists_challenges():
 
     ctfd_probe.check_challenges_enumerate(Board(BOARD, "a-real-token", transport))
 
-    assert not [url for url in asked if "field=" in url]
+    assert f"{BOARD}/api/v1/challenges/0" not in asked

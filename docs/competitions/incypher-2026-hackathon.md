@@ -89,9 +89,9 @@ the [live-surface recheck](../research/2026-09-05-in-cypher-live-surface-recheck
 and [How the Solver learns which Instances it holds](https://github.com/jerome-queck/incypher-ctf/issues/156).
 
 **The tracked profile is [`incypher-2026-hackathon.board.json`](incypher-2026-hackathon.board.json)**:
-5.5 hours, closing 22 Sep 16:00 SGT. That follows the Imperial agenda and the selected rehearsal
-duration; the Board now advertises 23 Sep 18:00 SGT instead. The Solver records both rather than
-silently replacing one authority with the other.
+the Board/guide close of 23 Sep 18:00 SGT and a 5.5-hour rehearsal duration. The Imperial agenda
+instead ends the scored Run on 22 Sep at 16:00 SGT. The Solver records the published close beside
+that unresolved duration conflict rather than silently inventing a single schedule.
 
 **The competition-day batch is Challenges we have never seen.** The 15 released Challenges are
 explicitly practice-only and remain available on site; the scored set is revealed on 22 September.

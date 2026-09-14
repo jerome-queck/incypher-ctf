@@ -41,6 +41,7 @@ from solver.board_broker_contracts import BoardOutcome
 from solver.record import NO_MODEL, Recorder
 from solver.instance_lease import LeaseCoordinator
 from solver.instance_lease_contracts import LeaseCloseCause, LeaseIdentity, LeasePhase
+from solver.lease_target import LeaseTargetAuthority, LeaseTargetGrant, TargetAuthorityRefused
 from solver.work_generation import GenerationIdentity
 
 # Every line this module writes about itself opens with this, for the reason `solver/recon.py`
@@ -281,6 +282,7 @@ class Instances:
         ledger_identity: AuthenticatedIdentity | None = None,
         ledger_broker: object | None = None,
         coordinator: LeaseCoordinator | None = None,
+        target_authority: LeaseTargetAuthority | None = None,
     ) -> None:
         self._board = board
         self._recorder = recorder
@@ -293,6 +295,18 @@ class Instances:
         self._ledger_identity = ledger_identity
         self._ledger_broker = ledger_broker
         self._coordinator = coordinator
+        self._target_authority = target_authority
+
+    def issue_target(self, lease: Lease, *, attempt_id: str, generation_id: str) -> LeaseTargetGrant:
+        """Issue the exact owned Lease connection to a future Target-broker adapter."""
+
+        if self._target_authority is None or lease.identity is None:
+            raise TargetAuthorityRefused("Target authority requires one controller-owned Lease")
+        return self._target_authority.issue(
+            lease.identity,
+            lease.epoch,
+            generation=GenerationIdentity(generation_id, _work_id(lease.challenge_id), attempt_id),
+        )
 
     def deploy(
         self,

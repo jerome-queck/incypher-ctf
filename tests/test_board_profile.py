@@ -18,7 +18,7 @@ from solver.profile import ABSENT, INSTALLED, UNREADABLE, Rules, discovered, rul
 BOARD = "https://board.example"
 TRACKED = "docs/competitions"
 
-CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "not a valid enumeration member"}}')
+CONTROL_REFUSED = (404, b'{"message": "Challenge not found"}')
 CONTROL_AGREEABLE = (200, b'{"success": true, "data": []}')
 
 LEDGER = (
@@ -45,7 +45,7 @@ class Wire:
     def __init__(
         self, *, listed=None, control=CONTROL_REFUSED, mana=_UNSAID, ledger=LEDGER, configs=None, anonymous_reads=False
     ):
-        self.listed = [] if listed is None else listed
+        self.listed = [{"id": 1, "name": "alpha", "type": "standard"}] if listed is None else listed
         self.anonymous_reads = anonymous_reads
         self.control = control
         self.mana = {"used": 0, "total": 4} if mana is _UNSAID else mana
@@ -56,7 +56,7 @@ class Wire:
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
         self.asked.append(path)
-        if "field=" in path:
+        if path == "/api/v1/challenges/0":
             return (*self.control, "", "application/json")
         if path == "/api/v1/users/me":
             return self._answer({"id": 7, "team_id": 11})
@@ -64,9 +64,19 @@ class Wire:
             body = b'<script>window.init = {"userId": 7, "teamId": 11, "userMode": "teams"};</script>'
             return (200, body, "", "text/html; charset=utf-8")
         if path == "/api/v1/challenges":
-            if request.get_header("Authorization") or self.anonymous_reads:
+            if request.get_header("Authorization"):
                 return self._answer(self.listed)
+            if self.anonymous_reads:
+                return self._answer([])
             return (302, b"", "/login", "text/html")
+        if path.startswith("/api/v1/challenges/"):
+            challenge_id = int(path.rsplit("/", 1)[-1])
+            detail = next((item for item in self.listed if item["id"] == challenge_id), None)
+            return (
+                self._answer(detail)
+                if detail is not None
+                else (404, b'{"message":"not found"}', "", "application/json")
+            )
         if path.endswith("/mana"):
             if self.mana is None:
                 return (404, b'{"success": false}', "", "application/json")
@@ -158,6 +168,15 @@ def test_the_board_that_needs_a_team_key_says_so_and_the_one_that_does_not_says_
     Brunner has never heard of the word."""
     assert rules_for("https://hackathon.in-cypher.com", TRACKED).requires == ("TEAM_KEY",)
     assert rules_for("https://global.brunnerctf.dk", TRACKED).requires == ()
+
+
+def test_incypher_tracks_the_published_close_rehearsal_duration_and_both_observed_wrappers():
+    rules = rules_for("https://hackathon.in-cypher.com", TRACKED)
+
+    assert rules.window_seconds == 19_800
+    assert rules.closes_at is not None
+    assert rules.closes_at.isoformat() == "2026-09-23T18:00:00+08:00"
+    assert rules.flag_wrappers == (r"INCYPHER\{[^}]{1,256}\}", r"flag\{[^}]{1,256}\}")
 
 
 def test_a_required_credential_nothing_declares_is_refused(tmp_path):
@@ -312,7 +331,7 @@ def test_a_board_that_fails_the_read_contract_control_refuses_the_run():
     would let Order rank an empty set while reporting success for five and a half hours."""
     wire = Wire(control=CONTROL_AGREEABLE)
 
-    with pytest.raises(Refusal, match="not a CTFd field refusal"):
+    with pytest.raises(Refusal, match="known-absent Challenge control"):
         discovered(*wire.boards(), RULES)
 
 
@@ -323,7 +342,7 @@ def test_each_required_coherence_cycle_asks_the_control_once():
     with pytest.raises(Refusal):
         discovered(*wire.boards(), RULES)
 
-    assert sum("field=" in path for path in wire.asked) == 2
+    assert wire.asked.count("/api/v1/challenges/0") == 2
 
 
 def test_a_flag_wrapper_that_does_not_compile_refuses_before_anything_is_swept():

@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import re
 from dataclasses import replace
+from types import SimpleNamespace
 
 from solver.board import Board, Reply
 from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome
@@ -27,7 +28,7 @@ from solver.schedule import Dials, Scheduler, Window
 BOARD = "https://board.example"
 NOON = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
 WRAPPER = r"brunner\{[^}]{1,256}\}"
-CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "not valid"}}')
+CONTROL_REFUSED = (404, b'{"success": false, "message": "Challenge not found"}')
 PROFILE_LANDING = b'<script>window.init = {"userId": 7, "teamId": null, "userMode": "users"};</script>'
 
 RULES = Rules(
@@ -97,7 +98,7 @@ class Wire:
 
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
-        if "field=" in path:
+        if path == "/api/v1/challenges/0":
             return (*CONTROL_REFUSED, "", "application/json")
         if path == "/api/v1/users/me":
             return self._answer({"id": 7, "team_id": None})
@@ -116,6 +117,8 @@ class Wire:
                 files.append(f"files/bb{found['id']}/clue-{found['id']}.txt?token=signed")
             return self._answer({**found, "description": self.described(found), "max_attempts": 0, "files": files})
         if path == "/api/v1/challenges":
+            if not request.get_header("Authorization"):
+                return (302, b"", "/login", "text/html")
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):
             return self._answer({})
@@ -433,6 +436,47 @@ def test_instance_recovery_opens_the_production_broker_client_with_full_binding(
     ) == ("gate", "boot-000001", "generation-000001", "lane-1", "1-1", "step-1")
     assert observed["challenge_id"] == 1
     assert observed["closed"] is True
+
+
+def test_deploy_publishes_only_lease_derived_target_authority_to_the_runtime():
+    lease = SimpleNamespace(challenge_id=42, until=None, attempt_deadline=lambda deadline: deadline)
+    grant = SimpleNamespace(generation_id="generation-1")
+
+    class InstancePort:
+        def deploy(self, *_args, **_kwargs):
+            return SimpleNamespace(lease=lease)
+
+        def issue_target(self, given, *, attempt_id, generation_id):
+            assert (given, attempt_id, generation_id) == (lease, "attempt-1", "generation-1")
+            return grant
+
+    class TargetPort:
+        def __init__(self):
+            self.published = []
+
+        def register(self, published):
+            self.published.append(published)
+
+    target = TargetPort()
+    run = Run.__new__(Run)
+    run._instances = InstancePort()
+    run._target_broker = target
+    run._leases = {}
+    held = SimpleNamespace(
+        pick=SimpleNamespace(
+            challenge=SimpleNamespace(terms=SimpleNamespace(challenge_id=42)),
+            deadline=NOON + dt.timedelta(minutes=10),
+        ),
+        attempt_id="attempt-1",
+        generation_id="generation-1",
+        lease=None,
+        deadline=SimpleNamespace(instance=None),
+    )
+
+    run._deploy(held)
+
+    assert target.published == [grant]
+    assert held.lease is lease
 
 
 def test_the_run_works_at_least_five_distinct_challenges_and_requeues_without_deadlocking(tmp_path):

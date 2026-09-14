@@ -131,6 +131,26 @@ def test_prepare_records_real_limits_then_kernel_gate_precedes_exec(tmp_path: Pa
     worker.close()
 
 
+def test_runtime_does_not_expose_a_target_socket_without_published_generation_authority(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, _cgroup = _runtime(tmp_path, parent)
+
+    class UnavailableTarget:
+        def available(self, generation_id):
+            assert generation_id == "g"
+            return False
+
+    runtime.target_broker = UnavailableTarget()
+    incoming = type("I", (), {"request": _request(tmp_path)})()
+
+    runtime.prepare("envelope-1", incoming)
+
+    assert runtime._target_services == {}
+    runtime.cancel("envelope-1")
+    parent.close()
+    worker.close()
+
+
 def test_cpu_usage_is_measured_not_inferred_from_throttling(tmp_path: Path) -> None:
     parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     runtime, cgroup = _runtime(tmp_path, parent)

@@ -79,7 +79,7 @@ class Wire:
 
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
-        if "field=" in path:
+        if path == "/api/v1/challenges/0":
             return (*CONTROL_REFUSED, "", "application/json")
         if path == "/api/v1/users/me":
             return self._answer({"id": 7, "team_id": None})
@@ -92,6 +92,8 @@ class Wire:
             self.submitted.append((sent["challenge_id"], sent["submission"]))
             right = self.flags.get(sent["challenge_id"]) == sent["submission"]
             return self._answer({"status": "correct" if right else "incorrect", "message": ""})
+        if path == "/api/v1/challenges" and not request.get_header("Authorization"):
+            return (302, b"", "/login", "text/html")
         if path.startswith("/api/v1/plugins/ctfd-chall-manager") or path == "/plugins/ctfd-chall-manager/instances":
             if not self.plugin:
                 return (404, b'{"success": false}', "", "application/json")

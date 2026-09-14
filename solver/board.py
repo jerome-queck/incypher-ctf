@@ -56,10 +56,9 @@ MAX_FETCH_BYTES = 256 * 1024 * 1024
 CHALLENGES = "/api/v1/challenges"
 SCOREBOARD_TOP = "/api/v1/scoreboard/top"
 
-# ADR-0016's read-contract control. `field` is validated against an enumeration before any handler
-# runs, so CTFd answers an unknown one with a refusal and **a 200 is proof the reply came from
-# somewhere else**. `q` is sent with it because CTFd only reaches that validation on a search.
-READ_CONTRACT_CONTROL = f"{CHALLENGES}?field=intake-is-not-a-field&q=a"
+# ADR-0016's independently negative control: Challenge IDs are positive, so this must be a
+# complete JSON 404 rather than the interposed synthetic collection used by the live Board.
+READ_CONTRACT_CONTROL = f"{CHALLENGES}/0"
 
 # CTFd boards sit behind Cloudflare, which 403s `Python-urllib/3.x` before the request ever reaches
 # the application. Unset, every call below fails as though the token were rejected. Any HTTP client
@@ -350,21 +349,16 @@ class Board:
         return tuple(sorted((row for row in standings if row), key=lambda row: row.rank))
 
     def collection_endpoints_reach_ctfd(self) -> bool:
-        """Whether a collection endpoint's reply was composed by CTFd, asked with a query it must
-        refuse ([ADR-0016](../docs/adr/0016-an-empty-list-is-not-an-empty-board.md)).
+        """Whether the known-absent Challenge ID returned one genuine negative JSON contract."""
 
-        A 200 here cannot have come from CTFd, and a Board that agreeable is one whose empty
-        collections mean nothing at all — the IN-CYPHER practice arena answers every collection
-        endpoint this way while `/api/v1/challenges/8/solves` returns real rows. **Any refusal
-        counts**: a 400, a 403 and a 302 all pass, because this catches the reply that is too
-        agreeable rather than certifying the stack behind a normal one.
-
-        It lives on the seam rather than above it because it is a property of this Board's read
-        contract, and every reader of an empty list needs it — the pre-flight probe asks it before
-        naming any other cause, and Intake asks it before recording a Board as having emptied.
-        """
-        status, _body, _location = self.request("GET", READ_CONTRACT_CONTROL)
-        return status != 200
+        answer = self.inspect("GET", READ_CONTRACT_CONTROL)
+        payload = _json_or_none(answer.body)
+        return (
+            answer.status == 404
+            and answer.content_type.partition(";")[0].strip().lower() == "application/json"
+            and payload is not None
+            and payload.get("success") is not True
+        )
 
     def submit(self, challenge_id: int | str, flag: str) -> Verdict:
         """Submit one Flag, and answer with what the **body** said about it.
@@ -434,6 +428,8 @@ class Board:
         digest = hashlib.sha256(raw).hexdigest()
         document = _json_or_none(raw)
         data = document.get("data") if isinstance(document, dict) else None
+        if status == 404 and page == 1:
+            return self._html_instance_ledger_page(LedgerPage, LedgerRow)
         if status != 200 or not isinstance(data, dict):
             return LedgerPage(status=status, body=raw, page=page, complete=False, response_digest=digest)
         try:
@@ -458,6 +454,58 @@ class Board:
             )
         except (KeyError, TypeError, ValueError):
             return LedgerPage(status=status, body=raw, page=page, complete=False, response_digest=digest)
+
+    def _html_instance_ledger_page(self, page_type, row_type):
+        """Project chall-manager's authenticated HTML ledger into identity-bearing rows."""
+        from solver.board_identity import window_init_scalars
+
+        status, raw, _location = self.request("GET", INSTANCE_LEDGER)
+        digest = hashlib.sha256(raw).hexdigest()
+
+        def incomplete():
+            return page_type(status=status, body=raw, complete=False, response_digest=digest)
+
+        if status != 200:
+            return incomplete()
+        marker = window_init_scalars(raw, ("userId", "teamId", "userMode"))
+        if (
+            marker is None
+            or not _positive_int(marker.get("userId"))
+            or marker.get("userMode")
+            not in {
+                "teams",
+                "users",
+            }
+        ):
+            return incomplete()
+        if marker["userMode"] == "teams" and not _positive_int(marker.get("teamId")):
+            return incomplete()
+        names = instance_ledger_rows(raw)
+        if names is None or len({row.challenge_name for row in names}) != len(names):
+            return incomplete()
+        if not names:
+            return page_type(status=200, body=raw, total_rows=0, response_digest=digest)
+        try:
+            challenges = self.challenges()
+        except (BoardFailure, KeyError, TypeError, ValueError):
+            return incomplete()
+        by_name: dict[str, list[int]] = {}
+        for challenge in challenges:
+            challenge_id, name = challenge.get("id"), challenge.get("name")
+            if _positive_int(challenge_id) and isinstance(name, str):
+                by_name.setdefault(name, []).append(challenge_id)
+        if any(len(by_name.get(row.challenge_name, ())) != 1 for row in names):
+            return incomplete()
+        rows = tuple(
+            row_type(
+                _html_ledger_row_id(marker, by_name[row.challenge_name][0]),
+                by_name[row.challenge_name][0],
+                user_id=marker["userId"],
+                team_id=marker.get("teamId"),
+            )
+            for row in names
+        )
+        return page_type(status=200, body=raw, rows=rows, total_rows=len(rows), response_digest=digest)
 
     def _instance_call(self, method: str, query: str, body: dict[str, Any] | None = None) -> Reply:
         outcome, data, detail = self._plugin_call(method, f"{CHALL_MANAGER}/instance{query}", body)
@@ -542,7 +590,13 @@ class _LedgerTable(HTMLParser):
         """
         reader = cls()
         reader.feed(page)
-        if not reader.headings:
+        if (
+            not reader.headings
+            or not reader._table_closed
+            or reader._cell is not None
+            or reader._row is not None
+            or any(len(row) != len(reader.headings) for row in reader.rows)
+        ):
             return None
         return [row[reader.name_column] for row in reader.rows if len(row) > reader.name_column]
 
@@ -554,6 +608,7 @@ class _LedgerTable(HTMLParser):
         self._row: list[str] | None = None
         self._cell_is_heading = False
         self._inside_head = False
+        self._table_closed = False
 
     @property
     def name_column(self) -> int:
@@ -563,9 +618,15 @@ class _LedgerTable(HTMLParser):
     def handle_starttag(self, tag: str, _attrs: list) -> None:
         if tag == "thead":
             self._inside_head = True
+        elif tag == "table":
+            self._table_closed = False
         elif tag == "tr":
             self._row = []
         elif tag in ("td", "th"):
+            # chall-manager's live template never closes the Challenge `<td>`. A following cell
+            # still closes it structurally; dropping it shifts Connection Info into its column.
+            if self._cell is not None:
+                self._finish_cell()
             self._cell, self._cell_is_heading = [], tag == "th" or self._inside_head
 
     def handle_data(self, data: str) -> None:
@@ -575,16 +636,21 @@ class _LedgerTable(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "thead":
             self._inside_head = False
+        elif tag == "table":
+            self._table_closed = True
         elif tag in ("td", "th") and self._cell is not None:
-            text = "".join(self._cell).strip()
-            into = self.headings if self._cell_is_heading else self._row
-            if into is not None:
-                into.append(text)
-            self._cell = None
+            self._finish_cell()
         elif tag == "tr":
             if self._row:
                 self.rows.append(self._row)
             self._row = None
+
+    def _finish_cell(self) -> None:
+        text = "".join(self._cell or ()).strip()
+        into = self.headings if self._cell_is_heading else self._row
+        if into is not None:
+            into.append(text)
+        self._cell = None
 
 
 def instance_ledger_rows(raw: bytes) -> tuple[Held, ...] | None:
@@ -592,6 +658,22 @@ def instance_ledger_rows(raw: bytes) -> tuple[Held, ...] | None:
 
     rows = _LedgerTable.rows_of(raw.decode("utf-8", "replace"))
     return None if rows is None else tuple(Held(name) for name in rows)
+
+
+def _html_ledger_row_id(marker: dict[str, Any], challenge_id: int) -> str:
+    identity = {
+        "source": "authenticated-html-ledger",
+        "user_mode": marker["userMode"],
+        "user_id": marker["userId"],
+        "team_id": marker.get("teamId"),
+        "challenge_id": challenge_id,
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return f"html-ledger:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _standing(rank: Any, row: dict[str, Any]) -> Standing | None:

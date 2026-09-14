@@ -62,7 +62,7 @@ class Wire:
 
     def transport(self, request):
         path = request.full_url[len(BOARD) :]
-        if "field=" in path:
+        if path == "/api/v1/challenges/0":
             return (*CONTROL_REFUSED, "", "application/json")
         if path == "/api/v1/users/me":
             return self._answer({"id": 7, "team_id": None})
@@ -79,6 +79,8 @@ class Wire:
             return self.answered()
         if path.startswith("/api/v1/challenges/"):
             return self.detailed()
+        if path == "/api/v1/challenges" and not request.get_header("Authorization"):
+            return (302, b"", "/login", "text/html")
         if path == "/api/v1/challenges":
             return self._answer(self.listed)
         if path.startswith("/api/v1/scoreboard/top/"):

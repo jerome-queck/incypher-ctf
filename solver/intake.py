@@ -64,7 +64,8 @@ UNREADABLE = "unreadable"
 
 # The sentence behind `UNCORROBORATED`, beside the name so the two cannot drift apart.
 UNCORROBORATED_SAYS = (
-    "the list came back empty and this Board also answers 200 to a query CTFd refuses, so an empty "
+    "the list came back empty and this Board did not return a distinct JSON 404 for known-absent "
+    "Challenge 0, so an empty "
     "collection here is evidence of nothing (ADR-0016) — keeping the previous snapshot"
 )
 

@@ -69,9 +69,11 @@ def server(board: QualificationBoard, host: str = "127.0.0.1", port: int = 0) ->
                     b'<script>window.init={"userId":7,"teamId":null,"userMode":"users"};</script>',
                     content_type="text/html",
                 )
-            if parsed.path == "/api/v1/challenges" and "intake-is-not-a-field" in parsed.query:
-                return self._send(403, {"message": "invalid field", "success": False})
+            if parsed.path == "/api/v1/challenges/0":
+                return self._send(404, {"message": "Challenge not found", "success": False})
             if parsed.path == "/api/v1/challenges":
+                if not authenticated:
+                    return self._send(403, {"message": "Authentication required", "success": False})
                 return self._send(200, {"data": list(board.challenges), "success": True})
             if parsed.path == "/api/v1/scoreboard/top/10":
                 return self._send(200, {"data": [], "success": True})

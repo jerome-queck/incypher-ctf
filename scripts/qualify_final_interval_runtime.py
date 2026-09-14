@@ -32,9 +32,10 @@ STATE_ROOT = ROOT / "state"
 AUTH = Path("/Volumes/Working/001 Projects/incypher-ctf/state/codex/auth.json")
 QUALIFICATION_WINDOW_SECONDS = 180
 QUALIFICATION_CLOCK_RATE = 2
-QUALIFICATION_FINAL_SUBMISSION_RESERVE_SECONDS = 60
+QUALIFICATION_FINAL_SUBMISSION_RESERVE_SECONDS = 90
 QUALIFICATION_ATTEMPT_FLOOR_SECONDS = 60
 QUALIFICATION_RESTART_HOST_BUDGET_SECONDS = 35
+QUALIFICATION_POST_RESTART_ADMISSION_HOST_BUDGET_SECONDS = 10
 QUALIFICATION_SEEDED_CANDIDATE_COUNT = 2
 QUALIFICATION_FINAL_CHANCE_TIMEOUT_SECONDS = 60
 QUALIFICATION_TERMINAL_TIMEOUT_SECONDS = 90
@@ -49,10 +50,11 @@ def final_interval_restart_headroom_seconds() -> float:
     """Return simulated seconds between the final-chance threshold and safe wire start.
 
     The qualification image's cold replacement took about 30 host seconds in the retained
-    diagnostic, so the 35-second bound includes measured startup variation. Both seeded Candidates
-    must also fit the account pacing interval. The calculation is deliberately tied to the sealed
-    reserve and submission safety dials: changing the accelerated clock cannot silently make a
-    restart miss the only legal POST start.
+    diagnostic, so the 35-second bound includes measured startup variation. The post-restart Board
+    profile and final-drain admission have their own measured allowance. Both seeded Candidates must
+    also fit the account pacing interval. The calculation is deliberately tied to the sealed reserve
+    and submission safety dials: changing the accelerated clock cannot silently make a restart miss
+    the only legal POST start.
     """
 
     safe_start_window = (
@@ -62,7 +64,9 @@ def final_interval_restart_headroom_seconds() -> float:
         - SUBMISSION_UNCERTAINTY_MARGIN_SECONDS
         - ACCOUNT_POST_INTERVAL_SECONDS * (QUALIFICATION_SEEDED_CANDIDATE_COUNT - 1)
     )
-    return safe_start_window - QUALIFICATION_CLOCK_RATE * QUALIFICATION_RESTART_HOST_BUDGET_SECONDS
+    return safe_start_window - QUALIFICATION_CLOCK_RATE * (
+        QUALIFICATION_RESTART_HOST_BUDGET_SECONDS + QUALIFICATION_POST_RESTART_ADMISSION_HOST_BUDGET_SECONDS
+    )
 
 
 def _sign(private_key: Path, source: Path, destination: Path) -> None:

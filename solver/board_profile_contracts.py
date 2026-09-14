@@ -6,13 +6,12 @@ import enum
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from solver.board_profile_documents import PROFILE_ENDPOINTS, is_profile_document_name
 from solver.event_store_contracts import EMPTY_BLOB_DIGEST, InvalidEventError
 
 BOARD_PROFILE_PHASE_RECORDED = "board-profile-phase.recorded"
 BOARD_PROFILE_OBSERVATION_RECORDED = "board-profile-observation.recorded"
-PROFILE_DOCUMENT_NAMES = frozenset(
-    {"identity", "landing", "read_contract", "challenges", "ledger", "mana", "configs", "anonymous_challenges"}
-)
+PROFILE_DOCUMENT_NAMES = frozenset(PROFILE_ENDPOINTS)
 
 
 class ProfilePhaseRecord(str, enum.Enum):
@@ -168,7 +167,7 @@ class BoardProfileObservationRecorded:
         if (
             not payload["event_id"]
             or not payload["probe_id"]
-            or payload["document_name"] not in PROFILE_DOCUMENT_NAMES
+            or not is_profile_document_name(payload["document_name"])
             or payload["cycle"] not in (1, 2)
             or payload["http_status"] < 0
             or payload["original_bytes"] < payload["blob_bytes"]
@@ -186,5 +185,6 @@ __all__ = [
     "BoardProfileObservationRecorded",
     "BoardProfilePhaseRecorded",
     "PROFILE_DOCUMENT_NAMES",
+    "is_profile_document_name",
     "ProfilePhaseRecord",
 ]

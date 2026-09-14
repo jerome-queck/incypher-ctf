@@ -11,7 +11,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Protocol
 
-from solver.board import BoardFailure, Mana, Standing
+from solver.board import READ_CONTRACT_CONTROL, BoardFailure, Mana, Standing
 from solver.board_broker import BoardBrokerClient
 from solver.board_broker_contracts import PRIVATE_BOARD_RESPONSE_CLASS, IntakeReadValue
 from solver.capability import CapabilityBinding
@@ -418,7 +418,7 @@ class CoherentIntake:
             attempt_id,
             pass_no,
             "read-control",
-            "/api/v1/challenges?field=intake-is-not-a-field&q=a",
+            READ_CONTRACT_CONTROL,
         )
         scoreboard = None
         mana = None

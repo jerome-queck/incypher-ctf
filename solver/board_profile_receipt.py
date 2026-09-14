@@ -9,17 +9,18 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from solver.board_profile import (
-    PROFILE_ENDPOINTS,
-    ProfileCycle,
     ProfileDecision,
     ProfileDocument,
     ProfileProbe,
     decision_document,
+    profile_cycle_from_documents,
+    profile_cycle_documents,
     qualify,
     rules_document,
     rules_from_document,
 )
 from solver.board_profile_contracts import BOARD_PROFILE_OBSERVATION_RECORDED
+from solver.board_profile_documents import PROFILE_ENDPOINTS, profile_document_endpoint
 from solver.event_store import EventStore
 from solver.board_profile_phase import project_profile_phase
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
@@ -29,7 +30,7 @@ RECEIPT_TYPE = "board-profile"
 RECEIPT_FILENAME = "board-profile.receipt.json"
 RECEIPT_REF = "receipt:board-profile"
 MANIFEST_ROW_ID = "core.board-target-lease"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def write_receipt(
@@ -82,7 +83,7 @@ def verify_receipt(path: Path) -> Path:
         "canonical_observations",
     }:
         raise ValueError("Board-profile receipt shape is unsupported")
-    if supplied["schema_version"] != SCHEMA_VERSION or supplied["qualifier_version"] != 1:
+    if supplied["schema_version"] != SCHEMA_VERSION or supplied["qualifier_version"] != 2:
         raise ValueError("Board-profile receipt schema is unsupported")
     if (
         supplied["acceptance_scope"] != "public-contract-double"
@@ -154,7 +155,7 @@ def _receipt_document(
         "schema_version": SCHEMA_VERSION,
         "receipt_type": RECEIPT_TYPE,
         "run_id": run_id,
-        "qualifier_version": 1,
+        "qualifier_version": 2,
         "acceptance_scope": "public-contract-double",
         "external_evidence": "non-acceptance-boundary",
         "rules": {
@@ -174,16 +175,14 @@ def _assessment_document(probe: ProfileProbe, decision: ProfileDecision) -> dict
     cycle_names = ("first", "second")
     comparisons = {}
     for cycle_name, cycle in zip(cycle_names, probe.cycles, strict=True):
-        for name in ProfileCycle.__dataclass_fields__:
+        for name, document in profile_cycle_documents(cycle):
             if name == "landing":
                 continue
-            comparisons[f"{cycle_name}:{name}"] = (
-                "same" if getattr(cycle, name).digest == cycle.landing.digest else "distinct"
-            )
+            comparisons[f"{cycle_name}:{name}"] = "same" if document.digest == cycle.landing.digest else "distinct"
     field_documents = {
         "authenticated_identity": ("identity", "landing"),
         "read_contract": ("read_contract",),
-        "instanced_challenges": ("challenges",),
+        "instanced_challenges": ("challenges", "challenge_details"),
         "chall_manager": ("ledger",),
         "mana": ("mana",),
         "submissions_per_minute": ("configs",),
@@ -191,10 +190,20 @@ def _assessment_document(probe: ProfileProbe, decision: ProfileDecision) -> dict
         "board_window": ("configs", "landing"),
         "unauthenticated_read": ("anonymous_challenges",),
     }
-    provenance = {
-        field: [getattr(cycle, name).request_id for cycle in probe.cycles for name in names]
-        for field, names in field_documents.items()
-    }
+    provenance = {}
+    for field, names in field_documents.items():
+        provenance[field] = []
+        for cycle in probe.cycles:
+            documents = dict(profile_cycle_documents(cycle))
+            for name in names:
+                if name == "challenge_details":
+                    provenance[field].extend(
+                        document.request_id
+                        for document_name, document in documents.items()
+                        if document_name.startswith("challenge_detail_")
+                    )
+                else:
+                    provenance[field].append(documents[name].request_id)
     unsettled = list(decision.unsettled_fields)
     if decision.profile is not None:
         if decision.profile.chall_manager == "unreadable":
@@ -226,11 +235,7 @@ def _probe_document(probe: ProfileProbe) -> dict[str, object]:
         "schema_version": probe.schema_version,
         "probe_id": probe.probe_id,
         "cycles": [
-            {
-                "documents": {
-                    name: _document_document(getattr(cycle, name)) for name in ProfileCycle.__dataclass_fields__
-                }
-            }
+            {"documents": {name: _document_document(document) for name, document in profile_cycle_documents(cycle)}}
             for cycle in probe.cycles
         ],
     }
@@ -260,14 +265,17 @@ def _probe_from(document: Mapping[str, object], rules_source: str) -> ProfilePro
         if set(cycle) != {"documents"}:
             raise ValueError("Board-profile cycle shape is unsupported")
         documents = _mapping(cycle["documents"], "profile documents")
-        if set(documents) != set(ProfileCycle.__dataclass_fields__):
+        if not set(PROFILE_ENDPOINTS).issubset(documents):
             raise ValueError("Board-profile document set is incomplete or duplicated")
         parsed = {name: _document_from(_mapping(documents[name], name)) for name in documents}
         for name, profile_document in parsed.items():
-            if profile_document.endpoint != PROFILE_ENDPOINTS[name] or profile_document.request_id in request_ids:
+            if (
+                profile_document.endpoint != profile_document_endpoint(name)
+                or profile_document.request_id in request_ids
+            ):
                 raise ValueError("Board-profile response identity or endpoint is invalid")
             request_ids.add(profile_document.request_id)
-        cycles.append(ProfileCycle(**parsed))
+        cycles.append(profile_cycle_from_documents(parsed))
     return ProfileProbe(str(document["probe_id"]), rules_source, tuple(cycles), int(document["schema_version"]))
 
 
@@ -327,17 +335,19 @@ def _canonical_probe(
         for event in EventStore(state, run_id=run_id).events()
         if event.event_type == BOARD_PROFILE_OBSERVATION_RECORDED and event.payload["probe_id"] == probe_id
     ]
-    expected = {(cycle, name) for cycle in (1, 2) for name in ProfileCycle.__dataclass_fields__}
     indexed = {(event.payload["cycle"], event.payload["document_name"]): event for event in events}
-    if len(events) != len(expected) or set(indexed) != expected:
+    if len(events) != len(indexed):
         raise ValueError("canonical Board-profile observations are incomplete or duplicated")
     cycles = []
     for cycle in (1, 2):
+        names = {name for event_cycle, name in indexed if event_cycle == cycle}
+        if not set(PROFILE_ENDPOINTS).issubset(names):
+            raise ValueError("canonical Board-profile observations are incomplete or duplicated")
         documents = {}
-        for name in ProfileCycle.__dataclass_fields__:
+        for name in names:
             event = indexed[(cycle, name)]
             payload = event.payload
-            if payload["endpoint"] != PROFILE_ENDPOINTS[name]:
+            if payload["endpoint"] != profile_document_endpoint(name):
                 raise ValueError("canonical Board-profile endpoint is invalid")
             documents[name] = ProfileDocument(
                 payload["request_id"],
@@ -348,7 +358,7 @@ def _canonical_probe(
                 payload["original_bytes"],
                 payload["complete"],
             )
-        cycles.append(ProfileCycle(**documents))
+        cycles.append(profile_cycle_from_documents(documents))
     descriptors = [
         {
             "event_id": event.payload["event_id"],

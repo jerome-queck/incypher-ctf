@@ -210,14 +210,18 @@ def _held_file(staged: Staged) -> str:
 
 
 def _instance(lease: Lease) -> str:
-    """The Instance's address, and its expiry as a fact rather than as a deadline to race.
+    """The Instance's opaque access path, and its expiry as a fact rather than a deadline to race.
 
     The expiry is the Board's and not ours; the Attempt is already killed before it (`Lease`'s own
     submission reserve), so this is here to explain why a Target stops answering rather than to ask
     the model to hurry.
     """
     until = lease.until.isoformat() if isinstance(lease.until, dt.datetime) else "an unstated time"
-    return f"A Target was deployed for you at {lease.connection_info} and stops answering at {until}."
+    return (
+        "A Target is available only through the generation-bound Target broker. Use "
+        "`/target-client.py tcp '<payload>'` or `/target-client.py http <METHOD> <PATH>` from an "
+        f"authorised Tool; its raw address is withheld. It stops answering at {until}."
+    )
 
 
 def _closing() -> str:
