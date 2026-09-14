@@ -41,9 +41,12 @@ merge commit before it executes. It also requires no other open PRs, clean workt
 containers, so an unfinished ticket or unreviewed local change blocks reclamation. It then runs
 `docker builder prune --all --force` and `docker image prune --force`; those operations target disposable BuildKit
 cache and dangling images. Tagged Candidate/rollback images, Run state and authority records are
-outside the command. An open PR, missing merge identity, dirty worktree or failed runtime
-verification leaves storage untouched. If the first prune succeeds and the second fails, the
-command reports partial reclamation, stops and never retries or broadens its scope.
+outside the command. Qualification retains tagged baseline images, detached source worktrees,
+probe state and build metadata under `.cache/qualification/` or the caller's state root until
+review is complete; these are inspected separately before manual removal. An open PR, missing
+merge identity, dirty worktree or failed runtime verification leaves storage untouched. If a
+prune operation fails, the command reports the failed operation and stops without retrying or
+broadening its scope.
 
 ## Consequences
 

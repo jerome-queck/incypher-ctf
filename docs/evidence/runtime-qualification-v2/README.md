@@ -24,3 +24,7 @@ python3 scripts/verify_runtime_evidence.py \
   docs/evidence/runtime-qualification-v2/296-incident-containment \
   docs/evidence/runtime-qualification-v2/299-tool-crypto
 ```
+
+Qualification keeps baseline images, detached source worktrees and probe state for review while
+the ticket is open. Do not reclaim them until the ticket's squash merge is confirmed; then inspect
+the retained material and remove only what no longer supports an in-flight ticket.

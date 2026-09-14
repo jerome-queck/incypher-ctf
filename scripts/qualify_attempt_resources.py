@@ -1,9 +1,11 @@
-"""Build and exercise every Attempt Resource outcome in the strict image."""
+"""Build and exercise every Attempt Resource outcome in the strict image.
+
+The caller-provided qualification state remains available for review after failures and until merge.
+"""
 
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -44,9 +46,6 @@ def qualify(state: Path) -> Path:
             strict_runtime.attempt_resource_probe_command(binding, state),
             check=True,
         )
-    except Exception:
-        shutil.rmtree(state, ignore_errors=True)
-        raise
     finally:
         subprocess.run(
             ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE],

@@ -8,7 +8,7 @@ and runs the Solver without turning a larger disk into permission to accumulate 
 > location, mount, CPU/RAM and execution-authority decisions here remain context; the image, cache,
 > state, single-image and Crypto profile-size caps are historical advisory benchmarks.
 
-## Decision
+## Retained placement decision
 
 The canonical Solver checkout is `/Volumes/Working/001 Projects/incypher-ctf`; the practice rig is
 its sibling `incypher-practice-rig`. Colima data physically lives at sibling `incypher-colima` and
@@ -16,14 +16,16 @@ is reached through `~/.colima` so interactive commands, Docker contexts and the 
 one stable socket/config address. The VM explicitly mounts `$HOME` and `/Volumes/Working/001
 Projects` writable. No other host root is a supported Solver bind source.
 
-The pinned VM is 8 CPUs, 24 GiB memory and **200 GiB disk**. The capacity increase on 13 September
-2026 gives the sparse external VM recovery room; it allocates no additional image, Tool, cache or
-state budget. The Working volume must be mounted before Colima starts; a missing volume is a
-Refusal, never a fresh internal VM.
+The VM keeps 8 CPUs and 24 GiB memory. The Working volume must be mounted before Colima starts;
+a missing volume is a Refusal, never a fresh internal VM. Disk capacity follows ADR-0058.
 
-The VM envelope is divided before work begins:
+## Superseded storage policy — historical only
 
-| Class | Hard budget |
+On 13 September 2026 this decision requested a 200 GiB VM and divided storage into the following
+budgets. ADR-0058 removes every size refusal and all pre-merge reclamation from this policy.
+These values describe the former decision and must not be used as admission or cleanup rules.
+
+| Class | Former budget, now advisory |
 | --- | ---: |
 | Candidate plus rollback on the host platform | 24 GiB |
 | Total development image store | 40 GiB |
@@ -35,35 +37,17 @@ The VM envelope is divided before work begins:
 | Docker/runtime overhead and scratch | 20 GiB |
 | Untouchable VM headroom | 16 GiB |
 | Additional unallocated VM capacity | 100 GiB |
+| Active Run state on the Working volume | 60 GiB |
+| Working-volume free-space reserve | 100 GiB |
 
-Development prunes BuildKit back toward 10 GiB before it reaches the 20 GiB hard limit. A scored
-Run builds its immutable image, prunes BuildKit, then refuses unless cache is zero and the entire
-image store is at most the 24 GiB Candidate-plus-rollback budget. The release process owns those
-two identities. Repeated tags, dangling images and obsolete build references are reconstructible;
-release identities, receipts and current Run authority are not.
+The former policy pruned development cache toward 10 GiB and demanded zero cache before a scored
+Run. It also refused images and Crypto profile deltas above their budgets. None of those actions
+or refusals remains authorized. Both host-checker modes now report advisory size observations;
+use the post-merge reclamation workflow in ADR-0058 only after ticket completion is verified.
 
-`python3 scripts/check_host_storage.py development` is the pre-build refusal; `competition` is the
-pre-Run refusal. When development cache crosses its limit, the bounded repair is `docker builder
-prune --all --force --reserved-space 10GB` followed by `docker image prune --force` and another check.
-Competition uses `docker builder prune --all --force`, then the check; neither command removes a
-tagged Candidate or rollback image.
-
-The host checker enforces the limits observable from the host: total and single-image size, cache,
-active state size and Working-volume reserve. Resident/profile deltas are build-admission facts,
-not values Docker's aggregate inventory can recover; their receipts must establish the smaller
-limits before an image becomes either release identity.
-
-Run state is a Working-volume bind mount rather than VM-disk consumption. Its active envelope is
-60 GiB, with 100 GiB of physical-volume free space protected from project and VM growth. An amd64
-artifact is exported and verified rather than retained beside both host-platform images.
-
-The image budgets measure unpacked Docker size, not package count. Compressed downloads, unpacked
-layers, package closures, package caches, generated supply and BuildKit intermediates all count;
-Sage, CAS tools and wordlists have no exemption. Full Sage made issue #299's
-strict image 10.6 GB with a 9.3 GB unique layer, exceeding the 4 GiB profile-delta budget. That
-profile remains unadmitted unless a smaller locked closure passes its declared fixtures or this
-budget is explicitly revised. Tool downloads remain build-time, locked and receipt-bearing; no
-runtime download or larger VM silently widens that rule.
+Full Sage originally produced a 10.6 GB image with a 9.3 GB unique layer, exceeding the former
+4 GiB profile-delta budget. Size alone no longer rejects such a profile. Tool downloads remain
+build-time, locked and receipt-bearing, with fixtures and execution authority verified independently.
 
 The old `state/work/157` directory is a bare-integer, pre-event namespace that current code reads
 nowhere. It is retired under ADR-0025 after the migration copy is verified; promoted `runs/`, the
@@ -74,13 +58,10 @@ current credential store and issue #299's dirty worktree remain.
 - Losing or renaming the external volume stops the runtime. This is preferable to silently starting
   an empty internal VM or empty `/state` mount.
 - `~/.colima` is a compatibility address, not internal storage; its target is verified at preflight.
-- A 1 TB physical volume and 200 GiB sparse VM do not make a 100 GiB image acceptable. Image and profile admission fail
-  at their smaller budgets.
-- Build caches improve iteration only inside their budget and carry no competition authority.
+- Image, profile, state and cache sizes follow available physical capacity under ADR-0058.
+- Useful build material remains until the ticket's squash merge is confirmed.
 
 ## Revisit when
 
 - the official venue requires a different host filesystem or image transport;
-- measured full-window state exceeds 60 GiB under the sealed retention policy; or
-- Candidate/rollback host-platform storage cannot fit 24 GiB without dropping a proved Core
-  capability.
+- the physical volume or runtime storage arrangement changes.

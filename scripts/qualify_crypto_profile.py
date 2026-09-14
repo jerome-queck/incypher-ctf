@@ -1,16 +1,15 @@
-"""Build the clean-main baseline and record Crypto's measured size delta."""
+"""Build the clean-main baseline and record Crypto's measured size delta.
+
+The baseline image and detached checkout remain available for review until the ticket is merged.
+"""
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import json
 import subprocess
 import sys
-import tempfile
-import uuid
-from collections.abc import Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -18,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from solver.crypto_tool_contract import PROFILE_SIZE_ADVISORY  # noqa: E402
 from solver.crypto_tool_receipt import write_receipt  # noqa: E402
+from scripts.qualification_retention import new_retained_directory  # noqa: E402
 
 
 def command(*arguments: str) -> str:
@@ -57,44 +57,34 @@ def qualified_baseline_commit(requested: str | None) -> str:
     return selected
 
 
-@contextlib.contextmanager
-def baseline_image(commit: str, platform: str) -> Iterator[str]:
-    tag = f"incypher-crypto-baseline-{commit[:12]}-{uuid.uuid4().hex[:8]}"
-    with tempfile.TemporaryDirectory(prefix="incypher-crypto-baseline-") as directory:
-        checkout = Path(directory) / "source"
-        command("git", "worktree", "add", "--detach", str(checkout), commit)
-        try:
-            subprocess.run(["docker", "build", "--platform", platform, "--tag", tag, "."], check=True, cwd=checkout)
-            yield tag
-        finally:
-            subprocess.run(["docker", "image", "rm", tag], check=False, capture_output=True)
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(checkout)],
-                check=False,
-                capture_output=True,
-                cwd=REPO_ROOT,
-            )
+def baseline_image(commit: str, platform: str) -> str:
+    retained = new_retained_directory("crypto-baselines", f"{commit[:12]}-")
+    checkout = retained / "source"
+    tag = f"incypher-crypto-baseline-{retained.name}"
+    command("git", "worktree", "add", "--detach", str(checkout), commit)
+    subprocess.run(["docker", "build", "--platform", platform, "--tag", tag, "."], check=True, cwd=checkout)
+    return tag
 
 
 def measurement(candidate: str, requested_baseline: str | None = None) -> dict[str, object]:
     commit = qualified_baseline_commit(requested_baseline)
     platform = image_platform(candidate)
-    with baseline_image(commit, platform) as baseline:
-        baseline_size = unpacked_size(baseline)
-        candidate_size = unpacked_size(candidate)
-        return {
-            "baseline_image_digest": image_identity(baseline),
-            "baseline_size_bytes": baseline_size,
-            "baseline_source_commit": commit,
-            "baseline_source_tree_digest": git_object(commit, "^{tree}"),
-            "baseline_dockerfile_sha256": hashlib.sha256(git_blob(commit, "Dockerfile")).hexdigest(),
-            "baseline_platform": platform,
-            "candidate_image_digest": image_identity(candidate),
-            "candidate_size_bytes": candidate_size,
-            "delta_bytes": candidate_size - baseline_size,
-            "budget_bytes": PROFILE_SIZE_ADVISORY,
-            "method": "docker-build-git-merge-base-history-unpacked-layer-sum-v1",
-        }
+    baseline = baseline_image(commit, platform)
+    baseline_size = unpacked_size(baseline)
+    candidate_size = unpacked_size(candidate)
+    return {
+        "baseline_image_digest": image_identity(baseline),
+        "baseline_size_bytes": baseline_size,
+        "baseline_source_commit": commit,
+        "baseline_source_tree_digest": git_object(commit, "^{tree}"),
+        "baseline_dockerfile_sha256": hashlib.sha256(git_blob(commit, "Dockerfile")).hexdigest(),
+        "baseline_platform": platform,
+        "candidate_image_digest": image_identity(candidate),
+        "candidate_size_bytes": candidate_size,
+        "delta_bytes": candidate_size - baseline_size,
+        "budget_bytes": PROFILE_SIZE_ADVISORY,
+        "method": "docker-build-git-merge-base-history-unpacked-layer-sum-v1",
+    }
 
 
 def main() -> int:

@@ -60,3 +60,53 @@ def test_strict_observation_cleans_only_its_cgroup() -> None:
         MANIFEST, MANIFEST, CONFIG, "linux/arm64", "fixture.identity"
     )
     assert runner.commands[-1] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+
+
+def test_tool_handle_qualification_retains_state_until_merge(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "repo"
+    supply = root / "tool-supply"
+    (supply / "generated").mkdir(parents=True)
+    (supply / "locks").mkdir()
+    (supply / "generated" / "inventory.json").write_text(
+        json.dumps(
+            {
+                "components": [
+                    {
+                        "component_id": "fixture.identity",
+                        "profiles": ["fixture-profile"],
+                        "capability_policies": {"fixture": {}},
+                        "files": [],
+                    }
+                ]
+            }
+        )
+    )
+    (supply / "locks" / "fixture-profile.json").write_bytes(b"lock")
+    (supply / "generated" / "receipt.json").write_bytes(b"receipt")
+    retained = root / ".cache" / "qualification" / "tool-handles" / "fixture.identity-1"
+
+    def retain(kind: str, prefix: str) -> Path:
+        assert kind == "tool-handles"
+        assert prefix == "fixture.identity-"
+        retained.mkdir(parents=True)
+        return retained
+
+    runner = Runner()
+    monkeypatch.setattr(qualify_tool_supply, "REPO_ROOT", root)
+    monkeypatch.setattr(qualify_tool_supply, "new_retained_directory", retain)
+    monkeypatch.setattr(qualify_tool_supply, "build_image", lambda _runner: ("linux/arm64", MANIFEST, CONFIG))
+    monkeypatch.setattr(qualify_tool_supply, "strict_observation", lambda *args, **kwargs: {"outcome": "pass"})
+    monkeypatch.setattr(
+        qualify_tool_supply,
+        "create_handle_receipt",
+        lambda state, *_args: {"state": str(state)},
+    )
+    monkeypatch.setattr(qualify_tool_supply, "create_receipt", lambda *args, **kwargs: {"identity": "receipt"})
+    monkeypatch.setattr(qualify_tool_supply, "promote_receipt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(qualify_tool_supply.promote_run, "held", lambda _root: [])
+
+    result = qualify_tool_supply.qualify("fixture.identity", tmp_path / "promoted.json", runner=runner)
+
+    assert result == {"identity": "receipt"}
+    assert retained.is_dir()
+    assert any("solver.tool_handle_probe" in command for command in runner.commands)
