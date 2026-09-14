@@ -72,16 +72,19 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
                 body = b'<script>window.init = {"userId":7,"teamId":null,"userMode":"users"};</script>'
                 content_type = "text/html"
                 status = 200
-            elif "field=intake-is-not-a-field" in self.path:
-                body = b'{"success":false,"message":"invalid field"}'
-                status = 403
+            elif self.path == "/api/v1/challenges/0":
+                body = b'{"message":"Challenge not found"}'
+                status = 404
+            elif self.path == "/api/v1/challenges/1":
+                body = b'{"success":true,"data":{"id":1,"name":"alpha","type":"standard"}}'
+                status = 200
             elif self.path == "/api/v1/challenges":
                 if self.headers.get("Authorization"):
-                    body = b'{"success":true,"data":[]}'
+                    body = b'{"success":true,"data":[{"id":1,"name":"alpha","type":"standard"}]}'
                     status = 200
                 else:
-                    content_type = "text/html"
-                    status = 302
+                    body = b'{"success":true,"data":[]}'
+                    status = 200
             elif self.path == "/plugins/ctfd-chall-manager/instances":
                 body = (
                     b'<script>window.init = {"userId":7,"teamId":null,"userMode":"users"};</script>'
@@ -152,7 +155,7 @@ def test_board_owner_process_serves_a_typed_authenticated_read_over_pathname_ipc
 
         assert result.outcome is BoardOutcome.ANSWERED
         assert result.value == ReadContractValue(reaches_ctfd=True)
-        assert result.provenance.endpoint == "/api/v1/challenges?field=intake-is-not-a-field&q=a"
+        assert result.provenance.endpoint == "/api/v1/challenges/0"
         assert result.provenance.response_digest
         assert "Token board-token" in observed["authorizations"]
     finally:
@@ -249,10 +252,11 @@ def test_profiled_instance_ledger_uses_the_privileged_broker_and_real_board_resp
 
 def test_authorized_current_generation_completes_typed_authenticated_read(tmp_path: Path) -> None:
     requests = []
+    body = b'{"message":"Challenge not found"}'
 
     def transport(request):
         requests.append(request)
-        return 403, b'{"success":false,"message":"invalid field"}', ""
+        return 404, body, "", "application/json"
 
     state, _authority, binding, handle, runtime = _broker(tmp_path, transport)
 
@@ -262,13 +266,14 @@ def test_authorized_current_generation_completes_typed_authenticated_read(tmp_pa
     assert result.value == ReadContractValue(reaches_ctfd=True)
     assert result.operation is BoardOperation.READ_CONTRACT
     assert requests[0].get_header("Authorization") == "Token board-token"
+    assert requests[0].full_url.endswith("/api/v1/challenges/0")
     records = runtime.records()
     assert [record.record for record in records] == ["reserved", "classified"]
     assert records[0].request_id == records[1].request_id
     assert records[0].binding_digest == binding.digest
-    assert records[1].response_original_bytes == 43
+    assert records[1].response_original_bytes == len(body)
     assert records[1].response_truncated is False
-    assert runtime.response_body(records[1]) == b'{"success":false,"message":"invalid field"}'
+    assert runtime.response_body(records[1]) == body
     assert b"board-token" not in (state / "runs" / "run-1" / "canonical" / "events.jsonl").read_bytes()
 
 

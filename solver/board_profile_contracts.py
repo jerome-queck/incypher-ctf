@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping
 
 from solver.event_store_contracts import EMPTY_BLOB_DIGEST, InvalidEventError
@@ -13,6 +14,13 @@ BOARD_PROFILE_OBSERVATION_RECORDED = "board-profile-observation.recorded"
 PROFILE_DOCUMENT_NAMES = frozenset(
     {"identity", "landing", "read_contract", "challenges", "ledger", "mana", "configs", "anonymous_challenges"}
 )
+_CHALLENGE_DETAIL_NAME = re.compile(r"challenge_detail_[1-9][0-9]*")
+
+
+def is_profile_document_name(name: object) -> bool:
+    return isinstance(name, str) and (
+        name in PROFILE_DOCUMENT_NAMES or _CHALLENGE_DETAIL_NAME.fullmatch(name) is not None
+    )
 
 
 class ProfilePhaseRecord(str, enum.Enum):
@@ -168,7 +176,7 @@ class BoardProfileObservationRecorded:
         if (
             not payload["event_id"]
             or not payload["probe_id"]
-            or payload["document_name"] not in PROFILE_DOCUMENT_NAMES
+            or not is_profile_document_name(payload["document_name"])
             or payload["cycle"] not in (1, 2)
             or payload["http_status"] < 0
             or payload["original_bytes"] < payload["blob_bytes"]
@@ -186,5 +194,6 @@ __all__ = [
     "BoardProfileObservationRecorded",
     "BoardProfilePhaseRecorded",
     "PROFILE_DOCUMENT_NAMES",
+    "is_profile_document_name",
     "ProfilePhaseRecord",
 ]

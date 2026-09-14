@@ -14,7 +14,7 @@ from solver.event_store import EventStore
 from solver.board_profile_receipt import verify_receipt
 from solver.board_profile import rules_document
 from solver.event_store_storage import canonical_bytes
-from solver.profile import ANONYMOUS_REFUSED, Rules
+from solver.profile import ANONYMOUS_ANSWERED, Rules
 
 from test_board_broker import OTHER, PROFILE_HANDLE, _broker
 
@@ -43,10 +43,16 @@ def _profile_transport(calls):
             return _json({"id": 7, "team_id": None})
         if path == "/":
             return 200, landing, "", "text/html"
-        if "field=intake-is-not-a-field" in path:
-            return 400, b'{"success":false}', "", "application/json"
+        if path == "/api/v1/challenges/0":
+            return 404, b'{"message":"Challenge not found"}', "", "application/json"
+        if path == "/api/v1/challenges/1":
+            return _json({"id": 1, "name": "alpha", "type": "standard", "category": "misc"})
         if path == "/api/v1/challenges":
-            return _json([]) if request.get_header("Authorization") else (302, b"", "/login", "text/html")
+            return (
+                _json([{"id": 1, "name": "alpha", "type": "standard"}])
+                if request.get_header("Authorization")
+                else _json([])
+            )
         if path == "/plugins/ctfd-chall-manager/instances":
             return 200, ledger, "", "text/html"
         if path.endswith("/mana"):
@@ -68,17 +74,19 @@ def test_boot_profile_client_qualifies_two_authenticated_cycles_and_writes_recei
 
     def transport(request):
         path = request.full_url.removeprefix("https://board.example")
-        calls.append((path, request.get_header("Authorization")))
+        calls.append((path, request.get_header("Authorization"), request.get_header("Content-type")))
         if path == "/api/v1/users/me":
             return _json({"id": 7, "team_id": 3})
         if path == "/":
             return 200, landing, "", "text/html; charset=utf-8"
-        if "field=intake-is-not-a-field" in path:
-            return 400, b'{"success":false}', "", "application/json"
+        if path == "/api/v1/challenges/0":
+            return 404, b'{"message":"Challenge not found"}', "", "application/json"
+        if path == "/api/v1/challenges/1":
+            return _json({"id": 1, "name": "alpha", "type": "standard", "category": "misc"})
         if path == "/api/v1/challenges":
             if request.get_header("Authorization"):
                 return _json([{"id": 1, "name": "alpha", "type": "standard"}])
-            return 302, b"", "/login", "text/html"
+            return _json([])
         if path == "/plugins/ctfd-chall-manager/instances":
             return 200, ledger, "", "text/html"
         if path.endswith("/mana"):
@@ -101,16 +109,19 @@ def test_boot_profile_client_qualifies_two_authenticated_cycles_and_writes_recei
 
     assert decision.authoritative is True
     assert decision.profile is not None
-    assert decision.profile.unauthenticated_read == ANONYMOUS_REFUSED
-    assert len(calls) == 16
-    assert all(token == "Token board-token" for path, token in calls if path != "/api/v1/challenges" or token)
+    assert decision.profile.unauthenticated_read == ANONYMOUS_ANSWERED
+    assert len(calls) == 18
+    assert all(
+        token == "Token board-token" for path, token, _content_type in calls if path != "/api/v1/challenges" or token
+    )
+    assert {content_type for _path, _token, content_type in calls} == {"application/json"}
     verify_receipt(state / "runs" / "run-1" / "canonical" / "board-profile.receipt.json")
     observations = [
         event
         for event in EventStore(state, run_id="run-1").events()
         if event.event_type == "board-profile-observation.recorded"
     ]
-    assert len(observations) == 16
+    assert len(observations) == 18
     assert all(event.body for event in observations if event.payload["document_name"] != "anonymous_challenges")
 
 
@@ -126,12 +137,14 @@ def test_profile_decision_and_operation_gate_replay_without_reprobing_after_rest
             return _json({"id": 7, "team_id": None})
         if path == "/":
             return 200, landing, "", "text/html"
-        if "field=intake-is-not-a-field" in path:
-            return 400, b'{"success":false}', "", "application/json"
+        if path == "/api/v1/challenges/0":
+            return 404, b'{"message":"Challenge not found"}', "", "application/json"
+        if path == "/api/v1/challenges/1":
+            return _json({"id": 1, "name": "alpha", "type": "standard", "category": "misc"})
         if path == "/api/v1/challenges":
             if request.get_header("Authorization"):
-                return _json([])
-            return 302, b"", "/login", "text/html"
+                return _json([{"id": 1, "name": "alpha", "type": "standard"}])
+            return _json([])
         if path == "/plugins/ctfd-chall-manager/instances":
             return 200, ledger, "", "text/html"
         if path.endswith("/mana"):
@@ -156,7 +169,7 @@ def test_profile_decision_and_operation_gate_replay_without_reprobing_after_rest
         for event in EventStore(state, run_id="run-1").events()
         if event.event_type == "board-profile-phase.recorded"
     ] == ["probe-started", "profile-decided", "operations-opened"]
-    assert len(calls) == 16
+    assert len(calls) == 18
 
     restarted = BoardBrokerRuntime(
         state=state,
@@ -180,7 +193,7 @@ def test_profile_decision_and_operation_gate_replay_without_reprobing_after_rest
         second_service.close()
         socket_root.rmdir()
 
-    assert len(calls) == 16
+    assert len(calls) == 18
 
 
 def test_refused_profile_opens_no_later_board_operation(tmp_path: Path) -> None:
@@ -195,8 +208,8 @@ def test_refused_profile_opens_no_later_board_operation(tmp_path: Path) -> None:
             return _json({"id": 7, "team_id": None})
         if path == "/":
             return 200, landing, "", "text/html"
-        if "field=intake-is-not-a-field" in path:
-            return 400, b'{"success":false}', "", "application/json"
+        if path == "/api/v1/challenges/0":
+            return 404, b'{"message":"Challenge not found"}', "", "application/json"
         if path == "/api/v1/challenges":
             if request.get_header("Authorization"):
                 return 200, landing, "", "text/html"
@@ -324,7 +337,7 @@ def test_incomplete_probe_is_abandoned_and_restart_uses_a_fresh_identity(tmp_pat
         if event.event_type == "board-profile-phase.recorded" and event.payload["record"] == "probe-started"
     ]
     assert starts == ["profile-probe-000001", "profile-probe-000002"]
-    assert len(calls) == 16
+    assert len(calls) == 18
 
 
 def test_crash_after_receipt_before_decision_reprobes_without_trusting_the_orphan(tmp_path: Path) -> None:
@@ -350,7 +363,7 @@ def test_crash_after_receipt_before_decision_reprobes_without_trusting_the_orpha
     assert restarted.qualify_profile(
         object(), PROFILE_HANDLE, RULES, "docs/competitions/fixture.board.json"
     ).authoritative
-    assert len(calls) == 32
+    assert len(calls) == 36
 
 
 def test_competing_profile_clients_share_one_canonical_probe(tmp_path: Path) -> None:
@@ -370,13 +383,13 @@ def test_competing_profile_clients_share_one_canonical_probe(tmp_path: Path) -> 
         client.join()
 
     assert [decision.authoritative for decision in decisions] == [True, True]
-    assert len(calls) == 16
+    assert len(calls) == 18
     assert (
         sum(
             event.event_type == "board-profile-observation.recorded"
             for event in EventStore(state, run_id="run-1").events()
         )
-        == 16
+        == 18
     )
 
 

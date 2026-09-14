@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from solver.board_profile import ProfileCycle, ProfileDocument, ProfileProbe, qualify, rules_document
+from solver.board_profile import (
+    ProfileCycle,
+    ProfileDocument,
+    ProfileProbe,
+    profile_cycle_documents,
+    qualify,
+    rules_document,
+)
 from solver.board_profile_contracts import BoardProfileObservationRecorded
 from solver.board_profile_receipt import link_manifest, verify_receipt, write_receipt
 from solver.board_profile_phase import ProfilePhaseWriter
@@ -55,9 +62,9 @@ def valid_cycle(prefix: str = "first") -> ProfileCycle:
         landing=document(prefix + "-landing", "/", landing, content_type="text/html; charset=utf-8"),
         read_contract=document(
             prefix + "-control",
-            "/api/v1/challenges?field=intake-is-not-a-field&q=a",
-            b'{"success":false}',
-            status=400,
+            "/api/v1/challenges/0",
+            b'{"message":"Challenge not found"}',
+            status=404,
         ),
         challenges=json_document(
             prefix + "-challenges",
@@ -68,7 +75,16 @@ def valid_cycle(prefix: str = "first") -> ProfileCycle:
         mana=json_document(prefix + "-mana", "/api/v1/plugins/ctfd-chall-manager/mana", {"used": 0, "total": 0}),
         configs=json_document(prefix + "-configs", "/api/v1/configs", []),
         anonymous_challenges=document(
-            prefix + "-anonymous", "/api/v1/challenges", b"", status=302, content_type="text/html"
+            prefix + "-anonymous",
+            "/api/v1/challenges",
+            b'{"success":true,"data":[]}',
+        ),
+        challenge_details=(
+            json_document(
+                prefix + "-detail-1",
+                "/api/v1/challenges/1",
+                {"id": 1, "name": "alpha", "type": "standard", "category": "misc"},
+            ),
         ),
     )
 
@@ -85,8 +101,7 @@ def record_probe(state: Path, observed: ProfileProbe, run_id: str = "run-1") -> 
     )
     store = EventStore(state, run_id=run_id)
     for cycle_index, cycle in enumerate(observed.cycles, start=1):
-        for name in ProfileCycle.__dataclass_fields__:
-            profile_document = getattr(cycle, name)
+        for name, profile_document in profile_cycle_documents(cycle):
             store.append(
                 BoardProfileObservationRecorded(
                     event_id=f"board-profile-observation:{observed.probe_id}:{cycle_index}:{name}",
@@ -213,7 +228,7 @@ def test_json_body_with_the_wrong_content_type_never_acquires_authority() -> Non
     assert "not a genuine JSON contract" in decision.reason
 
 
-def test_non_ctfd_html_error_cannot_satisfy_the_required_read_control() -> None:
+def test_generic_html_error_cannot_satisfy_the_known_absent_challenge_control() -> None:
     cycles = []
     for prefix in ("first", "second"):
         cycle = valid_cycle(prefix)
@@ -223,7 +238,7 @@ def test_non_ctfd_html_error_cannot_satisfy_the_required_read_control() -> None:
                     **vars(cycle),
                     "read_contract": document(
                         prefix + "-control",
-                        "/api/v1/challenges?field=intake-is-not-a-field&q=a",
+                        "/api/v1/challenges/0",
                         b"<html>temporarily unavailable</html>",
                         status=503,
                         content_type="text/html",
@@ -235,7 +250,68 @@ def test_non_ctfd_html_error_cannot_satisfy_the_required_read_control() -> None:
     decision = qualify(probe(*cycles), RULES)
 
     assert decision.authoritative is False
-    assert "not a CTFd field refusal" in decision.reason
+    assert "not a genuine negative contract" in decision.reason
+
+
+def test_synthetic_empty_authenticated_collection_never_means_empty_board() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        cycles.append(replace(cycle, challenges=cycle.anonymous_challenges, challenge_details=()))
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "synthetic empty" in decision.reason
+
+
+def test_authenticated_collection_must_differ_from_anonymous_collection() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        cycles.append(replace(cycle, anonymous_challenges=cycle.challenges))
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "authenticated and anonymous Challenge lists agree" in decision.reason
+
+
+def test_each_listed_challenge_needs_a_matching_detail_contract() -> None:
+    cycles = [replace(valid_cycle(prefix), challenge_details=()) for prefix in ("first", "second")]
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "detail set does not corroborate" in decision.reason
+
+
+def test_detail_open_strings_are_compared_across_cycles() -> None:
+    first = valid_cycle("first")
+    second = valid_cycle("second")
+    changed = json_document(
+        "second-detail-1",
+        "/api/v1/challenges/1",
+        {"id": 1, "name": "alpha", "type": "practice_new_type", "category": "practice_new_category"},
+    )
+    second = replace(second, challenge_details=(changed,))
+
+    decision = qualify(probe(first, second), RULES)
+
+    assert decision.authoritative is False
+    assert "detail disagrees with its collection row" in decision.reason
+
+
+def test_known_absence_control_cannot_be_a_positive_contract_catch_all() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        cycles.append(replace(cycle, read_contract=cycle.challenge_details[0]))
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "known-absent Challenge control" in decision.reason
 
 
 def test_authenticated_generic_html_is_not_an_instance_ledger() -> None:
@@ -247,11 +323,19 @@ def test_authenticated_generic_html_is_not_an_instance_ledger() -> None:
             "/api/v1/challenges",
             [{"id": 1, "name": "alpha", "type": "dynamic_iac"}],
         )
+        details = (
+            json_document(
+                prefix + "-detail-1",
+                "/api/v1/challenges/1",
+                {"id": 1, "name": "alpha", "type": "dynamic_iac", "category": "misc"},
+            ),
+        )
         cycles.append(
             ProfileCycle(
                 **{
                     **vars(cycle),
                     "challenges": challenges,
+                    "challenge_details": details,
                     "ledger": document(
                         prefix + "-ledger",
                         "/plugins/ctfd-chall-manager/instances",
@@ -291,7 +375,7 @@ def test_configs_refusal_and_landing_window_are_explicit_and_source_preserving()
                     "configs": document(
                         prefix + "-configs",
                         "/api/v1/configs",
-                        b'{"success":false}',
+                        b'{"message":"Forbidden"}',
                         status=403,
                     ),
                 }
@@ -540,7 +624,9 @@ def test_receipt_independently_recomputes_the_combined_rules_and_wire_profile(tm
     assert receipt["assessment"]["catch_all_comparisons"]["first:challenges"] == "distinct"
     assert receipt["assessment"]["field_provenance"]["instanced_challenges"] == [
         "first-challenges",
+        "first-detail-1",
         "second-challenges",
+        "second-detail-1",
     ]
     assert receipt["assessment"]["unsettled_fields"] == []
     assert receipt["manifest_link"] == {

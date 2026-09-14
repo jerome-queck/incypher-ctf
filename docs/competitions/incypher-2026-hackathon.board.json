@@ -2,10 +2,11 @@
   "event": "incypher-2026-hackathon",
   "url": "https://hackathon.in-cypher.com",
   "flag_wrappers": [
+    "INCYPHER\\{[^}]{1,256}\\}",
     "flag\\{[^}]{1,256}\\}"
   ],
   "window_seconds": 19800,
-  "closes_at": "2026-09-22T16:00:00+08:00",
+  "closes_at": "2026-09-23T18:00:00+08:00",
   "web_search": true,
   "requires": [
     "TEAM_KEY"

@@ -548,6 +548,7 @@ def _run_admitted(
         )
         ledger_broker = board
     lease_coordinator = None
+    lease_target_authority = None
     qualification_generation = None
     if board_broker_path is not None:
         from solver.instance_lease import LeaseCoordinator
@@ -566,6 +567,15 @@ def _run_admitted(
             corroborate=lambda challenge_id: _owned_instance_row(ledger_identity, ledger_broker, challenge_id),
             admit_generation=lambda generation_id, effect: _admit_lease_effect(recorder, generation_id, effect),
             generation_events=recorder.event_store.events,
+        )
+        from solver.lease_target import LeaseTargetAuthority
+
+        lease_target_authority = LeaseTargetAuthority(
+            lease_coordinator,
+            recorder.generations,
+            run_id=held.run_id,
+            board_id=held.url,
+            owner_id=owner_id,
         )
         ledger = read_profiled_instance_ledger(ledger_identity, ledger_broker)
         ledger_receipt = write_instance_ledger_receipt(run_state, held.run_id, ledger)
@@ -684,6 +694,7 @@ def _run_admitted(
         ledger_identity=ledger_identity,
         ledger_broker=ledger_broker,
         coordinator=lease_coordinator,
+        target_authority=lease_target_authority,
     )
     # Triage's last resort, and the one collaborator only this file can hand it: what the Board
     # states and what its solves say are read off the Board itself, and the model is asked about

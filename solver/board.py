@@ -56,10 +56,9 @@ MAX_FETCH_BYTES = 256 * 1024 * 1024
 CHALLENGES = "/api/v1/challenges"
 SCOREBOARD_TOP = "/api/v1/scoreboard/top"
 
-# ADR-0016's read-contract control. `field` is validated against an enumeration before any handler
-# runs, so CTFd answers an unknown one with a refusal and **a 200 is proof the reply came from
-# somewhere else**. `q` is sent with it because CTFd only reaches that validation on a search.
-READ_CONTRACT_CONTROL = f"{CHALLENGES}?field=intake-is-not-a-field&q=a"
+# ADR-0016's independently negative control: Challenge IDs are positive, so this must be a
+# complete JSON 404 rather than the interposed synthetic collection used by the live Board.
+READ_CONTRACT_CONTROL = f"{CHALLENGES}/0"
 
 # CTFd boards sit behind Cloudflare, which 403s `Python-urllib/3.x` before the request ever reaches
 # the application. Unset, every call below fails as though the token were rejected. Any HTTP client
@@ -350,21 +349,16 @@ class Board:
         return tuple(sorted((row for row in standings if row), key=lambda row: row.rank))
 
     def collection_endpoints_reach_ctfd(self) -> bool:
-        """Whether a collection endpoint's reply was composed by CTFd, asked with a query it must
-        refuse ([ADR-0016](../docs/adr/0016-an-empty-list-is-not-an-empty-board.md)).
+        """Whether the known-absent Challenge ID returned one genuine negative JSON contract."""
 
-        A 200 here cannot have come from CTFd, and a Board that agreeable is one whose empty
-        collections mean nothing at all — the IN-CYPHER practice arena answers every collection
-        endpoint this way while `/api/v1/challenges/8/solves` returns real rows. **Any refusal
-        counts**: a 400, a 403 and a 302 all pass, because this catches the reply that is too
-        agreeable rather than certifying the stack behind a normal one.
-
-        It lives on the seam rather than above it because it is a property of this Board's read
-        contract, and every reader of an empty list needs it — the pre-flight probe asks it before
-        naming any other cause, and Intake asks it before recording a Board as having emptied.
-        """
-        status, _body, _location = self.request("GET", READ_CONTRACT_CONTROL)
-        return status != 200
+        answer = self.inspect("GET", READ_CONTRACT_CONTROL)
+        payload = _json_or_none(answer.body)
+        return (
+            answer.status == 404
+            and answer.content_type.partition(";")[0].strip().lower() == "application/json"
+            and payload is not None
+            and payload.get("success") is not True
+        )
 
     def submit(self, challenge_id: int | str, flag: str) -> Verdict:
         """Submit one Flag, and answer with what the **body** said about it.

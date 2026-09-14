@@ -418,7 +418,7 @@ class CoherentIntake:
             attempt_id,
             pass_no,
             "read-control",
-            "/api/v1/challenges?field=intake-is-not-a-field&q=a",
+            "/api/v1/challenges/0",
         )
         scoreboard = None
         mana = None

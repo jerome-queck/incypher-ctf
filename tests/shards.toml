@@ -54,6 +54,7 @@
   "tests/test_flag_wrappers.py",
   "tests/test_instance_lease.py",
   "tests/test_instance_ledger_identity.py",
+  "tests/test_lease_target.py",
   "tests/test_instance_path.py",
   "tests/test_instance_reconciliation.py",
   "tests/test_intake_evidence.py",

@@ -789,14 +789,15 @@ def _live_controls(landing: IntakeDocument, read_control: IntakeDocument, contra
         or landing.endpoint != "/"
         or landing.raw_digest not in contract.landing_digests
         or read_control.kind != "read-control"
-        or read_control.endpoint != "/api/v1/challenges?field=intake-is-not-a-field&q=a"
+        or read_control.endpoint != "/api/v1/challenges/0"
+        or read_control.status != 404
         or read_control.raw_digest not in contract.read_control_digests
         or read_control.status not in contract.read_control_statuses
         or read_control.raw_digest == landing.raw_digest
     ):
         raise _Unsettled("empty-control-unproved")
     wrapper = _json(read_control)
-    if not isinstance(wrapper, Mapping) or wrapper.get("success") is not False:
+    if not isinstance(wrapper, Mapping) or wrapper.get("success") is True:
         raise _Unsettled("empty-control-unproved")
 
 
@@ -849,7 +850,7 @@ def _valid_endpoint(document: IntakeDocument, contract: IntakeContract) -> None:
     fixed = {
         "identity": "/api/v1/users/me",
         "landing": "/",
-        "read-control": "/api/v1/challenges?field=intake-is-not-a-field&q=a",
+        "read-control": "/api/v1/challenges/0",
         "mana": "/api/v1/plugins/ctfd-chall-manager/mana",
     }
     if document.kind in fixed:
