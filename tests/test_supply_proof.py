@@ -5,6 +5,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_tool_adapters_are_invoked_through_their_declared_interpreters() -> None:
+    adapters = (
+        "osint/osint.py",
+        "osint/osint.sh",
+        "web/browser_driver.py",
+        "web/tool.py",
+        "web/tool.sh",
+    )
+
+    for adapter in adapters:
+        source = (REPO_ROOT / "tool-supply" / "fixtures" / adapter).read_bytes()
+        assert not source.startswith(b"#!"), adapter
+
+
 def test_osint_self_check_names_bounded_functional_fixture_probes() -> None:
     source = (REPO_ROOT / "tool-supply" / "fixtures" / "osint" / "osint.py").read_text()
 

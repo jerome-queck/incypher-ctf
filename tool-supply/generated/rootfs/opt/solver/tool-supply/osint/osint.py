@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 """Bounded OSINT adapter: every live or recorded query crosses Research."""
 
 from __future__ import annotations

@@ -226,7 +226,7 @@
         {
           "source": "fixtures/osint/osint.py",
           "destination": "/opt/solver/tool-supply/osint/osint.py",
-          "sha256": "897b42ee8d91d80de47a37345b3074e2aeee6bcd6403d45ec93d2f0de06105ee",
+          "sha256": "f3877393a7699c59ba8df449be4294a27289578862f13a0c07dfe5678a2d0329",
           "mode": "0444"
         },
         {
@@ -238,7 +238,7 @@
         {
           "source": "fixtures/osint/osint.sh",
           "destination": "/usr/local/bin/incypher-osint",
-          "sha256": "335f2fafc16ef8d673070f39503800f2c2eeff5457139e6491b8cc22d9eaa97f",
+          "sha256": "bcf0d8920e539352455ff5e603f9ca61254055add2136bed7697a51d72cee801",
           "mode": "0444"
         }
       ],

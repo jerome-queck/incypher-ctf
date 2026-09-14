@@ -52,10 +52,10 @@
         {"name": "fonts-liberation", "version": "1:2.1.5-3"}
       ],
       "files": [
-        {"source": "fixtures/web/tool.sh", "destination": "/usr/local/bin/incypher-web", "sha256": "01ceaab5e11437d36118c652741de57285d647848c648bf51efd1a80ab337b16", "mode": "0444"},
-        {"source": "fixtures/web/tool.py", "destination": "/opt/solver/tool-supply/web/tool.py", "sha256": "931394522827442d4ac0d9440fd73b6d94b930bdfce189e6642c072f0a3fcf50", "mode": "0444"},
+        {"source": "fixtures/web/tool.sh", "destination": "/usr/local/bin/incypher-web", "sha256": "4de98133877a6c29fd9b6c5e0747cb4fe11fb8cc677d911ef706c947ad108c80", "mode": "0444"},
+        {"source": "fixtures/web/tool.py", "destination": "/opt/solver/tool-supply/web/tool.py", "sha256": "bf2db27375a6f6131e4e4b8263cfa1634e20918552b5b8ddc151a3a00bef6f81", "mode": "0444"},
         {"source": "fixtures/web/requirements.txt", "destination": "/opt/solver/tool-supply/web/requirements.txt", "sha256": "b41b44e189a4c0d557c1bec8fb740c8dc6e740fe88647bbfb9f4eda8d4dee38f", "mode": "0444"},
-        {"source": "fixtures/web/browser_driver.py", "destination": "/opt/solver/tool-supply/web/browser_driver.py", "sha256": "82d0ec987d5b0a5a7baa52b27f97888e03b0a3e523e4b9cc5bbb5250203c63d1", "mode": "0444"},
+        {"source": "fixtures/web/browser_driver.py", "destination": "/opt/solver/tool-supply/web/browser_driver.py", "sha256": "a4632b26749c25eca38785b62a41de8e0597b9b120bf8692d3d91ef0b48255b2", "mode": "0444"},
         {"source": "fixtures/web/LICENSES.json", "destination": "/opt/solver/tool-supply/LICENSE.web", "sha256": "77c67bf1ebb1e8110b247302558fe2d9a7977d31caba7480f7b8e76e658fee19", "mode": "0444"},
         {"source": "fixtures/web/input.txt", "destination": "/opt/solver/tool-supply/web/input.txt", "sha256": "02e57347acfcfdd750059c487ca408b3646ecd1ba1424599115014740443120e", "mode": "0444"},
         {"source": "fixtures/web/discovery.json", "destination": "/opt/solver/tool-supply/web/discovery.json", "sha256": "1c18c3aea4ad9280744aa0920ff50ab0316a6146398265150d63499be2368353", "mode": "0444"},

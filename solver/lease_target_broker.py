@@ -183,26 +183,24 @@ class LeaseTargetBroker:
         return handle
 
     def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
-        return self._operation("exchange", connection, handle, request)
+        return self._operation(handle, lambda runtime: runtime.exchange(connection, handle, request))
 
     def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
-        return self._operation("http_session", connection, handle, request)
+        return self._operation(handle, lambda runtime: runtime.http_session(connection, handle, request))
 
     def http_fuzz(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
-        return self._operation("http_fuzz", connection, handle, request)
+        return self._operation(handle, lambda runtime: runtime.http_fuzz(connection, handle, request))
 
     def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
-        return self._operation("tcp_session", connection, handle, request)
+        return self._operation(handle, lambda runtime: runtime.tcp_session(connection, handle, request))
 
     def browser(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
-        return self._operation("browser", connection, handle, request)
+        return self._operation(handle, lambda runtime: runtime.browser(connection, handle, request))
 
     def _operation(
         self,
-        operation: str,
-        connection: socket.socket,
         handle: str,
-        request: Mapping[str, object],
+        invoke: Callable[[TargetBrokerRuntime], TargetResult],
     ) -> TargetResult:
         with self._lock:
             current = self._handles.get(handle)
@@ -211,7 +209,7 @@ class LeaseTargetBroker:
             if not self._target_authority.reauthorize(current.grant):
                 self.revoke_generation(current.grant.generation_id)
                 return TargetResult(TargetOutcome.REVOKED)
-        return getattr(current.runtime, operation)(connection, handle, request)
+        return invoke(current.runtime)
 
     def revoke(self, handle: str) -> None:
         with self._lock:

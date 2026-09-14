@@ -63,8 +63,8 @@ def build_image(
     *,
     platform: str = "linux/arm64",
     runtime_host: str = "colima",
-) -> tuple[str, str, str]:
-    """Return platform, OCI manifest digest and config digest for the one loaded build."""
+) -> strict_runtime.RuntimeBinding:
+    """Return the loaded image identity and its exact OCI binding."""
 
     if runtime_host not in RUNTIME_HOSTS:
         raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
@@ -94,16 +94,17 @@ def build_image(
     )
     if not isinstance(config_digest, str) or not config_digest.startswith("sha256:"):
         raise ReceiptInvalid("BuildKit did not return the OCI config digest")
-    if len(inspected) != 2 or inspected[0] != manifest_digest or inspected[1] != platform:
+    if len(inspected) != 2 or inspected[0] not in {manifest_digest, config_digest} or inspected[1] != platform:
         raise ReceiptInvalid("the loaded strict image is not the requested platform and OCI manifest")
     if runtime_host == "colima":
         strict_runtime.enforce_host_storage("development", runner)
-    return platform, manifest_digest, config_digest
+    return strict_runtime.RuntimeBinding(inspected[0], manifest_digest, config_digest, platform)
 
 
 def strict_observation(
     component_id: str,
     *,
+    image_id: str,
     platform: str,
     manifest_digest: str,
     config_digest: str,
@@ -121,7 +122,7 @@ def strict_observation(
             NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
             "--entrypoint",
             "/bin/true",
-            manifest_digest,
+            image_id,
         ],
         check=True,
     )
@@ -129,7 +130,7 @@ def strict_observation(
         result = runner(
             _strict_command(
                 strict_runtime.tool_probe_command(
-                    manifest_digest,
+                    image_id,
                     manifest_digest,
                     config_digest,
                     platform,
@@ -160,12 +161,12 @@ def qualify(
     runner: Runner = _run,
 ) -> dict[str, object]:
     binding = build_image(runner, platform=platform, runtime_host=runtime_host)
-    platform, manifest_digest, config_digest = binding
     observation = strict_observation(
         component_id,
-        platform=platform,
-        manifest_digest=manifest_digest,
-        config_digest=config_digest,
+        image_id=binding.image_id,
+        platform=binding.platform,
+        manifest_digest=binding.image_manifest_digest,
+        config_digest=binding.image_config_digest,
         runtime_host=runtime_host,
         runner=runner,
     )
@@ -188,7 +189,7 @@ def qualify(
                 NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
                 "--entrypoint",
                 "/bin/true",
-                manifest_digest,
+                binding.image_id,
             ],
             check=True,
         )
@@ -197,7 +198,7 @@ def qualify(
             result = runner(
                 _strict_command(
                     strict_runtime.tool_handle_probe_command(
-                        strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
+                        binding,
                         state,
                         component_id,
                     ),

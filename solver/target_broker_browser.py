@@ -115,25 +115,6 @@ class BrowserLauncher:
                 raise OSError("browser transport channel is absent")
             deadline = time.monotonic() + timeout_seconds
 
-            def service_transport() -> None:
-                exchange = _receive(self._transport_connection)
-                transport_request_id = exchange.get("request_id")
-                if (
-                    not isinstance(transport_request_id, str)
-                    or not transport_request_id
-                    or not isinstance(exchange.get("exchange"), dict)
-                ):
-                    raise OSError("browser transport request changed identity")
-                try:
-                    result = dict(transport(exchange["exchange"]))
-                except (OSError, ValueError):
-                    result = {"outcome": TargetOutcome.DENIED.value}
-                _send(
-                    self._transport_connection,
-                    {"request_id": transport_request_id, "result": result},
-                    self._send_lock,
-                )
-
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -145,7 +126,7 @@ class BrowserLauncher:
                     remaining,
                 )
                 if self._transport_connection in readable:
-                    service_transport()
+                    self._service_transport(transport)
                     continue
                 if self._connection in readable:
                     response = _receive(self._connection)
@@ -188,23 +169,7 @@ class BrowserLauncher:
                     remaining,
                 )
                 if self._transport_connection in readable:
-                    exchange = _receive(self._transport_connection)
-                    transport_request_id = exchange.get("request_id")
-                    if (
-                        not isinstance(transport_request_id, str)
-                        or not transport_request_id
-                        or not isinstance(exchange.get("exchange"), dict)
-                    ):
-                        raise OSError("browser transport request changed identity")
-                    try:
-                        result = dict(transport(exchange["exchange"]))
-                    except (OSError, ValueError):
-                        result = {"outcome": TargetOutcome.DENIED.value}
-                    _send(
-                        self._transport_connection,
-                        {"request_id": transport_request_id, "result": result},
-                        self._send_lock,
-                    )
+                    self._service_transport(transport)
                     continue
                 if self._connection in readable:
                     response = _receive(self._connection)
@@ -212,6 +177,30 @@ class BrowserLauncher:
                         return
         except (TimeoutError, OSError, ValueError, binascii.Error):
             self.close()
+
+    def _service_transport(
+        self,
+        transport: Callable[[Mapping[str, object]], Mapping[str, object]],
+    ) -> None:
+        if self._transport_connection is None:
+            raise OSError("browser transport channel is absent")
+        exchange = _receive(self._transport_connection)
+        transport_request_id = exchange.get("request_id")
+        if (
+            not isinstance(transport_request_id, str)
+            or not transport_request_id
+            or not isinstance(exchange.get("exchange"), dict)
+        ):
+            raise OSError("browser transport request changed identity")
+        try:
+            result = dict(transport(exchange["exchange"]))
+        except (OSError, ValueError):
+            result = {"outcome": TargetOutcome.DENIED.value}
+        _send(
+            self._transport_connection,
+            {"request_id": transport_request_id, "result": result},
+            self._send_lock,
+        )
 
     def cancel(self, request_id: str) -> None:
         if not self._closed:

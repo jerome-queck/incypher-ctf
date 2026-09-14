@@ -1,4 +1,4 @@
-#!/bin/dash
+# shellcheck shell=sh
 set -eu
 
 case "${1:-}" in
