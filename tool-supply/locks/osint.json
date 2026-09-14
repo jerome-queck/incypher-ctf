@@ -135,12 +135,36 @@
           "ecosystem": "pypi"
         },
         {
+          "name": "python3-bs4",
+          "version": "4.15.0-1"
+        },
+        {
+          "name": "python3-colorama",
+          "version": "0.4.6-5"
+        },
+        {
           "name": "python3-geopy",
           "version": "2.4.1-3"
         },
         {
+          "name": "python3-httpx",
+          "version": "0.28.1-1.1"
+        },
+        {
           "name": "python3-piexif",
           "version": "1.1.3-2"
+        },
+        {
+          "name": "python3-termcolor",
+          "version": "2.4.0-3"
+        },
+        {
+          "name": "python3-tqdm",
+          "version": "4.69.0-1"
+        },
+        {
+          "name": "python3-trio",
+          "version": "0.34.0-1"
         },
         {
           "name": "sherlock",
@@ -164,7 +188,7 @@
         {
           "source": "fixtures/osint/LICENSES.json",
           "destination": "/opt/solver/tool-supply/LICENSE.osint.core",
-          "sha256": "62be98a0abbaddc75ec6d9ca21e7096cb9a092edb8cf7b1d77315a0646ace732",
+          "sha256": "10c9f15ddc2b3646ebd27b208071a27fc0c91f2ba0c70b20b7c976d662fb2ca9",
           "mode": "0444"
         },
         {
@@ -198,6 +222,12 @@
           "mode": "0444"
         },
         {
+          "source": "fixtures/osint/functional.json",
+          "destination": "/opt/solver/tool-supply/osint/functional.json",
+          "sha256": "fa31f76bf01e46d4555d90e0000091e434944ac53760e5e2640c4abc0a45d1ef",
+          "mode": "0444"
+        },
+        {
           "source": "fixtures/osint/input.txt",
           "destination": "/opt/solver/tool-supply/osint-input.txt",
           "sha256": "bc789ac78dcfcf66b2f9e0aab4556ddeb29d5ccddb074e14099af91b204b31cd",
@@ -206,7 +236,7 @@
         {
           "source": "fixtures/osint/osint.py",
           "destination": "/opt/solver/tool-supply/osint/osint.py",
-          "sha256": "3c69b13aa734da878ba3a0a284164786ef92690bc89372574cdbfd163cf4b43e",
+          "sha256": "d1203e780dc839351e9a73bacc8755e6a0bf2b25c916a209efaf6339b43d7d42",
           "mode": "0444"
         },
         {

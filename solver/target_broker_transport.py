@@ -321,9 +321,7 @@ def _http_session_exchange(
     activate: Callable[[http.client.HTTPConnection | None], None] | None = None,
 ) -> HttpTransportResult:
 
-    host = endpoint.host if endpoint.port in {80, 443} else f"{endpoint.host}:{endpoint.port}"
-    headers = (("Host", host), *request.headers, ("Content-Length", str(len(request.body))))
-    request_bytes = _http_request_bytes(request.method, request.target, headers, request.body)
+    request_bytes = http_request_size(endpoint, request)
     if request_bytes > limits.max_request_bytes:
         return HttpTransportResult(TargetOutcome.TOO_LARGE)
     connection: http.client.HTTPConnection
@@ -338,7 +336,7 @@ def _http_session_exchange(
     started = time.monotonic()
     try:
         connection.putrequest(request.method, request.target, skip_host=True, skip_accept_encoding=True)
-        for name, value in headers:
+        for name, value in _http_headers(endpoint, request):
             connection.putheader(name, value)
         connection.endheaders(request.body)
         response = connection.getresponse()
@@ -391,6 +389,17 @@ def _http_request_bytes(
         + 2
         + len(body)
     )
+
+
+def _http_headers(endpoint: TargetEndpoint, request: HttpTransportRequest) -> tuple[tuple[str, str], ...]:
+    host = endpoint.host if endpoint.port in {80, 443} else f"{endpoint.host}:{endpoint.port}"
+    return (("Host", host), *request.headers, ("Content-Length", str(len(request.body))))
+
+
+def http_request_size(endpoint: TargetEndpoint, request: HttpTransportRequest) -> int:
+    """Measure the exact request bytes before opening the pinned Target connection."""
+
+    return _http_request_bytes(request.method, request.target, _http_headers(endpoint, request), request.body)
 
 
 def _decode_bounded(body: bytes, encoding: str, limit: int) -> bytes | None:

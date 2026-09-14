@@ -26,6 +26,8 @@ from solver.resident_handle_receipt import create_receipt as create_handle_recei
 
 Runner = Callable[..., Any]
 RUNTIME_HOSTS = ("colima", "native-docker")
+NATIVE_CGROUP_PARENT = "incypher-v2-strict.slice"
+NATIVE_CGROUP_SOURCE = "/sys/fs/cgroup/incypher-v2-strict.slice"
 
 
 def _run(command: list[str], **options: Any) -> subprocess.CompletedProcess[str]:
@@ -36,10 +38,23 @@ def _cleanup_cgroup(runtime_host: str, runner: Runner) -> None:
     if runtime_host == "colima":
         command = ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
     elif runtime_host == "native-docker":
-        command = ["sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+        command = ["sudo", "rmdir", NATIVE_CGROUP_SOURCE]
     else:
         raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
     runner(command, check=True)
+
+
+def _strict_command(command: list[str], runtime_host: str) -> list[str]:
+    if runtime_host == "colima":
+        return command
+    if runtime_host != "native-docker":
+        raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    return [
+        NATIVE_CGROUP_PARENT
+        if item == strict_runtime.CGROUP_PARENT
+        else item.replace(strict_runtime.CGROUP_SOURCE, NATIVE_CGROUP_SOURCE)
+        for item in command
+    ]
 
 
 def build_image(runner: Runner = _run, *, runtime_host: str = "colima") -> tuple[str, str, str]:
@@ -95,7 +110,7 @@ def strict_observation(
             "run",
             "--rm",
             "--cgroup-parent",
-            strict_runtime.CGROUP_PARENT,
+            NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
             "--entrypoint",
             "/bin/true",
             manifest_digest,
@@ -104,7 +119,16 @@ def strict_observation(
     )
     try:
         result = runner(
-            strict_runtime.tool_probe_command(manifest_digest, manifest_digest, config_digest, platform, component_id),
+            _strict_command(
+                strict_runtime.tool_probe_command(
+                    manifest_digest,
+                    manifest_digest,
+                    config_digest,
+                    platform,
+                    component_id,
+                ),
+                runtime_host,
+            ),
             check=False,
             capture_output=True,
             text=True,
@@ -152,7 +176,7 @@ def qualify(
                 "run",
                 "--rm",
                 "--cgroup-parent",
-                strict_runtime.CGROUP_PARENT,
+                NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
                 "--entrypoint",
                 "/bin/true",
                 manifest_digest,
@@ -162,10 +186,13 @@ def qualify(
         try:
             state = new_retained_directory("tool-handles", f"{component_id}-")
             result = runner(
-                strict_runtime.tool_handle_probe_command(
-                    strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
-                    state,
-                    component_id,
+                _strict_command(
+                    strict_runtime.tool_handle_probe_command(
+                        strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
+                        state,
+                        component_id,
+                    ),
+                    runtime_host,
                 ),
                 check=False,
                 capture_output=True,

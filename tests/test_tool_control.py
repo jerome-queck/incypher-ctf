@@ -12,6 +12,7 @@ from solver.attempt_executor import AttemptExecutor, EnvelopeSpec, NetworkPolicy
 from solver.event_store import EventStore
 from solver.tool_control import (
     AttemptToolRuntime,
+    PRODUCTION_PROFILES,
     ToolComponent,
     ToolController,
     ToolInvocation,
@@ -116,6 +117,7 @@ def test_production_runtime_dispatches_every_resident_capability_from_its_locked
             "pids": dict(component.resource_limits)["pids"],
             "filesystem_bytes": dict(component.resource_limits)["filesystem_bytes"],
             "network": "deny",
+            "network_class": component.network_class,
             "wall_seconds": dict(component.resource_limits)["wall_seconds"],
             "cleanup_seconds": 5,
         }
@@ -129,6 +131,7 @@ def test_production_runtime_dispatches_an_enabled_nonresident_profile(tmp_path: 
         ("web",),
         fixed_arguments=("/usr/local/bin/incypher-web", "web.discovery"),
         input_paths=1,
+        network_class="target-broker",
         resource_limits=(
             ("cpu_seconds", 1),
             ("filesystem_bytes", 1024),
@@ -163,6 +166,7 @@ def test_production_runtime_dispatches_an_enabled_nonresident_profile(tmp_path: 
         "web.discovery",
         "/work/request.json",
     )
+    assert observed[0]["envelope"].network_class == "target-broker"
 
 
 def test_resident_policy_denies_flags_code_urls_and_paths_outside_work(tmp_path: Path) -> None:
@@ -312,7 +316,7 @@ def test_declared_component_traverses_the_strict_attempt_executor(tmp_path: Path
         boot_id="boot-1",
         peer=PEER,
     )
-    assert runtime._enabled_profiles == ("resident", "tool-crypto", "web", "osint", "misc-protocols")
+    assert runtime._enabled_profiles == PRODUCTION_PROFILES
 
     result = runtime.invoke(
         generation_id=binding.generation_id,

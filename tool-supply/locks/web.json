@@ -20,7 +20,7 @@
         "expected_stdout_sha256": "02e57347acfcfdd750059c487ca408b3646ecd1ba1424599115014740443120e",
         "timeout_seconds": 60,
         "capability_stdout_sha256": {
-          "web.discovery": "443b5d6b58dc74166564d7a0b9c1f717018d2af885e474ee9344f3ef3a8f16fe",
+          "web.discovery": "becd31d7292d62afbed4deb0e86f6c655a2cf04cb65aaaecabd8bfd5c0680828",
           "web.browser": "ab26b1bc22b9dbfa5732301bd79e485e387d2ed87be0d653426616772a197969"
         },
         "capability_argv": {
@@ -34,7 +34,8 @@
         "capability_expected_facts": {
           "web.discovery": [
             "schema=web.discovery.v1",
-            "engine=target-broker-http-session+curated-wordlist",
+            "engine=ffuf@2.2.1+target-broker-http-session+curated-wordlist",
+            "ffuf=pass",
             "found=/hidden-route"
           ],
           "web.browser": ["schema=web.browser.v1", "engine=playwright@1.55.0+chromium@150.0.7871.181", "local_storage=[[\"browser-state\",\"held\"]]"]
@@ -52,9 +53,9 @@
       ],
       "files": [
         {"source": "fixtures/web/tool.sh", "destination": "/usr/local/bin/incypher-web", "sha256": "01ceaab5e11437d36118c652741de57285d647848c648bf51efd1a80ab337b16", "mode": "0444"},
-        {"source": "fixtures/web/tool.py", "destination": "/opt/solver/tool-supply/web/tool.py", "sha256": "52c06a28dfa40b41332a26de0d2f046123a01f8bc7905081821be23750e845ae", "mode": "0444"},
+        {"source": "fixtures/web/tool.py", "destination": "/opt/solver/tool-supply/web/tool.py", "sha256": "931394522827442d4ac0d9440fd73b6d94b930bdfce189e6642c072f0a3fcf50", "mode": "0444"},
         {"source": "fixtures/web/requirements.txt", "destination": "/opt/solver/tool-supply/web/requirements.txt", "sha256": "b41b44e189a4c0d557c1bec8fb740c8dc6e740fe88647bbfb9f4eda8d4dee38f", "mode": "0444"},
-        {"source": "fixtures/web/browser_driver.py", "destination": "/opt/solver/tool-supply/web/browser_driver.py", "sha256": "1c14b8120e64823089a19ec02b9f4df33051316e903e66df597793eefa9418fc", "mode": "0444"},
+        {"source": "fixtures/web/browser_driver.py", "destination": "/opt/solver/tool-supply/web/browser_driver.py", "sha256": "82d0ec987d5b0a5a7baa52b27f97888e03b0a3e523e4b9cc5bbb5250203c63d1", "mode": "0444"},
         {"source": "fixtures/web/LICENSES.json", "destination": "/opt/solver/tool-supply/LICENSE.web", "sha256": "77c67bf1ebb1e8110b247302558fe2d9a7977d31caba7480f7b8e76e658fee19", "mode": "0444"},
         {"source": "fixtures/web/input.txt", "destination": "/opt/solver/tool-supply/web/input.txt", "sha256": "02e57347acfcfdd750059c487ca408b3646ecd1ba1424599115014740443120e", "mode": "0444"},
         {"source": "fixtures/web/discovery.json", "destination": "/opt/solver/tool-supply/web/discovery.json", "sha256": "1c18c3aea4ad9280744aa0920ff50ab0316a6146398265150d63499be2368353", "mode": "0444"},

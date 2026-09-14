@@ -32,12 +32,38 @@ class ResearchKind(str, enum.Enum):
     GEO = "geo"
 
 
+class ResearchPolicyDecision(str, enum.Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+    NOT_APPLICABLE = "not-applicable"
+
+
+def research_policy_decision(terms_decision: str, robots_decision: str) -> str:
+    decisions = (terms_decision, robots_decision)
+    if any(decision in {"", ResearchPolicyDecision.DENY.value} for decision in decisions):
+        return ResearchPolicyDecision.DENY.value
+    if all(decision == ResearchPolicyDecision.NOT_APPLICABLE.value for decision in decisions):
+        return ResearchPolicyDecision.NOT_APPLICABLE.value
+    return ResearchPolicyDecision.ALLOW.value
+
+
 @dataclass(frozen=True)
 class ResearchSource:
     kind: ResearchKind
     url_template: str
     terms: str
     robots: str
+    terms_decision: str = ""
+    robots_decision: str = ""
+
+    def __post_init__(self) -> None:
+        allowed = {"", *(item.value for item in ResearchPolicyDecision)}
+        if self.terms_decision not in allowed or self.robots_decision not in allowed:
+            raise ValueError("Research source policy decision is invalid")
+
+    @property
+    def policy_decision(self) -> str:
+        return research_policy_decision(self.terms_decision, self.robots_decision)
 
 
 @dataclass(frozen=True)
@@ -127,6 +153,9 @@ class ResearchProvenance:
     robots: str = ""
     origin: str = ""
     query_digest: str = ""
+    terms_decision: str = ""
+    robots_decision: str = ""
+    policy_decision: str = ""
 
 
 @dataclass(frozen=True)
@@ -167,6 +196,9 @@ class ResearchBrokerRecorded:
     robots: str
     origin: str
     query_digest: str
+    terms_decision: str
+    robots_decision: str
+    policy_decision: str
     max_requests: int
     max_total_bytes: int
     max_total_seconds_ms: int
@@ -211,6 +243,9 @@ class ResearchBrokerRecorded:
             "robots": self.robots,
             "origin": self.origin,
             "query_digest": self.query_digest,
+            "terms_decision": self.terms_decision,
+            "robots_decision": self.robots_decision,
+            "policy_decision": self.policy_decision,
             "max_requests": self.max_requests,
             "max_total_bytes": self.max_total_bytes,
             "max_total_seconds_ms": self.max_total_seconds_ms,
@@ -249,6 +284,9 @@ class ResearchBrokerRecorded:
             "robots",
             "origin",
             "query_digest",
+            "terms_decision",
+            "robots_decision",
+            "policy_decision",
             "max_requests",
             "max_total_bytes",
             "max_total_seconds_ms",
@@ -260,7 +298,15 @@ class ResearchBrokerRecorded:
             ResearchOutcome(str(payload["outcome"]))
             if payload["kind"]:
                 ResearchKind(str(payload["kind"]))
-        except ValueError as error:
+            for field in ("terms_decision", "robots_decision", "policy_decision"):
+                if payload[field] not in {"", *(item.value for item in ResearchPolicyDecision)}:
+                    raise ValueError(field)
+            if any(payload[field] for field in ("terms_decision", "robots_decision", "policy_decision")) and (
+                payload["policy_decision"]
+                != research_policy_decision(payload["terms_decision"], payload["robots_decision"])
+            ):
+                raise ValueError("policy_decision")
+        except (TypeError, ValueError) as error:
             raise InvalidEventError("Research-broker outcome is invalid", sequence=sequence) from error
 
 
@@ -270,9 +316,11 @@ __all__ = [
     "ResearchLimits",
     "ResearchKind",
     "ResearchOutcome",
+    "ResearchPolicyDecision",
     "ResearchProvenance",
     "ResearchQuery",
     "ResearchResult",
     "ResearchTransportResult",
     "ResearchSource",
+    "research_policy_decision",
 ]

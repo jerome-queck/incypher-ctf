@@ -84,8 +84,10 @@
       },
       "platforms": ["amd64", "arm64"],
       "packages": [
+        {"name": "dash", "version": "0.5.12-12+b1"},
         {"name": "nodejs", "version": "24.19.0+dfsg+~cs24.13.3-1"},
         {"name": "npm", "version": "11.19.0+ds1-2"},
+        {"name": "python3", "version": "3.14.6-1"},
         {"name": "socat", "version": "1.8.1.3-2"},
         {"name": "python3-capstone", "version": "5.0.9-1"},
         {"name": "python3-unicorn", "version": "2.1.4-4"},
@@ -106,7 +108,8 @@
       "files": [
         {"source":"fixtures/misc-protocols/LICENSES.json","destination":"/opt/solver/tool-supply/LICENSE.misc-protocols","sha256":"0f24b9be84b5d4f34458c6e295fea9aacb98d0bc1860da18c0e22a350b522e28","mode":"0444"},
         {"source":"fixtures/misc-protocols/tool.sh","destination":"/usr/local/bin/incypher-misc-protocols","sha256":"c51e95d12bcfdf6c2ed1ffe008321b56089fc652c2a9f7a036cd423ce7fb75b0","mode":"0444"},
-        {"source":"fixtures/misc-protocols/tool.py","destination":"/opt/solver/tool-supply/misc-protocols/tool.py","sha256":"d872cebfa57bc24f85f998f66f60036488fb53dc739b3e5ea4c3d1e4437a64b1","mode":"0444"},
+        {"source":"fixtures/misc-protocols/tool.py","destination":"/opt/solver/tool-supply/misc-protocols/tool.py","sha256":"9b94326985fc230e081573c45a75001b8c39dfc0571f57d821eecf2b47030802","mode":"0444"},
+        {"source":"fixtures/misc-protocols/runtime.json","destination":"/opt/solver/tool-supply/misc-protocols/runtime.json","sha256":"a365765907cd14841d12d2aa41d8cadf384d899324321c8fd0b0ddb74a98698e","mode":"0444"},
         {"source":"fixtures/misc-protocols/transform.mjs","destination":"/opt/solver/tool-supply/misc-protocols/transform.mjs","sha256":"9f12ea5d88f0e19f6ea1ca2151f1b99306572a6fd143d6da2678ef89fe01076d","mode":"0444"},
         {"source":"fixtures/misc-protocols/package.json","destination":"/opt/solver/tool-supply/misc-protocols/package.json","sha256":"f2accb608834fd6bd72bbfb58a45291de06661d2ca8dd7262229ce8908d2adcb","mode":"0444"},
         {"source":"fixtures/misc-protocols/package-lock.json","destination":"/opt/solver/tool-supply/misc-protocols/package-lock.json","sha256":"0d258cedc5e9bf7b3be1ab92165adf64eb276860052f572da022de0e9a69a719","mode":"0444"},

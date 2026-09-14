@@ -35,6 +35,7 @@ from solver.target_broker_contracts import (
     BrowserSessionRequest,
     BrowserTransportResult,
     HttpBody,
+    HttpFuzzRequest,
     HttpSessionRequest,
     TcpReceive,
     TcpSessionRequest,
@@ -51,6 +52,7 @@ from solver.target_broker_ipc import (
     TargetBrokerClient,
     TargetBrokerService,
 )
+from solver.target_broker_ffuf import FfufResult
 from solver.target_broker_receipt import capsule_contract, link_manifest, verify_receipt, write_receipt
 from solver.target_broker_transport import (
     HttpTransportRequest,
@@ -75,18 +77,18 @@ TEST_CANDIDATE = TargetCandidateBinding(IMAGE_ID, "sha256:" + "b" * 64, "sha256:
 
 
 def test_browser_launcher_has_a_dedicated_uid_and_private_mount_process_boundary() -> None:
-    command = target_broker_browser._browser_worker_command(9)
+    command = target_broker_browser._browser_worker_command(9, 10)
 
     assert command[0] == "/usr/bin/bwrap"
     assert "--unshare-pid" in command
     assert "--unshare-uts" in command
     assert "--unshare-ipc" in command
-    assert "--unshare-net" not in command
+    assert "--unshare-net" in command
     assert "/state" not in command
     assert ["--ro-bind", "/opt/solver", "/opt/solver"] not in [
         command[index : index + 3] for index in range(len(command) - 2)
     ]
-    assert command[-14:] == [
+    assert command[-15:] == [
         "PATH",
         "/usr/local/bin:/usr/bin:/bin",
         "/usr/bin/setpriv",
@@ -101,12 +103,15 @@ def test_browser_launcher_has_a_dedicated_uid_and_private_mount_process_boundary
         "-I",
         "/browser-worker.py",
         "9",
+        "10",
     ]
 
 
 def test_controller_attaches_and_resets_the_inherited_browser_launcher(monkeypatch) -> None:
     controller, worker = socket.socketpair()
+    transport_controller, transport_worker = socket.socketpair()
     descriptor = controller.detach()
+    transport_descriptor = transport_controller.detach()
     reset = {}
 
     def acknowledge() -> None:
@@ -122,7 +127,7 @@ def test_controller_attaches_and_resets_the_inherited_browser_launcher(monkeypat
     thread.start()
     monkeypatch.setattr(target_broker_browser, "_prepared_launcher", None)
     launcher = target_broker_browser.attach_browser_launcher(
-        {target_broker_browser.BROWSER_LAUNCHER_FD_ENV: str(descriptor)}
+        {target_broker_browser.BROWSER_LAUNCHER_FD_ENV: f"{descriptor}:{transport_descriptor}"}
     )
     thread.join()
 
@@ -131,6 +136,7 @@ def test_controller_attaches_and_resets_the_inherited_browser_launcher(monkeypat
     assert target_broker_browser._prepared_launcher is launcher
     target_broker_browser.close_browser_launcher()
     worker.close()
+    transport_worker.close()
 
 
 def test_owner_kills_and_reaps_a_browser_launcher_that_ignores_shutdown() -> None:
@@ -161,12 +167,71 @@ def test_owner_kills_and_reaps_a_browser_launcher_that_ignores_shutdown() -> Non
     worker.close()
 
 
+def test_browser_launcher_multiplexes_every_request_through_controller_transport() -> None:
+    controller, worker = socket.socketpair()
+    transport_controller, transport_worker = socket.socketpair()
+    launcher = target_broker_browser.BrowserLauncher(
+        controller,
+        None,
+        transport_controller,
+        await_ready=False,
+    )
+    observed = {}
+
+    def browse() -> None:
+        request = target_broker_browser._receive(worker)
+        request_id = request["request_id"]
+        transport_request_id = "subrequest-1"
+        target_broker_browser._send(
+            transport_worker,
+            {"request_id": transport_request_id, "exchange": {"method": "GET", "url": "http://target.test/"}},
+            threading.Lock(),
+        )
+        transport_response = target_broker_browser._receive(transport_worker)
+        observed.update(transport_response["result"])
+        observed["request_id"] = transport_response["request_id"]
+        target_broker_browser._send(
+            worker,
+            {
+                "outcome": "completed",
+                "request_id": request_id,
+                "returncode": 0,
+                "stdout": base64.b64encode(
+                    b'{"dom":"","network":[],"local_storage":[],"session_storage":[],"downloads":[]}'
+                ).decode(),
+            },
+            threading.Lock(),
+        )
+
+    thread = threading.Thread(target=browse)
+    thread.start()
+    result = launcher.execute(
+        "request-1",
+        {},
+        timeout_seconds=1,
+        transport=lambda request: {"outcome": "answered", "status": 200, "url": request["url"]},
+    )
+    thread.join()
+    launcher.close()
+    worker.close()
+    transport_worker.close()
+
+    assert result is not None and result[0] == "completed"
+    assert observed == {
+        "outcome": "answered",
+        "request_id": "subrequest-1",
+        "status": 200,
+        "url": "http://target.test/",
+    }
+
+
 def test_browser_session_uses_the_prepared_fixed_uid_launcher() -> None:
     observed = {}
 
     class Launcher:
-        def execute(self, request_id, document, *, timeout_seconds):
+        def execute(self, request_id, document, *, timeout_seconds, transport):
             observed.update(request_id=request_id, document=document, timeout_seconds=timeout_seconds)
+            observed["transport"] = transport
             return (
                 "completed",
                 0,
@@ -197,6 +262,135 @@ def test_browser_session_uses_the_prepared_fixed_uid_launcher() -> None:
     assert result.outcome is TargetOutcome.ANSWERED
     assert observed["document"]["origin"]["address"] == "127.0.0.1"
     assert observed["timeout_seconds"] == 1
+    assert callable(observed["transport"])
+
+
+def test_browser_session_brokers_only_admitted_origins_and_uses_measured_wire_bytes(monkeypatch) -> None:
+    exchanges = []
+
+    class Transport:
+        def __init__(self, endpoint, address, _limits):
+            exchanges.append((endpoint, address))
+
+        def exchange(self, request, *, max_response_bytes):
+            assert request.target == "/state?view=full"
+            assert max_response_bytes == 1024
+            return HttpTransportResult(
+                TargetOutcome.ANSWERED,
+                b"held",
+                200,
+                (("content-length", "999999"), ("content-type", "text/plain")),
+                request_bytes=31,
+                response_bytes=47,
+                certificate_sha256="b" * 64,
+            )
+
+    monkeypatch.setattr(target_broker_browser, "HttpSessionTransport", Transport)
+
+    class Launcher:
+        def execute(self, request_id, _document, *, timeout_seconds, transport):
+            assert timeout_seconds == 1
+            denied = transport({"method": "GET", "url": "http://off-origin.test/", "headers": {}, "body": ""})
+            answered = transport(
+                {
+                    "method": "GET",
+                    "url": "https://target.test/state?view=full",
+                    "headers": {"Accept": "text/plain"},
+                    "body": "",
+                }
+            )
+            assert denied == {"outcome": "denied"}
+            assert answered["response_bytes"] == 47
+            assert ["content-length", "999999"] not in answered["headers"]
+            return (
+                "completed",
+                0,
+                json.dumps(
+                    {
+                        "dom": "held",
+                        "network": [["GET", "/state", 200, 47]],
+                        "local_storage": [],
+                        "session_storage": [],
+                        "downloads": [],
+                    }
+                ).encode(),
+            )
+
+        def cancel(self, _request_id):
+            return None
+
+    transport = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTPS, "target.test", 443),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        Launcher(),
+    )
+
+    result = transport.browse(BrowserSessionRequest("/state"))
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert result.request_bytes == 31
+    assert result.response_bytes == 47
+    assert result.connections == 1
+    assert result.certificate_sha256 == "b" * 64
+    assert exchanges == [(TargetEndpoint(TargetProtocol.HTTPS, "target.test", 443), "192.0.2.10")]
+
+
+def test_browser_session_close_interrupts_an_active_controller_exchange(monkeypatch) -> None:
+    observed = {"transport_closed": False, "cancelled": ""}
+
+    class Transport:
+        def __init__(self, _endpoint, _address, _limits):
+            return None
+
+        def exchange(self, _request, *, max_response_bytes):
+            assert max_response_bytes == 1024
+            session.close()
+            assert observed["transport_closed"] is True
+            return HttpTransportResult(TargetOutcome.REVOKED)
+
+        def close(self):
+            observed["transport_closed"] = True
+
+    monkeypatch.setattr(target_broker_browser, "HttpSessionTransport", Transport)
+
+    class Launcher:
+        def execute(self, request_id, _document, *, timeout_seconds, transport):
+            assert timeout_seconds == 1
+            transport({"method": "GET", "url": "http://target.test/", "headers": {}, "body": ""})
+            return None
+
+        def cancel(self, request_id):
+            observed["cancelled"] = request_id
+
+    session = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "target.test", 80),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        Launcher(),
+    )
+
+    assert session.browse(BrowserSessionRequest("/")).outcome is TargetOutcome.REVOKED
+    assert observed["cancelled"]
+
+
+def test_browser_session_does_not_discover_a_launcher_from_module_state(monkeypatch) -> None:
+    class Launcher:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("an uninjected launcher must remain unreachable")
+
+    monkeypatch.setattr(target_broker_browser, "_prepared_launcher", Launcher())
+    transport = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        "127.0.0.1",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        None,
+    )
+
+    assert transport.browse(BrowserSessionRequest("/")).outcome is TargetOutcome.DENIED
 
 
 def test_hostile_target_client_exposes_typed_session_documents(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -226,6 +420,30 @@ def test_hostile_target_client_exposes_typed_session_documents(tmp_path: Path, m
     }
 
 
+def test_hostile_target_client_exposes_only_bounded_http_fuzz_paths(tmp_path: Path, monkeypatch, capsys) -> None:
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(HttpFuzzRequest(("/missing", "/hidden")).document()))
+    sent = []
+
+    def request(document):
+        sent.append(document)
+        if document["command"] == "claim":
+            return {"status": "issued", "handle": "opaque"}
+        return {"status": "answered", "result": {"outcome": "answered", "body": ""}}
+
+    monkeypatch.setenv("INCYPHER_TARGET_GENERATION", "generation-000001")
+    monkeypatch.setattr(target_broker_worker_client, "request", request)
+
+    assert target_broker_worker_client.main(["http-fuzz", str(request_path)]) == 0
+
+    assert json.loads(capsys.readouterr().out)["outcome"] == "answered"
+    assert sent[1] == {
+        "command": "http-fuzz",
+        "handle": "opaque",
+        "request": {"paths": ["/missing", "/hidden"]},
+    }
+
+
 def test_browser_session_uses_fresh_generation_owned_target_context(tmp_path: Path) -> None:
     made = []
 
@@ -245,6 +463,9 @@ def test_browser_session_uses_fresh_generation_owned_target_context(tmp_path: Pa
                 ),
                 elapsed_ms=7,
                 response_bytes=41,
+                request_bytes=29,
+                connections=1,
+                certificate_sha256="a" * 64,
             )
 
         def close(self):
@@ -280,6 +501,7 @@ def test_browser_session_uses_fresh_generation_owned_target_context(tmp_path: Pa
     assert result.browser.network == (("GET", "/state", 200, 41),)
     assert result.browser.local_storage == (("held", "browser-only"),)
     assert result.provenance.resolved_address == "127.0.0.1"
+    assert result.provenance.certificate_sha256 == "a" * 64
     assert made[0].closed
 
 
@@ -326,6 +548,7 @@ def test_lease_target_router_publishes_only_current_generation_authority(tmp_pat
             return TargetResult(TargetOutcome.ANSWERED, b"answer")
 
         http_session = exchange
+        http_fuzz = exchange
         tcp_session = exchange
         browser = exchange
 
@@ -370,6 +593,7 @@ def test_lease_target_router_publishes_only_current_generation_authority(tmp_pat
         handle = router.claim(left, grant.generation_id)
         assert router.exchange(left, handle, {"body": ""}).outcome is TargetOutcome.ANSWERED
         assert router.http_session(left, handle, {}).outcome is TargetOutcome.ANSWERED
+        assert router.http_fuzz(left, handle, {}).outcome is TargetOutcome.ANSWERED
         assert router.tcp_session(left, handle, {}).outcome is TargetOutcome.ANSWERED
         assert router.browser(left, handle, {}).outcome is TargetOutcome.ANSWERED
         authority.current = False
@@ -763,6 +987,78 @@ def test_http_session_retains_cookie_and_returns_bounded_selected_observations(t
     assert headers["Content-Type"] == "application/json"
     assert headers["X-Challenge"] == "session"
     assert body == b'{"query":"{ held }"}'
+
+
+def test_http_fuzz_runs_controller_side_and_records_each_target_request(tmp_path: Path) -> None:
+    class Target(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/hidden" else 404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    made = []
+
+    class Fuzz:
+        def __init__(self, paths, exchange, timeout_seconds):
+            self.paths = paths
+            self.exchange = exchange
+            self.timeout_seconds = timeout_seconds
+            self.closed = False
+            made.append(self)
+
+        def run(self):
+            results = {path: self.exchange(path) for path in self.paths}
+            return FfufResult(
+                TargetOutcome.ANSWERED,
+                tuple(path for path, result in results.items() if result.status != 404),
+            )
+
+        def close(self):
+            self.closed = True
+
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", target.server_port),
+        limits=TargetLimits(3, 1024, 1024, 1, max_exchanges=3),
+        timestamp=lambda: "now",
+        ffuf_factory=Fuzz,
+    )
+    left, right = socket.socketpair()
+    try:
+        binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        runtime.prepare_attempt(binding)
+        handle = runtime.claim(left, generation.generation_id)
+        result = runtime.http_fuzz(left, handle, HttpFuzzRequest(("/missing", "/hidden")).document())
+        denied = runtime.http_fuzz(left, handle, {"paths": ["https://off-origin.invalid/"]})
+    finally:
+        left.close()
+        right.close()
+        target.shutdown()
+        target_thread.join()
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert json.loads(result.body) == {"found": ["/hidden"]}
+    assert denied.outcome is TargetOutcome.DENIED
+    assert made[0].timeout_seconds == 2
+    assert made[0].closed
+    classified = [
+        event.payload["operation"]
+        for event in EventStore(state, run_id="run-1").events()
+        if event.event_type == TARGET_EXCHANGE_RECORDED and event.payload["record"] == "classified"
+    ]
+    assert classified == ["http-session", "http-session", "http-fuzz", "http-fuzz"]
 
 
 def test_http_session_rejects_a_truncated_compressed_response() -> None:

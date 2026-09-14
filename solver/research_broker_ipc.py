@@ -6,6 +6,7 @@ import base64
 import json
 import socket
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 from solver.capability import CapabilityRefused
@@ -105,8 +106,6 @@ class ResearchBrokerService:
                     if request.get("command") == "claim" and set(request) == {"command", "generation_id"}:
                         handle = self._runtime.claim(connection, str(request["generation_id"]))
                         answer = {"claimed": True}
-                    elif request.get("command") == "fetch" and set(request) == {"command", "url"} and handle:
-                        answer = _document(self._runtime.fetch(connection, handle, str(request["url"])))
                     elif request.get("command") == "query" and set(request) == {"command", "query"} and handle:
                         query = request["query"]
                         if not isinstance(query, dict):
@@ -141,34 +140,6 @@ class ResearchBrokerClient:
             raise CapabilityRefused()
         return cls(connection)
 
-    def fetch(self, url: str) -> ResearchResult:
-        self._connection.sendall(json.dumps({"command": "fetch", "url": url}, separators=(",", ":")).encode() + b"\n")
-        answer = json.loads(_read_bounded_line(self._connection) or b"{}")
-        outcome = ResearchOutcome(answer.get("outcome", ResearchOutcome.CAPABILITY_REFUSED.value))
-        provenance = answer.get("provenance", {})
-        return ResearchResult(
-            outcome=outcome,
-            body=base64.b64decode(answer.get("body", "")),
-            status=int(answer.get("status", 0)),
-            content_type=str(answer.get("content_type", "")),
-            provenance=ResearchProvenance(
-                tuple((str(host), tuple(addresses)) for host, addresses in provenance.get("dns_chain", [])),
-                tuple(provenance.get("redirect_chain", [])),
-                str(provenance.get("body_digest", "")),
-                str(provenance.get("observed_at", "")),
-                str(provenance.get("expires_at", "")),
-                int(provenance.get("elapsed_ms", 0)),
-                ResearchKind(str(provenance["kind"])) if provenance.get("kind") else None,
-                str(provenance.get("source_id", "")),
-                str(provenance.get("terms", "")),
-                str(provenance.get("robots", "")),
-                str(provenance.get("origin", "")),
-                str(provenance.get("query_digest", "")),
-            ),
-            request_id=str(answer.get("request_id", "")),
-            cached=bool(answer.get("cached", False)),
-        )
-
     def query(self, query: ResearchQuery) -> ResearchResult:
         self._connection.sendall(
             json.dumps({"command": "query", "query": query.document()}, separators=(",", ":")).encode() + b"\n"
@@ -181,13 +152,17 @@ class ResearchBrokerClient:
 
 
 class ResearchCompatibilityAdapter:
-    """Present the legacy recon probe shape over the typed Research port."""
+    """Present the legacy recon probe shape over predeclared typed Research queries."""
 
-    def __init__(self, client: ResearchBrokerClient) -> None:
+    def __init__(self, client: ResearchBrokerClient, queries: Mapping[str, ResearchQuery] | None = None) -> None:
         self._client = client
+        self._queries = dict(queries or {})
 
     def read(self, url: str) -> tuple[int | None, bytes]:
-        result = self._client.fetch(url)
+        query = self._queries.get(url)
+        if query is None:
+            return (None, ResearchOutcome.CAPABILITY_REFUSED.value.encode())
+        result = self._client.query(query)
         return (0, result.body) if result.outcome is ResearchOutcome.ANSWERED else (None, result.outcome.value.encode())
 
 
@@ -224,6 +199,9 @@ def _document(result: ResearchResult) -> dict[str, object]:
             "robots": result.provenance.robots,
             "origin": result.provenance.origin,
             "query_digest": result.provenance.query_digest,
+            "terms_decision": result.provenance.terms_decision,
+            "robots_decision": result.provenance.robots_decision,
+            "policy_decision": result.provenance.policy_decision,
         },
     }
 
@@ -251,6 +229,9 @@ def _result(answer: dict[str, object]) -> ResearchResult:
             str(provenance.get("robots", "")),
             str(provenance.get("origin", "")),
             str(provenance.get("query_digest", "")),
+            str(provenance.get("terms_decision", "")),
+            str(provenance.get("robots_decision", "")),
+            str(provenance.get("policy_decision", "")),
         ),
         request_id=str(answer.get("request_id", "")),
         cached=bool(answer.get("cached", False)),

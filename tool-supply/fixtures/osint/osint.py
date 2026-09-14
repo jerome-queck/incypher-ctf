@@ -4,17 +4,27 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import hashlib
+import io
 import json
 import os
-import shutil
+import socket
+import socketserver
 import subprocess
 import sys
+import tempfile
+import threading
 from pathlib import Path
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 VERSION = "1.0.0"
 RESEARCH_CLIENT = "/research-client.py"
+FUNCTIONAL_FIXTURE_ID = "osint-functional-fixture-v1"
+FUNCTIONAL_FIXTURE = Path(__file__).with_name("functional.json")
+LOCAL_FIXTURE_ENV = {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
 CAPABILITIES = frozenset(
     {
         "osint.dns",
@@ -147,46 +157,282 @@ def _render(query: dict[str, object], response: dict[str, object]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _probe_command(name: str, arguments: tuple[str, ...]) -> None:
-    executable = shutil.which(name)
-    if executable is None:
-        raise RuntimeError(f"missing OSINT executable: {name}")
+def _run_probe(arguments: list[str], marker: str, *, env: dict[str, str] | None = None) -> str:
     result = subprocess.run(
-        [executable, *arguments],
+        arguments,
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
+        env={**os.environ, **(env or {})},
     )
-    if not (result.stdout or result.stderr) or result.returncode not in {0, 1, 2}:
-        raise RuntimeError(f"OSINT executable probe failed: {name}")
+    output = result.stdout + result.stderr
+    if result.returncode not in {0, 1, 2} or marker not in output:
+        raise RuntimeError(f"OSINT functional probe failed: {arguments[0]}: {output.strip()[:512]}")
+    return output
 
 
-def _probe_imports() -> None:
-    result = subprocess.run(
+def _run_python_probe(source: str, marker: str, *, env: dict[str, str] | None = None) -> None:
+    _run_probe(["/usr/bin/python3", "-c", source], marker, env=env)
+
+
+class _FixtureHTTPHandler(BaseHTTPRequestHandler):
+    def do_CONNECT(self):  # noqa: N802 - BaseHTTPRequestHandler hook
+        self.send_error(502, "fixture proxy does not tunnel TLS")
+
+    def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler hook
+        if self.path.endswith(".png"):
+            from PIL import Image
+
+            stream = io.BytesIO()
+            Image.new("RGBA", (256, 256), (0, 0, 0, 0)).save(stream, format="PNG")
+            body = stream.getvalue()
+            content_type = "image/png"
+        else:
+            body = b"fixture-user fixture@example.test fixture.example\n"
+            content_type = "text/plain"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_HEAD(self):  # noqa: N802 - BaseHTTPRequestHandler hook
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format, *_arguments):
+        return
+
+
+@contextmanager
+def _http_fixture():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHTTPHandler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+class _WhoisFixtureHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(1)
+        self.request.recv(256)
+        self.request.sendall(b"Domain Name: fixture.example\nRegistrar: fixture-registry\n")
+
+
+@contextmanager
+def _whois_fixture():
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _WhoisFixtureHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+class _DnsFixtureHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        query, endpoint = self.request
+        if len(query) < 17 or query[4:6] != b"\x00\x01":
+            return
+        end = 12
+        while end < len(query) and query[end]:
+            end += query[end] + 1
+        question_end = end + 5
+        if question_end > len(query):
+            return
+        response = (
+            query[:2]
+            + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00"
+            + query[12:question_end]
+            + b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04"
+            + socket.inet_aton("192.0.2.1")
+        )
+        endpoint.sendto(response, self.client_address)
+
+
+@contextmanager
+def _dns_fixture():
+    server = socketserver.ThreadingUDPServer(("127.0.0.1", 0), _DnsFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def _sherlock_probe(server: ThreadingHTTPServer) -> None:
+    with tempfile.TemporaryDirectory(prefix="incypher-sherlock-") as directory:
+        root = Path(directory)
+        sites = root / "sites.json"
+        sites.write_text(
+            json.dumps(
+                {
+                    "Fixture": {
+                        "errorMsg": [404],
+                        "errorType": "status_code",
+                        "regexCheck": "",
+                        "url": f"http://127.0.0.1:{server.server_port}/users/{{}}",
+                        "urlMain": f"http://127.0.0.1:{server.server_port}/",
+                        "username_claimed": "fixture-user",
+                    }
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        output_text = _run_probe(
+            [
+                "/usr/bin/sherlock",
+                "fixture-user",
+                "--json",
+                str(sites),
+                "--site",
+                "Fixture",
+                "--remote",
+                "--timeout",
+                "1",
+                "--verbose",
+                "--print-all",
+                "--print-found",
+                "--no-color",
+                "--ignore-exclusions",
+                "--no-txt",
+            ],
+            "Fixture: http://127.0.0.1",
+            env=LOCAL_FIXTURE_ENV,
+        )
+        if "fixture-user" not in output_text:
+            raise RuntimeError("Sherlock fixture result is missing the queried username")
+
+
+def _holehe_probe() -> None:
+    _run_python_probe(
+        """
+import httpx
+import trio
+from holehe.modules.social_media.snapchat import snapchat
+
+def answer(request):
+    if request.method == 'GET':
+        return httpx.Response(200, request=request, text='data-xsrf="token" data-web-client-id="client"')
+    return httpx.Response(200, request=request, json={'hasSnapchat': True})
+
+async def probe():
+    observations = []
+    transport = httpx.MockTransport(answer)
+    async with httpx.AsyncClient(transport=transport, timeout=1) as client:
+        await snapchat('fixture@example.test', client, observations)
+    assert len(observations) == 1 and observations[0]['exists'] is True
+    print('holehe-fixture')
+
+trio.run(probe)
+""",
+        "holehe-fixture",
+    )
+
+
+def _theharvester_probe() -> None:
+    _run_python_probe(
+        """
+import asyncio
+from theHarvester.discovery.crtsh import AsyncFetcher, SearchCrtsh
+
+async def fixture_fetch(_urls, **_options):
+    return [[{'name_value': '*.fixture.example'}, {'name_value': 'api.fixture.example'}]]
+
+async def probe():
+    AsyncFetcher.fetch_all = fixture_fetch
+    search = SearchCrtsh('fixture.example')
+    await search.process()
+    assert sorted(await search.get_hostnames()) == ['api.fixture.example', 'fixture.example']
+    print('theharvester-fixture')
+
+asyncio.run(probe())
+""",
+        "theharvester-fixture",
+    )
+
+
+def _whois_probe(server: socketserver.ThreadingTCPServer) -> None:
+    _run_probe(
         [
-            "/usr/bin/python3",
-            "-c",
-            "import geopy; import piexif; from staticmap import StaticMap; print('imports-ok')",
+            "/usr/bin/whois",
+            "-h",
+            "127.0.0.1",
+            "-p",
+            str(server.server_address[1]),
+            "fixture.example",
         ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
+        "Domain Name: fixture.example",
     )
-    if result.returncode != 0 or "imports-ok" not in result.stdout:
-        raise RuntimeError("OSINT Python import probe failed")
+
+
+def _dig_probe(server: socketserver.ThreadingUDPServer) -> None:
+    _run_probe(
+        [
+            "/usr/bin/dig",
+            "@127.0.0.1",
+            "-p",
+            str(server.server_address[1]),
+            "fixture.example",
+            "A",
+            "+short",
+        ],
+        "192.0.2.1",
+    )
+
+
+def _library_probes(server: ThreadingHTTPServer) -> None:
+    _run_python_probe(
+        "from geopy.distance import geodesic; assert geodesic((1.3521, 103.8198), (1.3522, 103.8199)).meters > 0; print('geopy-fixture')",
+        "geopy-fixture",
+    )
+    _run_python_probe(
+        "import piexif; payload = piexif.dump({'0th': {piexif.ImageIFD.Make: b'InCypher'}}); assert payload.startswith(b'Exif'); print('piexif-fixture')",
+        "piexif-fixture",
+    )
+    _run_python_probe(
+        """
+from staticmap import CircleMarker, StaticMap
+
+mapping = StaticMap(64, 64, url_template='http://127.0.0.1:%d/{z}/{x}/{y}.png')
+mapping.add_marker(CircleMarker((103.8198, 1.3521), 'red', 8))
+image = mapping.render(zoom=2, center=(103.8198, 1.3521))
+assert image.width == 64 and image.height == 64
+print('staticmap-fixture')
+"""
+        % server.server_port,
+        "staticmap-fixture",
+        env=LOCAL_FIXTURE_ENV,
+    )
 
 
 def self_check(path: Path) -> None:
     if not path.is_file() or path.is_symlink():
         raise ValueError("self-check input is not a regular file")
-    _probe_command("dig", ("-v",))
-    _probe_command("whois", ())
-    _probe_command("sherlock", ("--version",))
-    _probe_command("holehe", ("--help",))
-    _probe_command("theHarvester", ("--help",))
-    _probe_imports()
+    if not FUNCTIONAL_FIXTURE.is_file() or FUNCTIONAL_FIXTURE_ID not in FUNCTIONAL_FIXTURE.read_text(encoding="utf-8"):
+        raise RuntimeError("OSINT functional fixture is unavailable")
+    with _http_fixture() as http_server, _whois_fixture() as whois_server, _dns_fixture() as dns_server:
+        _sherlock_probe(http_server)
+        _holehe_probe()
+        _theharvester_probe()
+        _whois_probe(whois_server)
+        _dig_probe(dns_server)
+        _library_probes(http_server)
     print("osint-profile-self-check")
 
 

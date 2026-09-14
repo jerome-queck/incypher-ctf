@@ -225,7 +225,10 @@ def _run(connection: socket.socket, request: dict[str, object]) -> dict[str, obj
 def _network_breach(trace: str, broker_sockets: str | tuple[str, ...]) -> bool:
     if isinstance(broker_sockets, str):
         broker_sockets = (broker_sockets,) if broker_sockets else ()
-    network = [line for line in trace.splitlines() if any(marker in line for marker in NETWORK_MARKERS)]
+    lines = trace.splitlines()
+    if lines and not trace.endswith("\n") and " = " not in lines[-1]:
+        lines.pop()
+    network = [line for line in lines if any(marker in line for marker in NETWORK_MARKERS)]
     if not network:
         return False
     return any(not _allowed_broker_socket_call(line, broker_sockets) for line in network)

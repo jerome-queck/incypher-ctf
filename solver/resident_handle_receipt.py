@@ -328,16 +328,15 @@ def _validate_target_proof(
     if not isinstance(exchanges, list) or not exchanges:
         raise ValueError("resident Handle Solve broker proof is absent")
     expected_limits = _target_limits_document(capability_id)
-    if len(exchanges) > expected_limits["max_exchanges"]:
-        raise ValueError("resident Handle Solve broker cumulative limit is invalid")
     http = capability_id == "network.http" or capability_id.startswith("web.")
     protocols = {"http", "https"} if http else {"tcp"}
-    expected_operation = {
+    expected_operation: str | set[str] = {
         "web.browser": "browser",
-        "web.discovery": "http-session",
+        "web.discovery": {"http-fuzz", "http-session"},
         "protocol.relay": "tcp-session",
     }.get(capability_id, "exchange")
     request_ids = set()
+    operations = []
     total_request = total_response = total_elapsed = 0
     for exchange in exchanges:
         if not isinstance(exchange, Mapping):
@@ -355,7 +354,11 @@ def _validate_target_proof(
             or classified.get("request_digest") != reserved.get("request_digest")
             or classified.get("challenge_id") != f"fixture:{capability_id}"
             or classified.get("protocol") not in protocols
-            or classified.get("operation") != expected_operation
+            or (
+                classified.get("operation") not in expected_operation
+                if isinstance(expected_operation, set)
+                else classified.get("operation") != expected_operation
+            )
             or classified.get("outcome") != "answered"
             or classified.get("generation_id") != generation_id
             or classified.get("step_id") != f"fixture:{capability_id}"
@@ -370,6 +373,7 @@ def _validate_target_proof(
         ):
             raise ValueError("resident Handle Solve broker provenance is invalid")
         request_ids.add(classified.get("request_id"))
+        operations.append(classified.get("operation"))
         request_bytes = _required_integer(
             classified.get("request_bytes"), "resident Handle Solve broker exchange bound is invalid"
         )
@@ -388,15 +392,20 @@ def _validate_target_proof(
             or elapsed_ms > expected_limits["timeout_ms"]
         ):
             raise ValueError("resident Handle Solve broker exchange bound is invalid")
-        total_request += request_bytes
-        total_response += response_bytes
-        total_elapsed += elapsed_ms
+        if classified.get("operation") != "http-fuzz":
+            total_request += request_bytes
+            total_response += response_bytes
+            total_elapsed += elapsed_ms
         try:
             transcript = bytes.fromhex(str(exchange.get("transcript", "")))
         except ValueError as error:
             raise ValueError("resident Handle Solve broker transcript is invalid") from error
         if _sha(transcript) != classified.get("transcript_digest"):
             raise ValueError("resident Handle Solve broker transcript is invalid")
+    if len([operation for operation in operations if operation != "http-fuzz"]) > expected_limits["max_exchanges"]:
+        raise ValueError("resident Handle Solve broker cumulative limit is invalid")
+    if capability_id == "web.discovery" and operations.count("http-fuzz") != 1:
+        raise ValueError("resident Handle Solve broker provenance is invalid")
     if (
         total_request > expected_limits["max_total_request_bytes"]
         or total_response > expected_limits["max_total_response_bytes"]

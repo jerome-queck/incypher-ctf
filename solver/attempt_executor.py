@@ -519,6 +519,7 @@ def _spec_from_document(document) -> EnvelopeSpec:
         network=NetworkPolicy(document["network"]),
         wall_seconds=float(document["wall_seconds"]),
         cleanup_seconds=float(document["cleanup_seconds"]),
+        network_class=str(document.get("network_class", "deny")),
     )
 
 

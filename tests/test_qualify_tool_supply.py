@@ -89,7 +89,10 @@ def test_native_docker_observation_cleans_its_host_cgroup_directly() -> None:
         runner=runner,
     )
 
-    assert runner.commands[-1] == ["sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+    assert runner.commands[0][runner.commands[0].index("--cgroup-parent") + 1] == "incypher-v2-strict.slice"
+    probe = runner.commands[1]
+    assert "type=bind,source=/sys/fs/cgroup/incypher-v2-strict.slice,target=/run/cgroup-parent" in probe
+    assert runner.commands[-1] == ["sudo", "rmdir", "/sys/fs/cgroup/incypher-v2-strict.slice"]
 
 
 def test_tool_handle_qualification_retains_state_until_merge(tmp_path, monkeypatch) -> None:

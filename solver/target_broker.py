@@ -12,12 +12,20 @@ import socket
 import threading
 import datetime as dt
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from collections.abc import Callable, Mapping
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlencode, urljoin, urlsplit
 
-from solver.capability import CapabilityAuthority, CapabilityBinding, CapabilityRefused, local_peer_identity
+from solver.capability import (
+    CapabilityAuthority,
+    CapabilityBinding,
+    CapabilityGrant,
+    CapabilityRefused,
+    PeerIdentity,
+    local_peer_identity,
+)
 from solver.event_store_storage import canonical_bytes
 from solver.event_store import EventStore
 from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED
@@ -29,6 +37,7 @@ from solver.target_broker_contracts import (
     BrowserTransportResult,
     HttpBody,
     HttpBodyKind,
+    HttpFuzzRequest,
     HttpSessionRequest,
     HttpTargetExchangeRequest,
     TargetEndpoint,
@@ -50,10 +59,15 @@ from solver.target_broker_transport import exchange as transport_exchange
 from solver.target_broker_transport import HttpSessionTransport, HttpTransportRequest
 from solver.target_broker_transport import TcpSessionTransport
 from solver.target_broker_transport import request_size
+from solver.target_broker_ffuf import FfufResult, FfufRunner
 from solver.work_generation import GenerationFence
+
+if TYPE_CHECKING:
+    from solver.target_broker_browser import BrowserLauncherPort
 
 TARGET_SCOPE = "target.exchange"
 HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+HTTP_PROTOCOLS = frozenset({TargetProtocol.HTTP, TargetProtocol.HTTPS})
 FORBIDDEN_HTTP_HEADERS = frozenset(
     {
         "connection",
@@ -84,6 +98,12 @@ class BrowserSession(Protocol):
     def close(self) -> None: ...
 
 
+class HttpFuzzSession(Protocol):
+    def run(self) -> FfufResult: ...
+
+    def close(self) -> None: ...
+
+
 class TargetBrokerRuntime:
     def __init__(
         self,
@@ -102,7 +122,9 @@ class TargetBrokerRuntime:
         capability_authority: CapabilityAuthority | None = None,
         reconcile_authority: bool = True,
         browser_factory: Callable[..., BrowserSession] | None = None,
+        browser_launcher: BrowserLauncherPort | None = None,
         browser_subresources: Mapping[str, TargetEndpoint] | None = None,
+        ffuf_factory: Callable[..., HttpFuzzSession] = FfufRunner,
     ) -> None:
         if not challenge_id or not boot_id:
             raise ValueError("Target binding needs Challenge and Boot identity")
@@ -138,12 +160,14 @@ class TargetBrokerRuntime:
         self._http_sessions: dict[str, HttpSessionTransport] = {}
         self._tcp_sessions: dict[str, TcpSessionTransport] = {}
         self._browser_sessions: dict[str, BrowserSession] = {}
+        self._http_fuzz_sessions: dict[str, HttpFuzzSession] = {}
         if browser_factory is None:
             from solver.target_broker_browser import BrowserSessionTransport
 
-            browser_factory = BrowserSessionTransport
+            browser_factory = partial(BrowserSessionTransport, launcher=browser_launcher)
         self._browser_factory = browser_factory
         self._browser_subresources = dict(browser_subresources or {})
+        self._ffuf_factory = ffuf_factory
         self._generation_handles: dict[str, set[str]] = {}
         if request_namespace and any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for character in request_namespace
@@ -235,6 +259,7 @@ class TargetBrokerRuntime:
             self.authority.revoke(handle, "generation-closing")
             self._http_cookies.pop(handle, None)
             self._close_http_session(handle)
+            self._close_http_fuzz_session(handle)
             self._close_browser_session(handle)
             self._close_tcp_session(handle)
 
@@ -242,11 +267,17 @@ class TargetBrokerRuntime:
         self.authority.revoke(handle, "target-client-closed")
         self._http_cookies.pop(handle, None)
         self._close_http_session(handle)
+        self._close_http_fuzz_session(handle)
         self._close_browser_session(handle)
         self._close_tcp_session(handle)
 
     def _close_http_session(self, handle: str) -> None:
         session = self._http_sessions.pop(handle, None)
+        if session is not None:
+            session.close()
+
+    def _close_http_fuzz_session(self, handle: str) -> None:
+        session = self._http_fuzz_sessions.pop(handle, None)
         if session is not None:
             session.close()
 
@@ -260,17 +291,26 @@ class TargetBrokerRuntime:
         if session is not None:
             session.close()
 
+    def _authorize(
+        self,
+        connection: socket.socket,
+        handle: str,
+        protocols: frozenset[TargetProtocol] | None = None,
+    ) -> tuple[PeerIdentity, CapabilityGrant]:
+        peer = self.authority.peer_identity(connection)
+        grant = self.authority.authorize(connection, handle, peer=peer)
+        if grant.scope != TARGET_SCOPE or (protocols is not None and self.endpoint.protocol not in protocols):
+            raise CapabilityRefused()
+        return peer, grant
+
     def browser(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
         """Observe one fresh browser context confined to admitted Target origins."""
 
         try:
-            peer = self.authority.peer_identity(connection)
-            grant = self.authority.authorize(connection, handle, peer=peer)
+            peer, grant = self._authorize(connection, handle, HTTP_PROTOCOLS)
         except CapabilityRefused as error:
             outcome = TargetOutcome.REVOKED if error.reason == "revoked" else TargetOutcome.CAPABILITY_REFUSED
             return TargetResult(outcome)
-        if grant.scope != TARGET_SCOPE or self.endpoint.protocol not in {TargetProtocol.HTTP, TargetProtocol.HTTPS}:
-            return TargetResult(TargetOutcome.CAPABILITY_REFUSED)
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
         with self._lock:
             self._serial += 1
@@ -312,13 +352,20 @@ class TargetBrokerRuntime:
         observation = _browser_document(transported.observations)
         body = canonical_bytes(observation)
         with self._lock:
+            total_request = self._session_request_bytes.get(generation_id, 0) + transported.request_bytes
             total_response = self._session_response_bytes.get(generation_id, 0) + transported.response_bytes
             total_elapsed = self._session_elapsed_ms.get(generation_id, 0) + transported.elapsed_ms
+            total_connections = self._connections.get(generation_id, 0) + max(0, transported.connections - 1)
+            self._session_request_bytes[generation_id] = total_request
             self._session_response_bytes[generation_id] = total_response
             self._session_elapsed_ms[generation_id] = total_elapsed
+            self._connections[generation_id] = total_connections
         outcome = transported.outcome
-        if total_response > self.limits.max_total_response_bytes or total_elapsed > int(
-            self.limits.max_total_seconds * 1000
+        if (
+            total_request > self.limits.max_total_request_bytes
+            or total_response > self.limits.max_total_response_bytes
+            or total_connections > self.limits.max_connections
+            or total_elapsed > int(self.limits.max_total_seconds * 1000)
         ):
             outcome = TargetOutcome.BUDGET_EXHAUSTED
             body = b""
@@ -332,12 +379,13 @@ class TargetBrokerRuntime:
             generation_id=generation_id,
             endpoint="declared-target",
             protocol=self.endpoint.protocol,
-            request_bytes=request_bytes,
+            request_bytes=request_bytes + transported.request_bytes,
             response_bytes=transported.response_bytes,
             transcript_digest=hashlib.sha256(self._transcript(request_digest, body, 0)).hexdigest(),
             elapsed_ms=transported.elapsed_ms,
             resolved_address=self._address,
             server_name=self.endpoint.host if self.endpoint.protocol is TargetProtocol.HTTPS else "",
+            certificate_sha256=transported.certificate_sha256,
         )
         result = TargetResult(
             outcome,
@@ -355,17 +403,74 @@ class TargetBrokerRuntime:
         )
         return result
 
+    def http_fuzz(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
+        """Run fixed-argument ffuf while every candidate request stays on the HTTP session."""
+
+        try:
+            peer, grant = self._authorize(connection, handle, HTTP_PROTOCOLS)
+        except CapabilityRefused as error:
+            outcome = TargetOutcome.REVOKED if error.reason == "revoked" else TargetOutcome.CAPABILITY_REFUSED
+            return TargetResult(outcome)
+        request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
+        with self._lock:
+            self._serial += 1
+            request_id = f"{self._request_prefix}{self._serial:06d}"
+            self._request_operations[request_id] = "http-fuzz"
+        self._append_record(request_id, TargetRecord.RESERVED, grant.binding, request_digest)
+        validated = _validate_http_fuzz(request)
+        if validated is None:
+            return self._classify(request_id, grant.binding, request_digest, TargetOutcome.DENIED, b"", 0, 0, 0)
+        with self._lock:
+            if handle in self._http_fuzz_sessions:
+                return self._classify(
+                    request_id,
+                    grant.binding,
+                    request_digest,
+                    TargetOutcome.BUDGET_EXHAUSTED,
+                    b"",
+                    0,
+                    0,
+                    0,
+                )
+            session = self._ffuf_factory(
+                validated.paths,
+                lambda path: self.http_session(connection, handle, HttpSessionRequest("GET", path).document()),
+                min(self.limits.max_total_seconds, self.limits.timeout_seconds * len(validated.paths)),
+            )
+            self._http_fuzz_sessions[handle] = session
+        try:
+            fuzzed = session.run()
+        finally:
+            with self._lock:
+                if self._http_fuzz_sessions.get(handle) is session:
+                    self._http_fuzz_sessions.pop(handle, None)
+            session.close()
+        outcome = fuzzed.outcome
+        body = canonical_bytes({"found": list(fuzzed.found)}) if outcome is TargetOutcome.ANSWERED else b""
+        try:
+            self.authority.authorize(connection, handle, peer=peer)
+        except CapabilityRefused as error:
+            outcome = TargetOutcome.REVOKED if error.reason == "revoked" else TargetOutcome.CAPABILITY_REFUSED
+            body = b""
+        return self._classify(
+            request_id,
+            grant.binding,
+            request_digest,
+            outcome,
+            body,
+            200 if outcome is TargetOutcome.ANSWERED else 0,
+            len(canonical_bytes(request)),
+            0,
+        )
+
     def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
         """Run one stateful bounded request against the declared HTTP origin."""
 
         try:
-            peer = self.authority.peer_identity(connection)
-            grant = self.authority.authorize(connection, handle, peer=peer)
+            peer, grant = self._authorize(connection, handle, HTTP_PROTOCOLS)
         except CapabilityRefused as error:
             outcome = TargetOutcome.REVOKED if error.reason == "revoked" else TargetOutcome.CAPABILITY_REFUSED
             return TargetResult(outcome)
-        if grant.scope != TARGET_SCOPE or self.endpoint.protocol not in {TargetProtocol.HTTP, TargetProtocol.HTTPS}:
-            return TargetResult(TargetOutcome.CAPABILITY_REFUSED)
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
         with self._lock:
             self._serial += 1
@@ -423,13 +528,10 @@ class TargetBrokerRuntime:
         """Exchange one framed message on the generation-owned Target socket."""
 
         try:
-            peer = self.authority.peer_identity(connection)
-            grant = self.authority.authorize(connection, handle, peer=peer)
+            peer, grant = self._authorize(connection, handle, frozenset({TargetProtocol.TCP}))
         except CapabilityRefused as error:
             outcome = TargetOutcome.REVOKED if error.reason == "revoked" else TargetOutcome.CAPABILITY_REFUSED
             return TargetResult(outcome)
-        if grant.scope != TARGET_SCOPE or self.endpoint.protocol is not TargetProtocol.TCP:
-            return TargetResult(TargetOutcome.CAPABILITY_REFUSED)
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
         with self._lock:
             self._serial += 1
@@ -743,13 +845,10 @@ class TargetBrokerRuntime:
 
     def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
         try:
-            peer = self.authority.peer_identity(connection)
-            grant = self.authority.authorize(connection, handle, peer=peer)
+            peer, grant = self._authorize(connection, handle)
         except CapabilityRefused as error:
             outcome = TargetOutcome.REVOKED if error.reason == "revoked" else TargetOutcome.CAPABILITY_REFUSED
             return TargetResult(outcome)
-        if grant.scope != TARGET_SCOPE:
-            return TargetResult(TargetOutcome.CAPABILITY_REFUSED)
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
         if self._recovery is not None and any(
             event.event_type == TARGET_EXCHANGE_RECORDED
@@ -1132,6 +1231,15 @@ def _validate_http_session(request: Mapping[str, object]) -> HttpSessionRequest 
         tuple(normalized_headers),
         tuple(name.lower() for name in response_headers),
     )
+
+
+def _validate_http_fuzz(request: Mapping[str, object]) -> HttpFuzzRequest | None:
+    if set(request) != {"paths"} or not isinstance(request.get("paths"), list):
+        return None
+    try:
+        return HttpFuzzRequest(tuple(request["paths"]))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _validate_tcp_session(request: Mapping[str, object]) -> TcpSessionRequest | None:

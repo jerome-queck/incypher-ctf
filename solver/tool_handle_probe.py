@@ -148,6 +148,9 @@ class _QualificationTargets:
     def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
         return self._handle_brokers[handle].http_session(connection, handle, request)
 
+    def http_fuzz(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
+        return self._handle_brokers[handle].http_fuzz(connection, handle, request)
+
     def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
         return self._handle_brokers[handle].tcp_session(connection, handle, request)
 
@@ -189,12 +192,13 @@ def qualify(
     capability_ids = tuple(str(item) for item in component["capability_ids"])  # type: ignore[index]
     pool: AttemptPool | None = None
     browser_prepared = False
+    browser_launcher = None
 
     def prepare() -> None:
-        nonlocal browser_prepared, pool
+        nonlocal browser_launcher, browser_prepared, pool
         pool = prepare_attempt_pool(slots=1)
         if "web.browser" in capability_ids:
-            prepare_browser_launcher()
+            browser_launcher = prepare_browser_launcher()
             browser_prepared = True
 
     try:
@@ -266,6 +270,7 @@ def qualify(
                     limits=qualification_target_limits(capability_id),
                     timestamp=timestamp,
                     request_namespace=capability_id,
+                    browser_launcher=browser_launcher,
                 )
             if any(policies[capability_id]["network"] == "research-broker" for capability_id in capability_ids):
                 research_broker = ResearchBrokerRuntime(
@@ -283,16 +288,36 @@ def qualify(
                     ),
                     sources={
                         "github": ResearchSource(
-                            ResearchKind.IDENTITY, "https://example.test/{subject}", "fixture", "fixture"
+                            ResearchKind.IDENTITY,
+                            "https://example.test/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
                         ),
                         "gravatar": ResearchSource(
-                            ResearchKind.EMAIL, "https://example.test/{subject}", "fixture", "fixture"
+                            ResearchKind.EMAIL,
+                            "https://example.test/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
                         ),
                         "rdap": ResearchSource(
-                            ResearchKind.DOMAIN, "https://example.test/{subject}", "fixture", "fixture"
+                            ResearchKind.DOMAIN,
+                            "https://example.test/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
                         ),
                         "nominatim": ResearchSource(
-                            ResearchKind.GEO, "https://example.test/{subject}", "fixture", "fixture"
+                            ResearchKind.GEO,
+                            "https://example.test/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
                         ),
                     },
                 )

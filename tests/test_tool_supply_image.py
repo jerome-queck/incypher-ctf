@@ -204,7 +204,10 @@ def test_web_probe_checks_the_package_and_the_runtime_banner() -> None:
 
     assert "dpkg-query" in probe
     assert "2.2.1-1" in probe
-    assert "ffuf version: 2.1.0-dev" in probe
+    assert '"-of",' in probe
+    assert '"json",' in probe
+    assert "ThreadingHTTPServer" in probe
+    assert "ffuf-fixture" in probe
     assert "chromium.launch" in probe
     assert 'TemporaryDirectory(prefix="target-browser-driver-")' in browser_driver
 
@@ -284,8 +287,10 @@ def test_required_profile_receipts_bind_typed_broker_provenance_and_cumulative_b
         if proof["capability_id"] == "web.discovery"
     )
     expected_routes = (REPO_ROOT / "tool-supply" / "fixtures" / "web" / "routes.txt").read_text().splitlines()
-    assert len(web["target"]) == len(expected_routes)
-    assert all(exchange["classified"]["operation"] == "http-session" for exchange in web["target"])
+    assert len(web["target"]) == len(expected_routes) + 1
+    operations = [exchange["classified"]["operation"] for exchange in web["target"]]
+    assert operations.count("http-fuzz") == 1
+    assert operations.count("http-session") == len(expected_routes)
 
     changed = copy.deepcopy(receipts["web.core"])
     discovery = next(

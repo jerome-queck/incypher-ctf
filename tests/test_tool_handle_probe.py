@@ -94,6 +94,7 @@ def test_jail_reason_adapter_keeps_single_language_file_invocation(tmp_path: Pat
 
 def test_misc_self_check_uses_the_installed_jail_fixture_directory(tmp_path: Path, monkeypatch) -> None:
     source = Path(__file__).resolve().parent.parent / "tool-supply" / "fixtures" / "misc-protocols" / "tool.py"
+    (tmp_path / "runtime.json").write_bytes((source.parent / "runtime.json").read_bytes())
     spec = importlib.util.spec_from_file_location("misc_protocols_self_check", source)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -105,9 +106,20 @@ def test_misc_self_check_uses_the_installed_jail_fixture_directory(tmp_path: Pat
     observed = []
 
     monkeypatch.setattr(module, "ROOT", tmp_path)
-    monkeypatch.setattr(
-        module, "run_process", lambda command, **_options: b"v24.19.0\n" if "--version" in command else b""
-    )
+    monkeypatch.setattr(module.platform, "machine", lambda: "x86_64")
+
+    def run_process(command, **_options):
+        if "--version" in command:
+            return b"v24.19.0\n"
+        if command[:3] == ["/usr/bin/dpkg-query", "-W", "-f=${Version}"]:
+            return {"python3": b"3.14.6-1\n", "dash": b"0.5.12-12\n"}[command[-1]]
+        if command[0] == "/usr/bin/python3":
+            return b"shared-python3\n"
+        if command[0] == "/bin/dash":
+            return b"shared-dash\n"
+        return b""
+
+    monkeypatch.setattr(module, "run_process", run_process)
     monkeypatch.setattr(module, "transform", lambda path: observed.append(("transform", path)))
     monkeypatch.setattr(module, "emulate", lambda path: observed.append(("emulate", path)))
     monkeypatch.setattr(module, "jail", lambda path: observed.append(("jail", path)))

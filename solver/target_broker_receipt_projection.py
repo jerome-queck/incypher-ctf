@@ -193,18 +193,24 @@ def _accounting(requests: list[dict[str, object]]) -> dict[str, dict[str, int]]:
             {"connections": 0, "exchanges": 0, "request_bytes": 0, "response_bytes": 0, "elapsed_ms": 0},
         )
         session_operation = request["operation"] in {"http-session", "tcp-session", "browser"}
+        target_exchange = request["operation"] != "http-fuzz"
         if session_operation:
             row["exchanges"] += 1
-        if request["classification"] != "budget-exhausted" and not (
-            request["classification"] in {"too-large", "denied"} and request["request_bytes"] == 0
+        if (
+            target_exchange
+            and request["classification"] != "budget-exhausted"
+            and not (request["classification"] in {"too-large", "denied"} and request["request_bytes"] == 0)
         ):
             row["connections"] += 1
-        for field in ("request_bytes", "response_bytes", "elapsed_ms"):
-            row[field] += int(request[field])
+        if target_exchange:
+            for field in ("request_bytes", "response_bytes", "elapsed_ms"):
+                row[field] += int(request[field])
         bounds = request["bounds"]
         if (
             row["connections"] > bounds["connections"]
-            or any(request[field] > bounds[field] for field in ("request_bytes", "response_bytes"))
+            or (
+                target_exchange and any(request[field] > bounds[field] for field in ("request_bytes", "response_bytes"))
+            )
             or request["elapsed_ms"] > bounds["timeout_ms"]
             or (session_operation and row["exchanges"] > bounds["exchanges"])
             or (session_operation and row["request_bytes"] > bounds["total_request_bytes"])

@@ -56,6 +56,8 @@ def _kill(process: subprocess.Popen[bytes]) -> None:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        process.kill()
     process.wait(timeout=1)
 
 
@@ -133,6 +135,7 @@ def _serve_browse(
     connection: socket.socket,
     inbox: queue.Queue[dict[str, object]],
     command: Mapping[str, object],
+    transport_descriptor: int,
 ) -> tuple[bool, str]:
     request_id = command.get("request_id")
     document = command.get("document")
@@ -144,10 +147,12 @@ def _serve_browse(
     ):
         raise ValueError("browser launcher request is invalid")
     process = subprocess.Popen(
-        ["/usr/bin/python3", str(BROWSER_DRIVER)],
+        ["/usr/bin/python3", str(BROWSER_DRIVER), str(transport_descriptor)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        close_fds=True,
+        pass_fds=(transport_descriptor,),
         env={"HOME": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/tmp"},
         start_new_session=True,
     )
@@ -207,7 +212,7 @@ def _serve_browse(
     return stop, reset_id
 
 
-def serve(connection: socket.socket) -> None:
+def serve(connection: socket.socket, transport_descriptor: int) -> None:
     inbox: queue.Queue[dict[str, object]] = queue.Queue()
 
     def receive() -> None:
@@ -230,7 +235,7 @@ def serve(connection: socket.socket) -> None:
             continue
         if operation != "browse":
             raise ValueError("browser launcher command is invalid")
-        stop, reset_id = _serve_browse(connection, inbox, command)
+        stop, reset_id = _serve_browse(connection, inbox, command, transport_descriptor)
         if reset_id:
             _send(connection, {"status": "ready", "reset_id": reset_id})
         if stop:
@@ -239,11 +244,11 @@ def serve(connection: socket.socket) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 1:
+    if len(arguments) != 2:
         return 2
     connection = socket.socket(fileno=int(arguments[0]))
     try:
-        serve(connection)
+        serve(connection, int(arguments[1]))
     finally:
         connection.close()
     return 0

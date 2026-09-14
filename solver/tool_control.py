@@ -7,7 +7,7 @@ import json
 import os
 import stat
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from solver.capability import CapabilityAuthority, CapabilityBinding, PeerIdentity
@@ -181,6 +181,7 @@ PROFILE_COMMANDS = {
         "jail.reason": ("dash", "nodejs"),
     },
 }
+PRODUCTION_PROFILES = ("resident", "tool-crypto", "web", "osint", "misc-protocols")
 
 
 def profile_components(
@@ -204,9 +205,7 @@ def attempt_components(inventory_path: Path) -> tuple[ToolComponent, ...]:
     """Load every Tool profile admitted for production Attempts."""
 
     return tuple(
-        component
-        for profile in ("resident", "tool-crypto", "web", "osint", "misc-protocols")
-        for component in profile_components(inventory_path, profile)
+        component for profile in PRODUCTION_PROFILES for component in profile_components(inventory_path, profile)
     )
 
 
@@ -638,7 +637,7 @@ class AttemptToolRuntime:
         boot_id: str,
         peer: PeerIdentity,
         lane_id: str = "lane-1",
-        enabled_profiles: Sequence[str] = ("resident", "tool-crypto", "web", "osint", "misc-protocols"),
+        enabled_profiles: Sequence[str] = PRODUCTION_PROFILES,
     ) -> None:
         self._controller = controller
         self._executor = executor
@@ -659,6 +658,10 @@ class AttemptToolRuntime:
         envelope: EnvelopeSpec,
         invocation: ToolInvocation,
     ) -> ToolResult:
+        component = self._controller.component(invocation.capability_id)
+        if not set(component.profiles).intersection(self._enabled_profiles):
+            raise PermissionError("Tool capability is unavailable")
+        envelope = replace(envelope, network_class=component.network_class)
         binding = CapabilityBinding(
             self._run_id,
             self._boot_id,
@@ -734,6 +737,7 @@ class AttemptToolRuntime:
             pids=resources["pids"],
             filesystem_bytes=resources["filesystem_bytes"],
             network=NetworkPolicy.DENY,
+            network_class=component.network_class,
             wall_seconds=resources["wall_seconds"],
             cleanup_seconds=5,
         )

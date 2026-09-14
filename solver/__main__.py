@@ -718,11 +718,12 @@ def _run_admitted(
     tool_runtime = None
     target_broker = None
     research_broker = None
+    browser_launcher = None
     if POOL_ENV in environ:
         if BROWSER_LAUNCHER_FD_ENV not in environ:
             raise Refusal(f"{boot.MARK} pre-admitted browser launcher is required")
         try:
-            attach_browser_launcher(environ)
+            browser_launcher = attach_browser_launcher(environ)
         except OSError as error:
             raise Refusal(f"{boot.MARK} browser launcher attachment refused — {error}") from None
         binding = RuntimeBinding(
@@ -748,6 +749,7 @@ def _run_admitted(
                 ),
                 target_authority=lease_target_authority,
                 timestamp=lambda: clock.now().isoformat(),
+                browser_launcher=browser_launcher,
                 recovery=deterministic_recovery,
             )
         board_host = urlsplit(held.url).hostname or ""
@@ -773,24 +775,32 @@ def _run_admitted(
                     "https://api.github.com/users/{subject}",
                     "github-public-api",
                     "api-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
                 ),
                 "gravatar": ResearchSource(
                     ResearchKind.EMAIL,
                     "https://www.gravatar.com/{subject}.json",
                     "gravatar-public-profile",
                     "public-profile-route",
+                    terms_decision="allow",
+                    robots_decision="allow",
                 ),
                 "rdap": ResearchSource(
                     ResearchKind.DOMAIN,
                     "https://rdap.org/domain/{subject}",
                     "rdap-bootstrap-service",
                     "protocol-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
                 ),
                 "nominatim": ResearchSource(
                     ResearchKind.GEO,
                     "https://nominatim.openstreetmap.org/search?q={subject}&format=json&limit=5",
                     "openstreetmap-nominatim-usage-policy",
                     "api-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
                 ),
             },
             recovery=deterministic_recovery,

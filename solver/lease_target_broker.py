@@ -103,6 +103,7 @@ class LeaseTargetBroker:
         timestamp: Callable[[], str],
         limits: TargetLimits = DEFAULT_TARGET_LIMITS,
         runtime_factory=TargetBrokerRuntime,
+        browser_launcher=None,
         recovery=None,
     ) -> None:
         if not run_id or not boot_id:
@@ -115,6 +116,7 @@ class LeaseTargetBroker:
         self._timestamp = timestamp
         self._limits = limits
         self._runtime_factory = runtime_factory
+        self._browser_launcher = browser_launcher
         self._recovery = recovery
         self._capability = CapabilityAuthority(
             state=self.state,
@@ -155,6 +157,7 @@ class LeaseTargetBroker:
                 recovery=self._recovery,
                 capability_authority=self._capability,
                 reconcile_authority=False,
+                browser_launcher=self._browser_launcher,
             )
             self._generations[grant.generation_id] = _PublishedTarget(runtime, grant)
 
@@ -184,6 +187,9 @@ class LeaseTargetBroker:
 
     def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
         return self._operation("http_session", connection, handle, request)
+
+    def http_fuzz(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
+        return self._operation("http_fuzz", connection, handle, request)
 
     def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
         return self._operation("tcp_session", connection, handle, request)

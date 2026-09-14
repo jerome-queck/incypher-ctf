@@ -109,12 +109,12 @@ def test_controller_boot_inherits_the_pre_admitted_browser_launcher(monkeypatch)
         return Process()
 
     monkeypatch.setattr(supervisor_module.subprocess, "Popen", launch)
-    monkeypatch.setattr(supervisor_module, "browser_launcher_environment", lambda: ("17", (17,)))
+    monkeypatch.setattr(supervisor_module, "browser_launcher_environment", lambda: ("17:18", (17, 18)))
 
     supervisor_module.launch_boot("boot-1", {"RUN_ID": "run-1"}, Pool())
 
-    assert captured["options"]["env"]["INCYPHER_BROWSER_LAUNCHER_FD"] == "17"
-    assert captured["options"]["pass_fds"] == (11, 17)
+    assert captured["options"]["env"]["INCYPHER_BROWSER_LAUNCHER_FD"] == "17:18"
+    assert captured["options"]["pass_fds"] == (11, 17, 18)
 
 
 def test_supervisor_reconstructs_its_persisted_process_adapter_after_probe_crash(tmp_path, monkeypatch):

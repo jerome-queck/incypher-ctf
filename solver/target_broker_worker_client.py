@@ -10,6 +10,7 @@ import sys
 
 TARGET_EXCHANGE_COMMAND = "exchange"
 TARGET_HTTP_SESSION_COMMAND = "http-session"
+TARGET_HTTP_FUZZ_COMMAND = "http-fuzz"
 TARGET_TCP_SESSION_COMMAND = "tcp-session"
 TARGET_BROWSER_COMMAND = "browser"
 MAX_SESSION_DOCUMENT_BYTES = 1024 * 1024
@@ -40,11 +41,12 @@ def main(argv: list[str] | None = None) -> int:
         "tcp",
         "http",
         "http-session",
+        "http-fuzz",
         "tcp-session",
         "browser",
     }:
         return 2
-    if arguments[0] in {"http-session", "tcp-session", "browser"} and len(arguments) != 2:
+    if arguments[0] in {"http-session", "http-fuzz", "tcp-session", "browser"} and len(arguments) != 2:
         return 2
     if arguments[0] == "http" and len(arguments) != 3:
         return 2
@@ -55,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     if claimed.get("status") != "issued" or not isinstance(handle, str):
         return 1
     try:
-        if arguments[0] in {"http-session", "tcp-session", "browser"}:
+        if arguments[0] in {"http-session", "http-fuzz", "tcp-session", "browser"}:
             return _session(arguments[0], arguments[1], handle)
         if arguments[0] == "tcp":
             exchange = {"body": base64.b64encode(arguments[1].encode()).decode()}

@@ -11,7 +11,7 @@ import ipaddress
 import socket
 import threading
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,6 +27,7 @@ from solver.research_broker_contracts import (
     ResearchLimits,
     ResearchKind,
     ResearchOutcome,
+    ResearchPolicyDecision,
     ResearchProvenance,
     ResearchResult,
     ResearchQuery,
@@ -36,6 +37,49 @@ from solver.research_broker_contracts import (
 from solver.research_broker_transport import fetch as transport_fetch
 
 RESEARCH_SCOPE = "research.fetch"
+
+
+@dataclass(frozen=True)
+class _QueryMetadata:
+    kind: ResearchKind | None = None
+    source_id: str = ""
+    terms: str = ""
+    robots: str = ""
+    origin: str = ""
+    query_digest: str = ""
+    terms_decision: str = ResearchPolicyDecision.NOT_APPLICABLE.value
+    robots_decision: str = ResearchPolicyDecision.NOT_APPLICABLE.value
+    policy_decision: str = ResearchPolicyDecision.NOT_APPLICABLE.value
+
+    @property
+    def cache_fragment(self) -> str:
+        return "\0".join(
+            (
+                self.kind.value if self.kind is not None else "",
+                self.source_id,
+                self.terms,
+                self.robots,
+                self.origin,
+                self.query_digest,
+                self.terms_decision,
+                self.robots_decision,
+                self.policy_decision,
+            )
+        )
+
+    def provenance(self, **fields) -> ResearchProvenance:
+        return ResearchProvenance(
+            **fields,
+            kind=self.kind,
+            source_id=self.source_id,
+            terms=self.terms,
+            robots=self.robots,
+            origin=self.origin,
+            query_digest=self.query_digest,
+            terms_decision=self.terms_decision,
+            robots_decision=self.robots_decision,
+            policy_decision=self.policy_decision,
+        )
 
 
 class ResearchBrokerRuntime:
@@ -182,18 +226,38 @@ class ResearchBrokerRuntime:
             return ResearchResult(ResearchOutcome.CAPABILITY_REFUSED)
         source = self._sources.get(query.source_id)
         if query.kind is ResearchKind.DNS and query.source_id == "dns":
-            source = ResearchSource(ResearchKind.DNS, "dns:{subject}", "public-dns", "not-applicable-protocol")
+            source = ResearchSource(
+                ResearchKind.DNS,
+                "dns:{subject}",
+                "public-dns",
+                "not-applicable-protocol",
+                ResearchPolicyDecision.NOT_APPLICABLE.value,
+                ResearchPolicyDecision.NOT_APPLICABLE.value,
+            )
         if source is None or source.kind is not query.kind:
             return ResearchResult(ResearchOutcome.CAPABILITY_REFUSED)
         query_digest = hashlib.sha256(query.subject.encode()).hexdigest()
-        metadata = (
-            query.kind,
-            query.source_id,
-            source.terms,
-            source.robots,
-            "recorded" if query.body else "live",
-            query_digest,
+        metadata = _QueryMetadata(
+            kind=query.kind,
+            source_id=query.source_id,
+            terms=source.terms,
+            robots=source.robots,
+            origin="recorded" if query.body else "live",
+            query_digest=query_digest,
+            terms_decision=source.terms_decision,
+            robots_decision=source.robots_decision,
+            policy_decision=source.policy_decision,
         )
+        if metadata.policy_decision == ResearchPolicyDecision.DENY.value:
+            now = self._timestamp()
+            result = ResearchResult(
+                ResearchOutcome.DENIED,
+                provenance=metadata.provenance(observed_at=now, expires_at=now),
+                request_id=self._next_request_id(),
+            )
+            result = self._release_current(connection, handle, peer, result)
+            self._append(grant.binding, f"policy:{query.source_id}:{query_digest}", result)
+            return result
         if query.body:
             if len(query.body) > self.limits.max_body_bytes or not query.content_type:
                 return ResearchResult(ResearchOutcome.TOO_LARGE)
@@ -211,16 +275,10 @@ class ResearchBrokerRuntime:
                 query.body,
                 200,
                 query.content_type,
-                ResearchProvenance(
+                metadata.provenance(
                     body_digest="sha256:" + hashlib.sha256(query.body).hexdigest(),
                     observed_at=now,
                     expires_at=now,
-                    kind=metadata[0],
-                    source_id=metadata[1],
-                    terms=metadata[2],
-                    robots=metadata[3],
-                    origin=metadata[4],
-                    query_digest=metadata[5],
                 ),
                 request_id,
             )
@@ -252,17 +310,11 @@ class ResearchBrokerRuntime:
                 body if outcome is ResearchOutcome.ANSWERED else b"",
                 0,
                 "application/vnd.incypher.osint+json",
-                ResearchProvenance(
+                metadata.provenance(
                     dns_chain=((query.subject, addresses),),
                     body_digest="sha256:" + hashlib.sha256(body).hexdigest(),
                     observed_at=now,
                     expires_at=now,
-                    kind=metadata[0],
-                    source_id=metadata[1],
-                    terms=metadata[2],
-                    robots=metadata[3],
-                    origin=metadata[4],
-                    query_digest=metadata[5],
                 ),
                 request_id,
             )
@@ -278,7 +330,7 @@ class ResearchBrokerRuntime:
         handle: str,
         url: str,
         *,
-        _query_metadata: tuple[ResearchKind, str, str, str, str, str] | None = None,
+        _query_metadata: _QueryMetadata | None = None,
     ) -> ResearchResult:
         try:
             peer = self._authority.peer_identity(connection)
@@ -303,7 +355,8 @@ class ResearchBrokerRuntime:
             self._serial += 1
             request_id = f"research-broker:{self._serial:06d}"
         now = self._timestamp()
-        cache_key = url + ("\0" + "\0".join(str(item) for item in _query_metadata) if _query_metadata else "")
+        metadata = _query_metadata or _QueryMetadata()
+        cache_key = url + ("\0" + metadata.cache_fragment if _query_metadata else "")
         cached = self._cache.get(cache_key)
         if cached is not None and _before(now, cached.provenance.expires_at):
             if not self._consume(grant.binding.generation_id, len(cached.body), 0):
@@ -372,14 +425,13 @@ class ResearchBrokerRuntime:
         else:
             outcome, body, status, content_type = ResearchOutcome.DENIED, b"", 0, ""
         observed_at = now
-        provenance = ResearchProvenance(
-            tuple(dns_chain),
-            tuple(redirects),
-            "sha256:" + hashlib.sha256(body).hexdigest(),
-            observed_at,
-            _expires(observed_at, self.limits.cache_seconds),
-            elapsed,
-            *(_query_metadata or (None, "", "", "", "", "")),
+        provenance = metadata.provenance(
+            dns_chain=tuple(dns_chain),
+            redirect_chain=tuple(redirects),
+            body_digest="sha256:" + hashlib.sha256(body).hexdigest(),
+            observed_at=observed_at,
+            expires_at=_expires(observed_at, self.limits.cache_seconds),
+            elapsed_ms=elapsed,
         )
         result = ResearchResult(outcome, body, status, content_type, provenance, request_id)
         if not self._consume(grant.binding.generation_id, len(body), elapsed):
@@ -416,6 +468,11 @@ class ResearchBrokerRuntime:
                 close_now = False
         if close_now:
             connection.close()  # type: ignore[attr-defined]
+
+    def _next_request_id(self) -> str:
+        with self._lock:
+            self._serial += 1
+            return f"research-broker:{self._serial:06d}"
 
     def _release_current(
         self,
@@ -492,6 +549,9 @@ class ResearchBrokerRuntime:
                 robots=provenance.robots,
                 origin=provenance.origin,
                 query_digest=provenance.query_digest,
+                terms_decision=provenance.terms_decision,
+                robots_decision=provenance.robots_decision,
+                policy_decision=provenance.policy_decision,
                 max_requests=self.limits.max_requests,
                 max_total_bytes=self.limits.max_total_bytes,
                 max_total_seconds_ms=int(self.limits.max_total_seconds * 1000),

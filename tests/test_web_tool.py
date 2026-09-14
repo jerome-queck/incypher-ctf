@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import subprocess
@@ -126,14 +127,47 @@ def test_browser_network_observation_has_count_and_aggregate_bounds() -> None:
     assert recorded is False
 
 
+def test_browser_uses_broker_measured_bytes_not_declared_content_length() -> None:
+    driver = _load_browser_driver()
+
+    class Handler:
+        fulfilled = None
+
+        def fulfill(self, **values):
+            self.fulfilled = values
+
+        def abort(self, _reason):
+            raise AssertionError("an answered broker result must be fulfilled")
+
+    handler = Handler()
+    status, size = driver._fulfill(
+        handler,
+        {
+            "outcome": "answered",
+            "status": 200,
+            "headers": [["content-length", "999999"]],
+            "body": "aGVsZA==",
+            "response_bytes": 37,
+        },
+        1024,
+    )
+
+    assert (status, size) == (200, 37)
+    assert handler.fulfilled["body"] == b"held"
+
+
 def test_browser_routes_all_context_pages_through_the_origin_allowlist() -> None:
     source = (WEB_FIXTURE / "browser_driver.py").read_text()
 
     assert 'context.route("**/*", route)' in source
-    assert 'context.on("response", response)' in source
+    assert "handler.continue_()" not in source
+    assert "handler.fulfill(" in source
+    assert "response_bytes" in source
 
 
-def test_web_discovery_consumes_the_curated_wordlist_and_names_the_broker(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_web_discovery_consumes_the_curated_wordlist_only_through_the_broker(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     spec = importlib.util.spec_from_file_location("web_tool", WEB_FIXTURE / "tool.py")
     assert spec and spec.loader
     tool = importlib.util.module_from_spec(spec)
@@ -142,11 +176,19 @@ def test_web_discovery_consumes_the_curated_wordlist_and_names_the_broker(tmp_pa
     wordlist = tmp_path / "routes.txt"
     wordlist.write_text("missing\nhidden-route\n")
     monkeypatch.setattr(tool, "CURATED_WORDLIST", wordlist)
+    monkeypatch.setattr(
+        tool,
+        "_ffuf_probe",
+        lambda _paths: pytest.fail("ffuf's strict semantic probe must not open a worker socket"),
+    )
     requests = []
 
-    def target(command, documents):
-        requests.extend(documents)
-        return [{"status": 404}, {"status": 200}]
+    def target(command, document):
+        requests.append((command, document))
+        return {
+            "outcome": "answered",
+            "body": base64.b64encode(b'{"found":["/hidden-route"]}').decode(),
+        }
 
     monkeypatch.setattr(tool, "_target", target)
     request = tmp_path / "discovery.json"
@@ -154,8 +196,8 @@ def test_web_discovery_consumes_the_curated_wordlist_and_names_the_broker(tmp_pa
 
     tool.discovery(request)
 
-    assert [document["path"] for document in requests] == ["/missing", "/hidden-route"]
+    assert requests == [("http-fuzz", {"paths": ["/missing", "/hidden-route"]})]
     output = capsys.readouterr().out
-    assert "engine=target-broker-http-session+curated-wordlist" in output
-    assert "engine=ffuf" not in output
+    assert "engine=ffuf@2.2.1+target-broker-http-session+curated-wordlist" in output
+    assert "ffuf=pass" in output
     assert "found=/hidden-route" in output

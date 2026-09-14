@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from typing import Any
 
 
 ROOT = Path("/opt/solver/tool-supply/misc-protocols")
+RUNTIME_MANIFEST = ROOT / "runtime.json"
 MAX_INPUT_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 4096
@@ -51,6 +53,81 @@ def run_process(
     if len(result.stdout) > MAX_OUTPUT_BYTES:
         raise ValueError("adapter command output exceeds the output bound")
     return result.stdout
+
+
+def _runtime_probe() -> None:
+    manifest_path = ROOT / RUNTIME_MANIFEST.name
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("shared interpreter manifest is unavailable") from error
+    if not isinstance(manifest, dict) or manifest.get("fixture_id") != "misc-protocols.shared-runtime-v1":
+        raise RuntimeError("shared interpreter manifest identity is invalid")
+    closure = manifest.get("closure")
+    interpreters = manifest.get("interpreters")
+    architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine())
+    if architecture is None:
+        raise RuntimeError("shared interpreter architecture is unsupported")
+    if not isinstance(closure, dict) or set(closure) != {"amd64", "arm64"}:
+        raise RuntimeError("shared interpreter manifest shape is invalid")
+    selected_closure = closure.get(architecture)
+    if (
+        not isinstance(selected_closure, list)
+        or not all(isinstance(item, str) for item in selected_closure)
+        or len(set(selected_closure)) != len(selected_closure)
+        or not isinstance(interpreters, list)
+        or len(interpreters) != 2
+    ):
+        raise RuntimeError("shared interpreter manifest shape is invalid")
+    expected_closure = {
+        "amd64": {"dash=0.5.12-12", "python3=3.14.6-1"},
+        "arm64": {"dash=0.5.12-12+b1", "python3=3.14.6-1"},
+    }
+    if set(selected_closure) != expected_closure[architecture]:
+        raise RuntimeError("shared interpreter closure is not exact")
+    seen_packages: set[str] = set()
+    seen_paths: set[str] = set()
+    for item in interpreters:
+        if not isinstance(item, dict) or set(item) != {"package", "versions", "path", "argv", "stdout_sha256"}:
+            raise RuntimeError("shared interpreter entry is invalid")
+        package = item["package"]
+        versions = item["versions"]
+        path = item["path"]
+        argv = item["argv"]
+        expected_digest = item["stdout_sha256"]
+        if (
+            not isinstance(package, str)
+            or package in seen_packages
+            or not isinstance(versions, dict)
+            or set(versions) != {"amd64", "arm64"}
+            or any(not isinstance(value, str) for value in versions.values())
+            or not isinstance(path, str)
+            or path in seen_paths
+            or not isinstance(argv, list)
+            or not argv
+            or not all(isinstance(argument, str) for argument in argv)
+            or not isinstance(expected_digest, str)
+        ):
+            raise RuntimeError("shared interpreter entry values are invalid")
+        seen_packages.add(package)
+        seen_paths.add(path)
+        version = versions[architecture]
+        locked_version = (
+            run_process(
+                ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package],
+                env=_minimal_env(),
+            )
+            .decode("utf-8", "strict")
+            .strip()
+        )
+        if locked_version != version:
+            raise RuntimeError(f"unexpected shared interpreter package version: {package}")
+        executable = Path(path)
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError(f"shared interpreter is not executable: {path}")
+        output = run_process([path, *argv], env=_minimal_env())
+        if hashlib.sha256(output).hexdigest() != expected_digest:
+            raise RuntimeError(f"shared interpreter output digest mismatch: {path}")
 
 
 def _minimal_env() -> dict[str, str]:
@@ -248,6 +325,7 @@ def self_check(path: str) -> int:
     version = run_process(["/usr/bin/node", "--version"], env=_minimal_env()).decode().strip()
     if version != "v24.19.0":
         raise RuntimeError(f"unexpected node version: {version}")
+    _runtime_probe()
     run_process(["/usr/bin/python3", "-c", "from qiling import Qiling; assert Qiling"], env=_minimal_env())
     run_process(["/usr/bin/socat", "-V"], env=_minimal_env())
     transform(path)

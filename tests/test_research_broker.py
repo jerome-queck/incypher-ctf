@@ -72,7 +72,9 @@ def test_typed_osint_live_and_recorded_queries_share_schema_and_refuse_unknown_s
                 "https://research.example/domain/{subject}",
                 terms="public-rdap",
                 robots="not-applicable-api",
-            )
+                terms_decision="allow",
+                robots_decision="not-applicable",
+            ),
         },
     )
     left, right = socket.socketpair()
@@ -120,7 +122,16 @@ def test_typed_osint_recordings_obey_cumulative_request_and_byte_budgets(tmp_pat
         boot_id="boot-1",
         limits=ResearchLimits(8, 1, 0, 0, max_requests=2, max_total_bytes=5),
         timestamp=lambda: "2026-09-13T00:00:00+00:00",
-        sources={"rdap": ResearchSource(ResearchKind.DOMAIN, "https://unused/{subject}", "terms", "robots")},
+        sources={
+            "rdap": ResearchSource(
+                ResearchKind.DOMAIN,
+                "https://unused/{subject}",
+                "terms",
+                "robots",
+                terms_decision="allow",
+                robots_decision="not-applicable",
+            ),
+        },
     )
     left, right = socket.socketpair()
     try:
@@ -142,6 +153,30 @@ def test_typed_osint_recordings_obey_cumulative_request_and_byte_budgets(tmp_pat
     assert first.outcome is ResearchOutcome.ANSWERED
     assert exhausted.outcome is ResearchOutcome.BUDGET_EXHAUSTED
     assert exhausted.body == b""
+
+
+def test_research_client_query_decodes_malformed_provenance_consistently() -> None:
+    class ReplyingConnection:
+        def __init__(self) -> None:
+            self._answer = bytearray()
+
+        def sendall(self, _request: bytes) -> None:
+            self._answer = bytearray(b'{"outcome":"answered","provenance":"invalid"}\n')
+
+        def recv(self, _size: int) -> bytes:
+            if not self._answer:
+                return b""
+            return bytes((self._answer.pop(0),))
+
+        def close(self) -> None:
+            return None
+
+    client = ResearchBrokerClient(ReplyingConnection())  # type: ignore[arg-type]
+
+    first = client.query(ResearchQuery.live(ResearchKind.DOMAIN, "rdap", "example.com"))
+    queried = client.query(ResearchQuery.live(ResearchKind.DOMAIN, "rdap", "example.com"))
+
+    assert first == queried
 
 
 def test_allowed_public_fixture_is_bounded_sealed_and_provenanced(tmp_path: Path) -> None:
@@ -515,6 +550,92 @@ def test_research_service_bounds_stalled_clients(tmp_path: Path) -> None:
             service.close()
 
 
+def test_hostile_research_service_rejects_arbitrary_fetch_command(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("c", "a")
+    runtime = ResearchBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        limits=ResearchLimits(64, 1, 0, 0),
+        timestamp=lambda: "now",
+    )
+    binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "l", "a", "s")
+    runtime.prepare_attempt(binding)
+    with tempfile.TemporaryDirectory(prefix="research-broker-", dir="/tmp") as directory:
+        service = ResearchBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            connection.connect(str(service.path))
+            connection.sendall(
+                json.dumps({"command": "claim", "generation_id": generation.generation_id}).encode() + b"\n"
+            )
+            assert json.loads(_read_line(connection)) == {"claimed": True}
+            connection.sendall(json.dumps({"command": "fetch", "url": "https://arbitrary.example/"}).encode() + b"\n")
+            answer = json.loads(_read_line(connection))
+        finally:
+            connection.close()
+            service.close()
+
+    assert answer == {"outcome": ResearchOutcome.CAPABILITY_REFUSED.value}
+
+
+def test_research_policy_decision_is_enforced_and_sealed(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("c", "a")
+    runtime = ResearchBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        limits=ResearchLimits(64, 1, 0, 0),
+        timestamp=lambda: "2026-09-13T00:00:00+00:00",
+        sources={
+            "blocked": ResearchSource(
+                ResearchKind.DOMAIN,
+                "https://research.example/{subject}",
+                "terms-policy",
+                "robots-policy",
+                terms_decision="deny",
+                robots_decision="not-applicable",
+            )
+        },
+    )
+    left, right = socket.socketpair()
+    try:
+        runtime.prepare_attempt(CapabilityBinding("run-1", "boot-1", generation.generation_id, "l", "a", "s"))
+        result = runtime.query(
+            left,
+            runtime.claim(left, generation.generation_id),
+            ResearchQuery.live(ResearchKind.DOMAIN, "blocked", "example.test"),
+        )
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is ResearchOutcome.DENIED
+    assert result.provenance.terms_decision == "deny"
+    assert result.provenance.robots_decision == "not-applicable"
+    assert result.provenance.policy_decision == "deny"
+    event = next(event for event in EventStore(state, "run-1").events() if event.event_type == RESEARCH_BROKER_RECORDED)
+    assert event.payload["policy_decision"] == "deny"
+    assert event.payload["terms_decision"] == "deny"
+    receipt = json.loads(write_receipt(state, "run-1").read_text())
+    assert receipt["requests"][0]["query"]["policy_decision"] == "deny"
+    assert receipt["requests"][0]["query"]["terms_decision"] == "deny"
+
+
+def _read_line(connection: socket.socket) -> bytes:
+    line = bytearray()
+    while True:
+        chunk = connection.recv(1)
+        if not chunk:
+            return bytes(line)
+        if chunk == b"\n":
+            return bytes(line)
+        line.extend(chunk)
+
+
 def test_worker_uses_only_the_bounded_research_port(tmp_path: Path) -> None:
     state = tmp_path / "state"
     recorder = Recorder(tmp_path / "recon-state", run_id="run-1", redactor=Redactor({}))
@@ -527,6 +648,24 @@ def test_worker_uses_only_the_bounded_research_port(tmp_path: Path) -> None:
         timestamp=lambda: "2026-09-13T00:00:00+00:00",
         resolve=lambda host: ("127.0.0.1",) if host == "private.example" else ("8.8.8.8",),
         transport=lambda *_args: ResearchTransportResult(status=200, body=b"through-port"),
+        sources={
+            "rdap": ResearchSource(
+                ResearchKind.DOMAIN,
+                "https://public.example/{subject}",
+                "fixture",
+                "not-applicable",
+                terms_decision="allow",
+                robots_decision="not-applicable",
+            ),
+            "private": ResearchSource(
+                ResearchKind.DOMAIN,
+                "https://private.example/{subject}",
+                "fixture",
+                "not-applicable",
+                terms_decision="allow",
+                robots_decision="not-applicable",
+            ),
+        },
     )
     binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "l", "a", "s")
     runtime.prepare_attempt(binding)
@@ -535,6 +674,7 @@ def test_worker_uses_only_the_bounded_research_port(tmp_path: Path) -> None:
         service.start()
         try:
             client = ResearchBrokerClient.claim(service.path, generation.generation_id)
+            query = ResearchQuery.live(ResearchKind.DOMAIN, "rdap", "public.example")
             opened = recon(
                 "challenge",
                 (),
@@ -542,10 +682,13 @@ def test_worker_uses_only_the_bounded_research_port(tmp_path: Path) -> None:
                 recorder=recorder,
                 attempt_id="attempt-research",
                 research_urls=("https://public.example/fact",),
-                research=ResearchCompatibilityAdapter(client),
+                research=ResearchCompatibilityAdapter(
+                    client,
+                    {"https://public.example/fact": query},
+                ),
             )
-            result = client.fetch("https://public.example/fact")
-            denied = client.fetch("https://private.example/secret")
+            result = client.query(query)
+            denied = client.query(ResearchQuery.live(ResearchKind.DOMAIN, "private", "secret"))
             client.close()
         finally:
             service.close()
@@ -611,6 +754,7 @@ def test_hostile_research_client_batches_recorded_and_live_queries(
     assert worker_client.main(["query", str(path)]) == 0
     assert [item["command"] for item in connection.sent] == ["claim", "query", "query"]
     assert [item["provenance"]["origin"] for item in json.loads(capsys.readouterr().out)] == ["recorded", "live"]
+    assert worker_client.main(["https://arbitrary.example/"]) == 2
 
 
 def test_strict_attempt_denies_raw_research_socket_and_broker_records_the_probe(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from typing import Protocol
 
 from solver.attempt_executor_contracts import (
     AttemptRequest,
+    BROKER_NETWORK_CLASSES,
     EnvelopeSpec,
     ProcessLifecycle,
     ResourceOutcome,
@@ -146,9 +147,22 @@ class AttemptRuntime:
     def prepare(self, envelope_id: str, incoming: RuntimeInput) -> RuntimeReservation:
         """Reserve and configure a childless envelope before canonical launch records."""
 
-        target_available = self.target_broker is not None and self.target_broker.available(
-            incoming.request.generation_id
+        network_class = incoming.request.envelope.network_class
+        if network_class not in BROKER_NETWORK_CLASSES:
+            raise RuntimeUnavailable("Attempt broker network class is unsupported")
+        target_requested = network_class == "target-broker"
+        research_requested = network_class == "research-broker"
+        if target_requested and self.target_broker is None:
+            raise RuntimeUnavailable("Target broker is unavailable for this Tool capability")
+        if research_requested and self.research_broker is None:
+            raise RuntimeUnavailable("Research broker is unavailable for this Tool capability")
+        target_available = (
+            target_requested
+            and self.target_broker is not None
+            and self.target_broker.available(incoming.request.generation_id)
         )
+        if target_requested and not target_available:
+            raise RuntimeUnavailable("Target broker has no published generation authority")
         if target_available:
             candidate = self.target_broker.candidate
             actual = incoming.binding
@@ -202,7 +216,8 @@ class AttemptRuntime:
                 self.target_broker.revoke_generation(binding.generation_id)
                 self.pool.release(slot)
                 raise RuntimeUnavailable(f"Target broker preparation failed: {error}") from error
-        if self.research_broker is not None:
+        if research_requested:
+            assert self.research_broker is not None
             binding = CapabilityBinding(
                 incoming.run_id,
                 self.research_broker.boot_id,

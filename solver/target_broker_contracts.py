@@ -16,10 +16,12 @@ TARGET_EXCHANGE_RECORDED = "target-broker.recorded"
 SCHEMA_VERSION = 1
 TARGET_EXCHANGE_COMMAND = "exchange"
 TARGET_HTTP_SESSION_COMMAND = "http-session"
+TARGET_HTTP_FUZZ_COMMAND = "http-fuzz"
 TARGET_TCP_SESSION_COMMAND = "tcp-session"
 TARGET_BROWSER_COMMAND = "browser"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _HEX_DIGEST = re.compile(r"[0-9a-f]{64}")
+_FUZZ_PATH = re.compile(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{1,2047}")
 
 
 class TargetProtocol(str, enum.Enum):
@@ -102,6 +104,20 @@ class HttpSessionRequest:
             "headers": [list(field) for field in self.headers],
             "response_headers": list(self.response_headers),
         }
+
+
+@dataclass(frozen=True)
+class HttpFuzzRequest:
+    paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.paths or len(self.paths) > 128 or len(set(self.paths)) != len(self.paths):
+            raise ValueError("HTTP fuzz paths are outside their bound")
+        if any(_FUZZ_PATH.fullmatch(path) is None or path.startswith("//") for path in self.paths):
+            raise ValueError("HTTP fuzz path is invalid")
+
+    def document(self) -> dict[str, object]:
+        return {"paths": list(self.paths)}
 
 
 class TcpReceiveMode(str, enum.Enum):
@@ -202,6 +218,9 @@ class BrowserTransportResult:
     observations: BrowserObservations = BrowserObservations()
     elapsed_ms: int = 0
     response_bytes: int = 0
+    request_bytes: int = 0
+    connections: int = 0
+    certificate_sha256: str = ""
 
 
 class TcpTargetExchangeRequest(TypedDict):
@@ -544,7 +563,7 @@ class TargetBrokerRecorded:
             payload[name] <= 0 for name in ("max_connections", "max_request_bytes", "max_response_bytes", "timeout_ms")
         ):
             raise InvalidEventError("Target-broker bounds are invalid", sequence=sequence)
-        if payload["operation"] not in {"exchange", "http-session", "tcp-session", "browser", "denial"}:
+        if payload["operation"] not in {"exchange", "http-session", "http-fuzz", "tcp-session", "browser", "denial"}:
             raise InvalidEventError("Target-broker operation is invalid", sequence=sequence)
         if record is TargetRecord.RESERVED and (payload["outcome"] or payload["transcript_digest"]):
             raise InvalidEventError("Target-broker reservation carries a classification", sequence=sequence)

@@ -1,7 +1,9 @@
 #!/usr/bin/python3
+import base64
 import hashlib
 import json
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -15,6 +17,7 @@ MAX_NETWORK_BYTES = 256 * 1024
 MAX_BROWSER_PROCESSES = 256
 MAX_BROWSER_CPU_SECONDS = 60
 MAX_BROWSER_FILESYSTEM_BYTES = 64 * 1024 * 1024
+MAX_TRANSPORT_FRAME_BYTES = 2 * 1024 * 1024
 
 
 def origin(value):
@@ -89,17 +92,79 @@ def _record_network_event(
     return observed_bytes + item_bytes, True
 
 
+def _receive_exact(connection, size):
+    held = bytearray()
+    while len(held) < size:
+        chunk = connection.recv(size - len(held))
+        if not chunk:
+            raise OSError("browser transport closed")
+        held.extend(chunk)
+    return bytes(held)
+
+
+def _exchange(connection, request_id, document):
+    encoded = json.dumps(
+        {"request_id": request_id, "exchange": document}, sort_keys=True, separators=(",", ":")
+    ).encode()
+    if len(encoded) > MAX_TRANSPORT_FRAME_BYTES:
+        raise ValueError("browser transport request exceeds its frame bound")
+    connection.sendall(len(encoded).to_bytes(4, "big") + encoded)
+    size = int.from_bytes(_receive_exact(connection, 4), "big")
+    if size < 2 or size > MAX_TRANSPORT_FRAME_BYTES:
+        raise ValueError("browser transport response frame is invalid")
+    response = json.loads(_receive_exact(connection, size))
+    if not isinstance(response, dict) or response.get("request_id") != request_id:
+        raise ValueError("browser transport response changed identity")
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("browser transport returned no result")
+    return result
+
+
+def _fulfill(handler, result, byte_limit):
+    if result.get("outcome") != "answered":
+        handler.abort("blockedbyclient")
+        return 0, 0
+    status = result.get("status")
+    response_bytes = result.get("response_bytes")
+    headers = result.get("headers")
+    body = result.get("body")
+    if (
+        not isinstance(status, int)
+        or not isinstance(response_bytes, int)
+        or response_bytes < 0
+        or response_bytes > byte_limit
+        or not isinstance(headers, list)
+        or not isinstance(body, str)
+    ):
+        raise ValueError("browser transport result is invalid")
+    decoded = base64.b64decode(body, validate=True)
+    retained = {}
+    for item in headers:
+        if not isinstance(item, list) or len(item) != 2 or not all(isinstance(value, str) for value in item):
+            raise ValueError("browser transport headers are invalid")
+        retained[item[0]] = item[1]
+    handler.fulfill(status=status, headers=retained, body=decoded)
+    return status, response_bytes
+
+
 def main():
+    if len(sys.argv) != 2:
+        return 2
     request = json.loads(sys.stdin.buffer.readline())
-    with tempfile.TemporaryDirectory(prefix="target-browser-driver-") as private_home:
-        os.environ["HOME"] = private_home
-        os.environ["TMPDIR"] = private_home
-        result = browse(request)
+    connection = socket.socket(fileno=int(sys.argv[1]))
+    try:
+        with tempfile.TemporaryDirectory(prefix="target-browser-driver-") as private_home:
+            os.environ["HOME"] = private_home
+            os.environ["TMPDIR"] = private_home
+            result = browse(request, connection)
+    finally:
+        connection.close()
     sys.stdout.write(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
     return 0
 
 
-def browse(request):
+def browse(request, connection):
     declared = request["origin"]
     admitted = request["admitted_subresources"]
     origins = [declared, *admitted]
@@ -139,7 +204,26 @@ def browse(request):
             parsed = urlsplit(handler.request.url)
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
             if (parsed.scheme, parsed.hostname, port) in allowed:
-                handler.continue_()
+                body = handler.request.post_data_buffer or b""
+                result = _exchange(
+                    connection,
+                    handler.request.url,
+                    {
+                        "method": handler.request.method,
+                        "url": handler.request.url,
+                        "headers": handler.request.headers,
+                        "body": base64.b64encode(body).decode(),
+                    },
+                )
+                status, size = _fulfill(handler, result, byte_limit)
+                network_bytes, recorded = _record_network_event(
+                    network,
+                    (handler.request.method, handler.request.url, status, size),
+                    network_bytes,
+                    byte_limit,
+                )
+                if not recorded:
+                    network_overflow = True
             else:
                 network_bytes, recorded = _record_network_event(
                     network,
@@ -151,18 +235,7 @@ def browse(request):
                     network_overflow = True
                 handler.abort("blockedbyclient")
 
-        def response(value):
-            nonlocal network_bytes, network_overflow
-            content_length = value.headers.get("content-length", "0")
-            size = int(content_length) if content_length.isdigit() else 0
-            item = (value.request.method, value.url, value.status, min(size, byte_limit))
-            network_bytes, recorded = _record_network_event(network, item, network_bytes, byte_limit)
-            if not recorded:
-                network_overflow = True
-                return
-
         context.route("**/*", route)
-        context.on("response", response)
         page.goto(origin(declared) + request["path"], wait_until="domcontentloaded", timeout=timeout)
         if network_overflow:
             raise ValueError("browser network observations exceed their bound")

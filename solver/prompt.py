@@ -220,7 +220,7 @@ def _instance(lease: Lease) -> str:
     return (
         "A Target is available only through the generation-bound Target broker. Use "
         "`/target-client.py tcp '<payload>'`, `/target-client.py http <METHOD> <PATH>`, or the "
-        "typed `http-session`, `tcp-session`, and `browser` JSON operations from an "
+        "typed `http-session`, `http-fuzz`, `tcp-session`, and `browser` JSON operations from an "
         f"authorised Tool; its raw address is withheld. It stops answering at {until}."
     )
 

@@ -16,11 +16,13 @@ from solver.local_ipc import receive_line
 from solver.target_broker_contracts import (
     TARGET_EXCHANGE_COMMAND,
     TARGET_BROWSER_COMMAND,
+    TARGET_HTTP_FUZZ_COMMAND,
     TARGET_HTTP_SESSION_COMMAND,
     TARGET_TCP_SESSION_COMMAND,
     BrowserObservations,
     BrowserSessionRequest,
     HttpSessionRequest,
+    HttpFuzzRequest,
     TargetOutcome,
     TargetProtocol,
     TargetProvenance,
@@ -38,6 +40,8 @@ class TargetBroker(Protocol):
     def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
 
     def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
+
+    def http_fuzz(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
 
     def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
 
@@ -64,6 +68,9 @@ class TargetBrokerClient:
 
     def http_session(self, request: HttpSessionRequest) -> TargetResult:
         return self._request(TARGET_HTTP_SESSION_COMMAND, request.document())
+
+    def http_fuzz(self, request: HttpFuzzRequest) -> TargetResult:
+        return self._request(TARGET_HTTP_FUZZ_COMMAND, request.document())
 
     def tcp(self, payload: bytes) -> TargetResult:
         return self._exchange({"body": base64.b64encode(payload).decode()})
@@ -205,6 +212,9 @@ class TargetBrokerService:
                 answer = {"status": "answered", "result": _document(result)}
             elif command == TARGET_HTTP_SESSION_COMMAND and isinstance(request.get("request"), dict):
                 result = self._runtime.http_session(connection, str(request.get("handle", "")), request["request"])
+                answer = {"status": "answered", "result": _document(result)}
+            elif command == TARGET_HTTP_FUZZ_COMMAND and isinstance(request.get("request"), dict):
+                result = self._runtime.http_fuzz(connection, str(request.get("handle", "")), request["request"])
                 answer = {"status": "answered", "result": _document(result)}
             elif command == TARGET_TCP_SESSION_COMMAND and isinstance(request.get("request"), dict):
                 result = self._runtime.tcp_session(connection, str(request.get("handle", "")), request["request"])
