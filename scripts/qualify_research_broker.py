@@ -1,9 +1,11 @@
-"""Build and prove brokered Research plus raw-egress denial in the strict image."""
+"""Build and prove brokered Research plus raw-egress denial in the strict image.
+
+The caller-provided qualification state remains available for review after failures and until merge.
+"""
 
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,9 +43,6 @@ def qualify(state: Path) -> Path:
             check=True,
         )
         subprocess.run(strict_runtime.research_broker_probe_command(binding, state), check=True)
-    except Exception:
-        shutil.rmtree(state, ignore_errors=True)
-        raise
     finally:
         subprocess.run(
             ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE],

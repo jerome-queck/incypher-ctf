@@ -80,7 +80,10 @@ worktree** is the first path printed by `git worktree list --porcelain`; it is t
 rests on `main`, even when the change was built in another worktree.
 
 After the pull request opens, fetch `origin`, fast-forward the primary worktree's `main`, and leave
-that worktree clean on `main`. Retain the local topic branch while the pull request is open.
+that worktree clean on `main`. Retain the local topic branch, worktree, qualification state and useful build material while the
+pull request is open. Opening a pull request does not authorize storage reclamation. Reclaim
+disposable build storage only after GitHub confirms the ticket's squash merge and no in-flight
+work still needs it, under ADR-0058.
 
 Before removing a worktree or branch, inspect every worktree for that topic branch. Retain and
 report any dirty worktree, including its path and status, until its changes are deliberately

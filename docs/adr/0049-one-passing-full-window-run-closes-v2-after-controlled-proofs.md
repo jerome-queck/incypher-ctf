@@ -1,8 +1,8 @@
 # One passing full-window Run closes v2 after controlled proofs
 
-> **ADR-0057 moves the pinned runtime to the Working volume and later increases its sparse disk to
-> 200 GiB without widening operational budgets;
-> the 20 GiB rig/control/Recovery minimum below remains.**
+> **ADR-0057 moves the runtime to the Working volume. ADR-0058 records a 700 GiB initial disk
+> request and advisory physical-capacity observations. The former 40 GiB Run-state cap and
+> 20 GiB rig/control/Recovery disk allocation are advisory; neither restricts admission.**
 
 > **Profile selection and full-window topology are amended by
 > [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Three predeclared
@@ -161,11 +161,13 @@ passing full-window Run, not one attempt forever and not permission to erase fai
 
 ## Capacity is bounded on the pinned machine
 
-The Gate binds to the pinned Colima allocation of 8 CPUs, 24 GiB RAM and 200 GiB disk. The Solver
-may use at most 6 CPUs, 16 GiB RAM, 2,048 PIDs and 40 GiB of writable Run state. The scenario
-reserves 2 CPUs, 8 GiB RAM and at least 20 GiB of disk for the rig, trusted control and Recovery.
+The Gate binds CPU and memory to the Colima allocation of 8 CPUs and 24 GiB RAM. Disk capacity is
+observed from the runtime; it is not a host admission limit. The Solver
+may use at most 6 CPUs, 16 GiB RAM and 2,048 PIDs. The scenario reserves 2 CPUs and 8 GiB RAM
+for the rig, trusted control and Recovery. Writable Run state and rig storage may grow with available
+physical capacity; the former 40 GiB and 20 GiB allocations are advisory observations.
 The Release-candidate manifest separately seals ADR-0054's writer-level storage reservations,
-per-transaction limits and terminal floor inside those allocations. Ordinary work
+per-transaction limits and terminal floor to preserve authoritative writes. Ordinary work
 touching protected capacity, Board throttling caused by the Solver or any hard-envelope breach
 fails the applicable row.
 

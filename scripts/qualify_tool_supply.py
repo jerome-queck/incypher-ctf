@@ -1,4 +1,7 @@
-"""Build, exercise and promote one Tool component's strict-image receipt."""
+"""Build, exercise and promote one Tool component's strict-image receipt.
+
+The handle-qualification state remains available for review until the ticket is merged.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,6 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import promote_run  # noqa: E402
 import runtime  # noqa: E402
 import strict_runtime  # noqa: E402
+from qualification_retention import new_retained_directory  # noqa: E402
 from solver.tool_supply_receipt import ReceiptInvalid, create_receipt, promote_receipt  # noqa: E402
 from solver.resident_handle_receipt import create_receipt as create_handle_receipt  # noqa: E402
 
@@ -33,24 +36,23 @@ def build_image(runner: Runner = _run) -> tuple[str, str, str]:
 
     if runtime.verify() != 0:
         raise ReceiptInvalid("the pinned container runtime is unavailable")
-    with tempfile.TemporaryDirectory(prefix="tool-image-metadata-") as temporary:
-        metadata_path = Path(temporary) / "metadata.json"
-        runner(
-            [
-                "docker",
-                "buildx",
-                "build",
-                "--load",
-                "--provenance=false",
-                "--metadata-file",
-                str(metadata_path),
-                "--tag",
-                strict_runtime.IMAGE_TAG,
-                ".",
-            ],
-            check=True,
-        )
-        metadata = json.loads(metadata_path.read_text())
+    metadata_path = new_retained_directory("image-metadata", "tool-") / "metadata.json"
+    runner(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--load",
+            "--provenance=false",
+            "--metadata-file",
+            str(metadata_path),
+            "--tag",
+            strict_runtime.IMAGE_TAG,
+            ".",
+        ],
+        check=True,
+    )
+    metadata = json.loads(metadata_path.read_text())
     manifest_digest = metadata.get("containerimage.digest")
     config_digest = metadata.get("containerimage.config.digest")
     if not isinstance(manifest_digest, str) or not manifest_digest.startswith("sha256:"):
@@ -132,8 +134,6 @@ def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> d
         raise ReceiptInvalid(f"no generated component named {component_id}") from error
     handle_solve = None
     if component.get("capability_policies"):
-        cache = REPO_ROOT / ".cache"
-        cache.mkdir(exist_ok=True)
         runner(
             [
                 "docker",
@@ -148,24 +148,21 @@ def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> d
             check=True,
         )
         try:
-            with tempfile.TemporaryDirectory(prefix="tool-handle-", dir=cache) as temporary:
-                state = Path(temporary)
-                result = runner(
-                    strict_runtime.tool_handle_probe_command(
-                        strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
-                        state,
-                        component_id,
-                    ),
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    raise ReceiptInvalid(
-                        f"strict Tool-handle Solve refused: {result.stderr.strip() or result.returncode}"
-                    )
-                closure = {str(item["source"]): (supply / item["source"]).read_bytes() for item in component["files"]}
-                handle_solve = create_handle_receipt(state, component, inventory, closure)
+            state = new_retained_directory("tool-handles", f"{component_id}-")
+            result = runner(
+                strict_runtime.tool_handle_probe_command(
+                    strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
+                    state,
+                    component_id,
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise ReceiptInvalid(f"strict Tool-handle Solve refused: {result.stderr.strip() or result.returncode}")
+            closure = {str(item["source"]): (supply / item["source"]).read_bytes() for item in component["files"]}
+            handle_solve = create_handle_receipt(state, component, inventory, closure)
         finally:
             runner(["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE], check=True)
     receipt = create_receipt(

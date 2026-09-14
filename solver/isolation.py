@@ -20,7 +20,6 @@ STRICT_RUNTIME_PIN = {
     "docker": "29.7.2",
     "cpu": 8,
     "memory_gib": 24,
-    "disk_gib": 200,
 }
 STRICT_CONTROLS = (
     "user",

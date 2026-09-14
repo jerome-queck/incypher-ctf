@@ -133,6 +133,7 @@ def _fixed_point(
             "scripts/lock_sage_closure.py",
             "scripts/qualify_crypto_profile.py",
             "scripts/qualify_runtime_evidence.py",
+            "scripts/qualification_retention.py",
             "scripts/runtime_qualification.py",
             "scripts/verify_sage_closure.py",
             "solver/crypto_tool_contract.py",
@@ -458,7 +459,6 @@ def _retain_evidence(
 
 
 def _finalize(serial: Path, incident: Path, crypto: Path) -> None:
-    subprocess.run(["docker", "builder", "prune", "--all", "--force"], check=True)
     strict_runtime.enforce_host_storage("competition", subprocess.run)
     subprocess.run(
         [

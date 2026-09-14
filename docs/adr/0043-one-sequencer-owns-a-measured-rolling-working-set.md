@@ -160,8 +160,9 @@ boundary that decision receives.
 ## Measurement chooses the enabled configuration
 
 v2's evidence venue is the named `v2-macbook-m4pro-8c-24g` profile: a 14-core M4 Pro MacBook Pro
-with 48 GiB host memory, running the Colima CPU, memory and disk settings pinned by
-`scripts/runtime.py` — Colima 0.10.3 and Docker 29.7.2 with 8 vCPUs, 24 GiB RAM and a 100 GiB disk.
+with 48 GiB host memory, running the Colima CPU and memory settings pinned by
+`scripts/runtime.py` — Colima 0.10.3 and Docker 29.7.2 with 8 vCPUs and 24 GiB RAM. Host disk
+capacity is flexible under [ADR-0058](0058-host-storage-follows-physical-capacity-and-post-merge-reclamation.md).
 Every heavy tool and role profile is
 measured alone and in supported aggregate combinations, including long crypto, build, browser,
 emulation and forensics work plus adversarial hangs, output, process trees and failures. Pilot Runs

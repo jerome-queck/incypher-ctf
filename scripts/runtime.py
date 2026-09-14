@@ -42,11 +42,10 @@ class Pin:
     disk_gib: int
 
 
-# Eight of the build machine's 14 cores and half its 48 GiB. The Owner accepted the live VM's
-# 8 CPU, 24 GiB and 200 GiB allocation accepted on 13 September 2026. The larger sparse VM disk is
-# recovery capacity, not permission to widen ADR-0057's independent image, Tool, cache or state
-# budgets. Moving it again remains one reviewable line here rather than a slider on one laptop.
-PIN = Pin(colima="0.10.3", docker="29.7.2", cpu=8, memory_gib=24, disk_gib=200)
+# Eight of the build machine's 14 cores and half its 48 GiB. CPU and memory stay exact. The disk
+# value is only the initial allocation request used by `start`; storage capacity is not a runtime
+# identity or admission limit.
+PIN = Pin(colima="0.10.3", docker="29.7.2", cpu=8, memory_gib=24, disk_gib=700)
 
 
 def version_in(text: str) -> str | None:
@@ -76,11 +75,11 @@ def drift(versions: Mapping[str, str], vm: Mapping[str, Any] | None, pin: Pin = 
         return found
 
     # Colima reports bytes it derived from the GiB it was asked for, so the comparison rounds back
-    # rather than demanding the byte count survive the round trip exactly.
+    # rather than demanding the byte count survive the round trip exactly. CPU and memory are
+    # fixed; disk is a physical-capacity observation rather than a runtime identity.
     for measured, pinned, unit in (
         (vm["cpus"], pin.cpu, "CPUs"),
         (round(vm["memory"] / GIB), pin.memory_gib, "GiB of memory"),
-        (round(vm["disk"] / GIB), pin.disk_gib, "GiB of disk"),
     ):
         if measured != pinned:
             found.append(f"the VM has {measured} {unit}, pinned at {pinned}")
@@ -160,8 +159,9 @@ def start() -> int:
         print(f"the {PROFILE} VM is already running")
         return verify()
 
+    disk = max(PIN.disk_gib, round(vm["disk"] / GIB)) if vm else PIN.disk_gib
     subprocess.run(
-        ["colima", "start", "--cpu", str(PIN.cpu), "--memory", str(PIN.memory_gib), "--disk", str(PIN.disk_gib)],
+        ["colima", "start", "--cpu", str(PIN.cpu), "--memory", str(PIN.memory_gib), "--disk", str(disk)],
         check=True,
     )
     return verify()
@@ -175,8 +175,9 @@ def verify() -> int:
     if found:
         print("\nthis machine is not the one the repository describes — `colima stop` then `start` re-applies the pin")
         return 1
+    disk = round(vm["disk"] / GIB) if vm else PIN.disk_gib
     print(
-        f"on the pin: colima {PIN.colima}, docker {PIN.docker}, {PIN.cpu} CPUs, {PIN.memory_gib} GiB, {PIN.disk_gib} GiB disk"
+        f"on the pin: colima {PIN.colima}, docker {PIN.docker}, {PIN.cpu} CPUs, {PIN.memory_gib} GiB, {disk} GiB disk"
     )
     return 0
 

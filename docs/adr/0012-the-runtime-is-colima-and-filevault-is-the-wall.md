@@ -15,6 +15,11 @@
 > [ADR-0057](0057-the-competition-runtime-lives-on-the-working-volume-with-bounded-growth.md).**
 > ADR-0057 increased the sparse external VM disk to 200 GiB on 13 September 2026 without widening
 > its independent storage budgets.
+>
+> **Host disk sizing and host storage admission are now superseded by
+> [ADR-0058](0058-host-storage-follows-physical-capacity-and-post-merge-reclamation.md).** The
+> current `start` command requests 700 GiB initially; CPU and memory remain exact, while actual
+> disk capacity is observed rather than treated as runtime drift.
 
 [#49](https://github.com/jerome-queck/incypher-ctf/issues/49) opened on a fact rather than a
 question: **there was no container runtime on the build machine at all** — no `docker` binary, no
@@ -31,8 +36,9 @@ what proving the restart path turned up, and it does not have a happy ending.
 
 The ticket's three reasons held, and two of them are now measured rather than quoted:
 
-- **The allocation is a reviewable line, not a slider.** `PIN` in `scripts/runtime.py` names 8
-  CPUs, 24 GiB and 200 GiB of disk; `runtime.py verify` fails when the machine has drifted off it.
+- **The CPU and memory allocation are reviewable lines, not sliders.** `PIN` in
+  `scripts/runtime.py` names 8 CPUs and 24 GiB; its disk field is only the initial start request,
+  and `runtime.py verify` reports the observed capacity without rejecting its size.
   Docker Desktop's equivalent is GUI state on one laptop that no diff can read. This is the same
   argument [ADR-0008](0008-one-image-for-every-board-and-two-seams-instead-of-one.md) made for the
   event being a config file, and it is the reason the pin is worth more than the runtime choice.

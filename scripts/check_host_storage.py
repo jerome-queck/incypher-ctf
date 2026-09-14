@@ -1,7 +1,8 @@
-"""Refuse host storage growth outside ADR-0057's development or competition budget.
+"""Report host storage observations and refuse only unavailable or misplaced runtime storage.
 
 Docker's aggregate image and cache totals include Tool layers, downloads, package closures and
-build intermediates. No Tool supply is exempt merely because the sparse VM disk is larger.
+build intermediates. They remain useful observations, but no storage-size measurement blocks
+development or competition admission.
 """
 
 from __future__ import annotations
@@ -20,10 +21,11 @@ import runtime
 GIB = 1024**3
 PROJECT_ROOT = runtime.EXTERNAL_PROJECT_ROOT
 WORKING = PROJECT_ROOT.parent
-MINIMUM_HOST_FREE = 100 * GIB
-STATE_LIMIT = 60 * GIB
-IMAGE_LIMIT = 12 * GIB
-LIMITS = {
+# These historical benchmarks are retained as observations for operators. They are not admission
+# refusals.
+STATE_BENCHMARK = 60 * GIB
+IMAGE_BENCHMARK = 12 * GIB
+STORAGE_BENCHMARKS = {
     "development": {"Images": 40 * GIB, "Build Cache": 20 * GIB},
     "competition": {"Images": 24 * GIB, "Build Cache": 0},
 }
@@ -47,7 +49,7 @@ def bytes_in(text: str) -> int | None:
     return round(float(match.group(1)) * units[match.group(2)])
 
 
-def violations(
+def advisories(
     mode: str,
     rows: list[Mapping[str, str]],
     free: int,
@@ -55,18 +57,20 @@ def violations(
     state_size: int = 0,
     image_sizes: tuple[int, ...] = (),
 ) -> list[str]:
+    """Return advisory size observations; none of these block host admission."""
     found = []
-    if free < MINIMUM_HOST_FREE:
-        found.append(f"Working has {free // GIB} GiB free; 100 GiB is protected")
-    if state_size > STATE_LIMIT:
-        found.append(f"Run state uses {state_size // GIB} GiB; limit is 60 GiB")
-    if image_sizes and max(image_sizes) > IMAGE_LIMIT:
-        found.append(f"one Docker image uses {max(image_sizes) // GIB} GiB; Candidate limit is 12 GiB")
+    del free
+    if state_size > STATE_BENCHMARK:
+        found.append(f"Run state uses {state_size // GIB} GiB; old 60 GiB benchmark is advisory")
+    if image_sizes and max(image_sizes) > IMAGE_BENCHMARK:
+        found.append(f"one Docker image uses {max(image_sizes) // GIB} GiB; old 12 GiB Candidate benchmark is advisory")
     for row in rows:
-        limit = LIMITS[mode].get(row.get("Type", ""))
+        benchmark = STORAGE_BENCHMARKS[mode].get(row.get("Type", ""))
         size = bytes_in(row.get("Size", ""))
-        if limit is not None and size is not None and size > limit:
-            found.append(f"Docker {row['Type']} uses {row['Size']}; {mode} limit is {limit // GIB} GiB")
+        if benchmark is not None and size is not None and size > benchmark:
+            found.append(
+                f"Docker {row['Type']} uses {row['Size']}; old {mode} {benchmark // GIB} GiB benchmark is advisory"
+            )
     return found
 
 
@@ -96,7 +100,7 @@ def directory_size(root: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=LIMITS)
+    parser.add_argument("mode", choices=STORAGE_BENCHMARKS)
     mode = parser.parse_args(argv).mode
 
     location_drift = runtime.storage_drift(
@@ -111,18 +115,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     state = PROJECT_ROOT / "incypher-ctf" / "state"
-    found = violations(
+    free = shutil.disk_usage(WORKING).free
+    advisories_found = advisories(
         mode,
         docker_rows(),
-        shutil.disk_usage(WORKING).free,
+        free,
         state_size=directory_size(state),
         image_sizes=docker_image_sizes(),
     )
-    for line in found:
-        print(f"storage refusal: {line}", file=sys.stderr)
-    if found:
-        return 1
-    print(f"host storage is inside the {mode} budget")
+    for line in advisories_found:
+        print(f"storage advisory: {line}", file=sys.stderr)
+    print(f"host storage location is available for {mode}; {free // GIB} GiB free (advisory)")
     return 0
 
 

@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import runtime  # noqa: E402
 from solver.attempt_executor_contracts import RuntimeBinding  # noqa: E402
+from qualification_retention import new_retained_directory  # noqa: E402
 
 CGROUP_PARENT = "incypher-v2-strict"
 CGROUP_SOURCE = "/sys/fs/cgroup/system.slice/incypher-v2-strict"
@@ -233,30 +233,29 @@ def _checked(command: list[str], runner: CommandRunner) -> Any:
 
 
 def enforce_host_storage(mode: str, runner: CommandRunner) -> None:
-    """Run the canonical host-storage refusal for a build lifecycle phase."""
+    """Run the canonical host-storage availability and observation check."""
 
     _checked([sys.executable, str(REPO_ROOT / "scripts/check_host_storage.py"), mode], runner)
 
 
 def build_image(runner: CommandRunner) -> RuntimeBinding:
-    with tempfile.TemporaryDirectory(prefix="strict-image-metadata-") as temporary:
-        metadata_path = Path(temporary) / "metadata.json"
-        _checked(
-            [
-                "docker",
-                "buildx",
-                "build",
-                "--load",
-                "--provenance=false",
-                "--metadata-file",
-                str(metadata_path),
-                "--tag",
-                IMAGE_TAG,
-                ".",
-            ],
-            runner,
-        )
-        metadata = json.loads(metadata_path.read_text())
+    metadata_path = new_retained_directory("image-metadata", "strict-") / "metadata.json"
+    _checked(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--load",
+            "--provenance=false",
+            "--metadata-file",
+            str(metadata_path),
+            "--tag",
+            IMAGE_TAG,
+            ".",
+        ],
+        runner,
+    )
+    metadata = json.loads(metadata_path.read_text())
     manifest = metadata.get("containerimage.digest")
     config = metadata.get("containerimage.config.digest")
     inspected = (
@@ -329,7 +328,6 @@ def _launch(
     binding = build_image(runner)
 
     if not preflight_only:
-        _checked(["docker", "builder", "prune", "--all", "--force"], runner)
         enforce_host_storage("competition", runner)
 
     try:
@@ -387,8 +385,6 @@ def main(
         verified = runtime.verify()
         if verified != 0:
             return verified
-        cache = REPO_ROOT / ".cache"
-        cache.mkdir(exist_ok=True)
         binding = build_image(command_runner)
         try:
             _checked(
@@ -404,8 +400,8 @@ def main(
                 ],
                 command_runner,
             )
-            with tempfile.TemporaryDirectory(prefix="target-qualification-", dir=cache) as state:
-                _checked(target_broker_probe_command(binding, Path(state)), command_runner)
+            state = new_retained_directory("targets", "target-")
+            _checked(target_broker_probe_command(binding, state), command_runner)
         finally:
             _checked(["colima", "ssh", "--", "sudo", "rmdir", CGROUP_SOURCE], command_runner)
         return 0
