@@ -38,11 +38,15 @@ def _run(command: list[str], **options: Any) -> subprocess.CompletedProcess[str]
 def _cleanup_cgroup(runtime_host: str, runner: Runner) -> None:
     if runtime_host == "colima":
         command = ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+        runner(command, check=True)
+        return
     elif runtime_host == "native-docker":
         command = ["sudo", "rmdir", NATIVE_CGROUP_SOURCE]
     else:
         raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
-    runner(command, check=True)
+    result = runner(command, check=False, capture_output=True, text=True)
+    if result.returncode and "No such file or directory" not in result.stderr:
+        raise ReceiptInvalid(f"native cgroup cleanup failed: {result.stderr.strip() or result.returncode}")
 
 
 def _strict_command(command: list[str], runtime_host: str) -> list[str]:

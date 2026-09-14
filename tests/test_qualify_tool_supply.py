@@ -116,6 +116,23 @@ def test_native_docker_observation_cleans_its_host_cgroup_directly() -> None:
     assert runner.commands[-1] == ["sudo", "rmdir", "/sys/fs/cgroup/incypher-v2-strict.slice"]
 
 
+def test_native_docker_cleanup_accepts_a_slice_docker_already_removed() -> None:
+    def runner(command: list[str], **options: object) -> SimpleNamespace:
+        assert command == ["sudo", "rmdir", "/sys/fs/cgroup/incypher-v2-strict.slice"]
+        assert options["check"] is False
+        return SimpleNamespace(returncode=1, stderr="rmdir: No such file or directory")
+
+    qualify_tool_supply._cleanup_cgroup("native-docker", runner)
+
+
+def test_native_docker_cleanup_refuses_other_failures() -> None:
+    def runner(_command: list[str], **_options: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=1, stderr="rmdir: Permission denied")
+
+    with pytest.raises(qualify_tool_supply.ReceiptInvalid, match="cleanup failed"):
+        qualify_tool_supply._cleanup_cgroup("native-docker", runner)
+
+
 def test_tool_handle_qualification_retains_state_until_merge(tmp_path, monkeypatch) -> None:
     root = tmp_path / "repo"
     supply = root / "tool-supply"
