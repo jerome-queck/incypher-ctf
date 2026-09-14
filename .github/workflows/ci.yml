@@ -155,16 +155,18 @@ jobs:
       # Ten minutes is §5's bound rather than a fitted one: an uncached `--no-cache --pull` build
       # of this file measured 18 s.
       - name: docker build
-        run: docker build -t solver:ci .
+        run: docker build --platform linux/amd64 -t solver:ci .
 
       # The required v2 profiles are not proved by package presence. Exercise their fixed
       # semantic fixtures and production Tool handles through the strict outer profile on the
       # runner's native amd64 Docker host. Arm64 receipts remain promoted in the repository.
       - name: required Tool profiles pass strict semantic probes on amd64
         run: |
-          evidence=$(mktemp -d)
-          for component in web.core osint.core misc-protocols.core; do
+          evidence="$RUNNER_TEMP/tool-supply-amd64-receipts"
+          mkdir -p "$evidence"
+          for component in resident.network-data web.core osint.core misc-protocols.core; do
             python3 scripts/qualify_tool_supply.py "$component" \
+              --platform linux/amd64 \
               --runtime-host native-docker \
               --into "$evidence/$component.json"
           done
@@ -176,6 +178,8 @@ jobs:
           from solver.tool_supply_receipt import validate_receipt
 
           root = Path(os.environ["EVIDENCE"])
+          expected = {"resident.network-data", "web.core", "osint.core", "misc-protocols.core"}
+          assert {path.stem for path in root.glob("*.json")} == expected
           manifests = set()
           for path in root.glob("*.json"):
               document = json.loads(path.read_text())
@@ -185,6 +189,13 @@ jobs:
               print(path.name, document["identity"], document["image"]["manifest_digest"])
           assert len(manifests) == 1
           PY
+
+      - name: retain exact amd64 Tool receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tool-supply-amd64-receipts
+          path: ${{ runner.temp }}/tool-supply-amd64-receipts
+          if-no-files-found: error
 
       # The gate turns on a refusal that only exists at boot, so it is proved from the image
       # rather than from the tree: a container that comes up at 10:30 with one variable unset and

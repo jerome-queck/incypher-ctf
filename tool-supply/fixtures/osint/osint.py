@@ -4,27 +4,24 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+import asyncio
+from contextlib import contextmanager, redirect_stdout
+from concurrent.futures import Future
 import hashlib
 import io
 import json
 import os
 import socket
-import socketserver
 import subprocess
 import sys
-import tempfile
-import threading
 from pathlib import Path
-
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from tempfile import TemporaryDirectory
 
 
 VERSION = "1.0.0"
 RESEARCH_CLIENT = "/research-client.py"
 FUNCTIONAL_FIXTURE_ID = "osint-functional-fixture-v1"
 FUNCTIONAL_FIXTURE = Path(__file__).with_name("functional.json")
-LOCAL_FIXTURE_ENV = {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
 CAPABILITIES = frozenset(
     {
         "osint.dns",
@@ -38,6 +35,21 @@ CAPABILITIES = frozenset(
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+@contextmanager
+def _socket_import_fence():
+    original_socket = socket.socket
+
+    class DeniedSocket(original_socket):
+        def __new__(cls, *_args, **_options):
+            raise OSError("OSINT adapters use only Research")
+
+    socket.socket = DeniedSocket
+    try:
+        yield
+    finally:
+        socket.socket = original_socket
 
 
 def _query(document: object, capability: str) -> dict[str, object]:
@@ -140,6 +152,7 @@ def _render(query: dict[str, object], response: dict[str, object]) -> str:
     if not isinstance(provenance, dict):
         raise RuntimeError("Research provenance is invalid")
     body = _body(response)
+    tool, inference = _tool_inference(query, response, body)
     lines = [
         f"schema=osint.{kind}.v1",
         f"outcome={response.get('outcome', '')}",
@@ -153,272 +166,187 @@ def _render(query: dict[str, object], response: dict[str, object]) -> str:
         f"query_digest={provenance.get('query_digest', '')}",
         f"dns_chain={_json(provenance.get('dns_chain', []))}",
         f"redirect_chain={_json(provenance.get('redirect_chain', []))}",
+        f"tool={tool}",
+        f"tool_inference={_json(inference)}",
     ]
     return "\n".join(lines) + "\n"
 
 
-def _run_probe(arguments: list[str], marker: str, *, env: dict[str, str] | None = None) -> str:
-    result = subprocess.run(
-        arguments,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-        env={**os.environ, **(env or {})},
-    )
-    output = result.stdout + result.stderr
-    if result.returncode not in {0, 1, 2} or marker not in output:
-        raise RuntimeError(f"OSINT functional probe failed: {arguments[0]}: {output.strip()[:512]}")
-    return output
+def _tool_inference(
+    query: dict[str, object], response: dict[str, object], body: bytes
+) -> tuple[str, dict[str, object]]:
+    kind = query["kind"]
+    if response.get("outcome") != "answered":
+        return "none", {}
+    if kind == "dns":
+        document = json.loads(body)
+        addresses = document.get("addresses", []) if isinstance(document, dict) else []
+        return "research-dns", {"addresses": addresses if isinstance(addresses, list) else []}
+    if kind == "identity":
+        return "sherlock", _sherlock_inference(str(query["subject"]), response, body)
+    if kind == "email":
+        return "holehe", _holehe_inference(str(query["subject"]), response, body)
+    if kind == "domain":
+        if query.get("source_id") == "rdap":
+            return "research-rdap", _rdap_inference(body)
+        return "theharvester", _theharvester_inference(str(query["subject"]), body)
+    if kind == "geo":
+        return "geopy", _geopy_inference(str(query["subject"]), body)
+    raise RuntimeError("OSINT capability has no production adapter")
 
 
-def _run_python_probe(source: str, marker: str, *, env: dict[str, str] | None = None) -> None:
-    _run_probe(["/usr/bin/python3", "-c", source], marker, env=env)
+def _sherlock_inference(subject: str, response: dict[str, object], body: bytes) -> dict[str, object]:
+    with _socket_import_fence():
+        import requests
+        from sherlock_project import sherlock as sherlock_module
+        from sherlock_project.notify import QueryNotify
 
+    broker_response = requests.Response()
+    broker_response.status_code = int(response.get("status", 0))
+    broker_response._content = body
+    broker_response.encoding = "utf-8"
+    broker_response.url = "https://broker.invalid/user"
 
-class _FixtureHTTPHandler(BaseHTTPRequestHandler):
-    def do_CONNECT(self):  # noqa: N802 - BaseHTTPRequestHandler hook
-        self.send_error(502, "fixture proxy does not tunnel TLS")
+    class BrokerSession:
+        def __init__(self, **_options):
+            pass
 
-    def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler hook
-        if self.path.endswith(".png"):
-            from PIL import Image
+        def request(self, *_args, **_options):
+            future: Future[requests.Response] = Future()
+            future.set_result(broker_response)
+            return future
 
-            stream = io.BytesIO()
-            Image.new("RGBA", (256, 256), (0, 0, 0, 0)).save(stream, format="PNG")
-            body = stream.getvalue()
-            content_type = "image/png"
-        else:
-            body = b"fixture-user fixture@example.test fixture.example\n"
-            content_type = "text/plain"
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        get = head = post = put = request
 
-    def do_HEAD(self):  # noqa: N802 - BaseHTTPRequestHandler hook
-        self.send_response(200)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def log_message(self, _format, *_arguments):
-        return
-
-
-@contextmanager
-def _http_fixture():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHTTPHandler)
-    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-    thread.start()
+    original = sherlock_module.SherlockFuturesSession
+    sherlock_module.SherlockFuturesSession = BrokerSession
     try:
-        yield server
+        result = sherlock_module.sherlock(
+            subject,
+            {
+                "Research": {
+                    "errorType": "status_code",
+                    "errorCode": [404],
+                    "url": "https://broker.invalid/users/{}",
+                    "urlMain": "https://broker.invalid/",
+                }
+            },
+            QueryNotify(),
+            timeout=1,
+        )["Research"]["status"]
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        sherlock_module.SherlockFuturesSession = original
+    return {"status": result.status.value, "claimed": result.status.value == "Claimed"}
 
 
-class _WhoisFixtureHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        self.request.settimeout(1)
-        self.request.recv(256)
-        self.request.sendall(b"Domain Name: fixture.example\nRegistrar: fixture-registry\n")
+def _holehe_inference(subject: str, response: dict[str, object], body: bytes) -> dict[str, object]:
+    import httpx
+    from holehe.modules.cms.gravatar import gravatar
+
+    async def analyse() -> dict[str, object]:
+        observations: list[dict[str, object]] = []
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                int(response.get("status", 0)),
+                request=request,
+                content=body,
+                headers={"content-type": str(response.get("content_type", "application/json"))},
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer), timeout=1) as client:
+            await gravatar(subject, client, observations)
+        if len(observations) != 1:
+            raise RuntimeError("Holehe returned an invalid observation")
+        observation = observations[0]
+        return {
+            "exists": bool(observation.get("exists")),
+            "rate_limited": bool(observation.get("rateLimit")),
+            "service": str(observation.get("name", "")),
+        }
+
+    return asyncio.run(analyse())
 
 
-@contextmanager
-def _whois_fixture():
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _WhoisFixtureHandler)
-    server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-    thread.start()
+def _theharvester_inference(subject: str, body: bytes) -> dict[str, object]:
+    previous_home = os.environ.get("HOME")
+    with TemporaryDirectory(prefix="theharvester-home-") as home:
+        config = Path(home) / ".theHarvester"
+        config.mkdir()
+        (config / "proxies.yaml").write_text("http:\nsocks5:\n", encoding="ascii")
+        os.environ["HOME"] = home
+        try:
+            with redirect_stdout(io.StringIO()):
+                from theHarvester.discovery.crtsh import AsyncFetcher, SearchCrtsh
+        finally:
+            if previous_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous_home
+
+    with redirect_stdout(io.StringIO()):
+        try:
+            document = json.loads(body)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("theHarvester response is not JSON") from error
+        if not isinstance(document, list) or not all(isinstance(item, dict) for item in document):
+            raise RuntimeError("theHarvester response is not a record list")
+
+        async def fixture_fetch(_urls, **_options):
+            return [document]
+
+        async def analyse() -> dict[str, object]:
+            original = AsyncFetcher.fetch_all
+            AsyncFetcher.fetch_all = fixture_fetch
+            try:
+                search = SearchCrtsh(subject)
+                await search.process()
+                return {"hostnames": sorted(await search.get_hostnames())}
+            finally:
+                AsyncFetcher.fetch_all = original
+
+        return asyncio.run(analyse())
+
+
+def _rdap_inference(body: bytes) -> dict[str, object]:
     try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        document = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("RDAP response is not JSON") from error
+    if not isinstance(document, dict):
+        raise RuntimeError("RDAP response is not an object")
+    nameservers = document.get("nameservers", [])
+    if not isinstance(nameservers, list):
+        nameservers = []
+    return {
+        "handle": str(document.get("handle", "")),
+        "ldh_name": str(document.get("ldhName", "")),
+        "nameservers": sorted(
+            str(item["ldhName"])
+            for item in nameservers
+            if isinstance(item, dict) and isinstance(item.get("ldhName"), str)
+        ),
+        "status": sorted(str(value) for value in document.get("status", []) if isinstance(value, str))
+        if isinstance(document.get("status", []), list)
+        else [],
+    }
 
 
-class _DnsFixtureHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        query, endpoint = self.request
-        if len(query) < 17 or query[4:6] != b"\x00\x01":
-            return
-        end = 12
-        while end < len(query) and query[end]:
-            end += query[end] + 1
-        question_end = end + 5
-        if question_end > len(query):
-            return
-        response = (
-            query[:2]
-            + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00"
-            + query[12:question_end]
-            + b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04"
-            + socket.inet_aton("192.0.2.1")
-        )
-        endpoint.sendto(response, self.client_address)
+def _geopy_inference(subject: str, body: bytes) -> dict[str, object]:
+    with _socket_import_fence():
+        from geopy.point import Point
 
-
-@contextmanager
-def _dns_fixture():
-    server = socketserver.ThreadingUDPServer(("127.0.0.1", 0), _DnsFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-    thread.start()
     try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def _sherlock_probe(server: ThreadingHTTPServer) -> None:
-    with tempfile.TemporaryDirectory(prefix="incypher-sherlock-") as directory:
-        root = Path(directory)
-        sites = root / "sites.json"
-        sites.write_text(
-            json.dumps(
-                {
-                    "Fixture": {
-                        "errorMsg": [404],
-                        "errorType": "status_code",
-                        "regexCheck": "",
-                        "url": f"http://127.0.0.1:{server.server_port}/users/{{}}",
-                        "urlMain": f"http://127.0.0.1:{server.server_port}/",
-                        "username_claimed": "fixture-user",
-                    }
-                },
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-        output_text = _run_probe(
-            [
-                "/usr/bin/sherlock",
-                "fixture-user",
-                "--json",
-                str(sites),
-                "--site",
-                "Fixture",
-                "--remote",
-                "--timeout",
-                "1",
-                "--verbose",
-                "--print-all",
-                "--print-found",
-                "--no-color",
-                "--ignore-exclusions",
-                "--no-txt",
-            ],
-            "Fixture: http://127.0.0.1",
-            env=LOCAL_FIXTURE_ENV,
-        )
-        if "fixture-user" not in output_text:
-            raise RuntimeError("Sherlock fixture result is missing the queried username")
-
-
-def _holehe_probe() -> None:
-    _run_python_probe(
-        """
-import httpx
-import trio
-from holehe.modules.social_media.snapchat import snapchat
-
-def answer(request):
-    if request.method == 'GET':
-        return httpx.Response(200, request=request, text='data-xsrf="token" data-web-client-id="client"')
-    return httpx.Response(200, request=request, json={'hasSnapchat': True})
-
-async def probe():
-    observations = []
-    transport = httpx.MockTransport(answer)
-    async with httpx.AsyncClient(transport=transport, timeout=1) as client:
-        await snapchat('fixture@example.test', client, observations)
-    assert len(observations) == 1 and observations[0]['exists'] is True
-    print('holehe-fixture')
-
-trio.run(probe)
-""",
-        "holehe-fixture",
-    )
-
-
-def _theharvester_probe() -> None:
-    _run_python_probe(
-        """
-import asyncio
-from theHarvester.discovery.crtsh import AsyncFetcher, SearchCrtsh
-
-async def fixture_fetch(_urls, **_options):
-    return [[{'name_value': '*.fixture.example'}, {'name_value': 'api.fixture.example'}]]
-
-async def probe():
-    AsyncFetcher.fetch_all = fixture_fetch
-    search = SearchCrtsh('fixture.example')
-    await search.process()
-    assert sorted(await search.get_hostnames()) == ['api.fixture.example', 'fixture.example']
-    print('theharvester-fixture')
-
-asyncio.run(probe())
-""",
-        "theharvester-fixture",
-    )
-
-
-def _whois_probe(server: socketserver.ThreadingTCPServer) -> None:
-    _run_probe(
-        [
-            "/usr/bin/whois",
-            "-h",
-            "127.0.0.1",
-            "-p",
-            str(server.server_address[1]),
-            "fixture.example",
-        ],
-        "Domain Name: fixture.example",
-    )
-
-
-def _dig_probe(server: socketserver.ThreadingUDPServer) -> None:
-    _run_probe(
-        [
-            "/usr/bin/dig",
-            "@127.0.0.1",
-            "-p",
-            str(server.server_address[1]),
-            "fixture.example",
-            "A",
-            "+short",
-        ],
-        "192.0.2.1",
-    )
-
-
-def _library_probes(server: ThreadingHTTPServer) -> None:
-    _run_python_probe(
-        "from geopy.distance import geodesic; assert geodesic((1.3521, 103.8198), (1.3522, 103.8199)).meters > 0; print('geopy-fixture')",
-        "geopy-fixture",
-    )
-    _run_python_probe(
-        "import piexif; payload = piexif.dump({'0th': {piexif.ImageIFD.Make: b'InCypher'}}); assert payload.startswith(b'Exif'); print('piexif-fixture')",
-        "piexif-fixture",
-    )
-    _run_python_probe(
-        """
-from staticmap import CircleMarker, StaticMap
-
-mapping = StaticMap(64, 64, url_template='http://127.0.0.1:%d/{z}/{x}/{y}.png')
-mapping.add_marker(CircleMarker((103.8198, 1.3521), 'red', 8))
-image = mapping.render(zoom=2, center=(103.8198, 1.3521))
-assert image.width == 64 and image.height == 64
-print('staticmap-fixture')
-"""
-        % server.server_port,
-        "staticmap-fixture",
-        env=LOCAL_FIXTURE_ENV,
-    )
+        document = json.loads(body)
+    except json.JSONDecodeError:
+        document = None
+    if isinstance(document, list) and document and isinstance(document[0], dict):
+        point = Point(float(document[0]["lat"]), float(document[0]["lon"]))
+    elif isinstance(document, dict) and {"latitude", "longitude"} <= document.keys():
+        point = Point(float(document["latitude"]), float(document["longitude"]))
+    else:
+        point = Point(subject)
+    return {"latitude": point.latitude, "longitude": point.longitude}
 
 
 def self_check(path: Path) -> None:
@@ -426,13 +354,49 @@ def self_check(path: Path) -> None:
         raise ValueError("self-check input is not a regular file")
     if not FUNCTIONAL_FIXTURE.is_file() or FUNCTIONAL_FIXTURE_ID not in FUNCTIONAL_FIXTURE.read_text(encoding="utf-8"):
         raise RuntimeError("OSINT functional fixture is unavailable")
-    with _http_fixture() as http_server, _whois_fixture() as whois_server, _dns_fixture() as dns_server:
-        _sherlock_probe(http_server)
-        _holehe_probe()
-        _theharvester_probe()
-        _whois_probe(whois_server)
-        _dig_probe(dns_server)
-        _library_probes(http_server)
+    examples = {
+        "identity": (
+            {"status": 200},
+            b'{"login":"fixture-user"}',
+            {"claimed": True, "status": "Claimed"},
+        ),
+        "email": (
+            {"status": 200, "content_type": "application/json"},
+            b'{"entry":[{"displayName":"Fixture User","profileUrl":"https://example.test/u"}]}',
+            {"exists": True, "rate_limited": False, "service": "gravatar"},
+        ),
+        "domain": (
+            {"status": 200},
+            b'[{"name_value":"*.fixture.example"},{"name_value":"api.fixture.example"}]',
+            {"hostnames": ["api.fixture.example", "fixture.example"]},
+        ),
+        "geo": (
+            {"status": 200},
+            b'[{"lat":"1.3521","lon":"103.8198"}]',
+            {"latitude": 1.3521, "longitude": 103.8198},
+        ),
+    }
+    subjects = {
+        "identity": "fixture-user",
+        "email": "fixture@example.test",
+        "domain": "fixture.example",
+        "geo": "1.3521,103.8198",
+    }
+    for kind, (response, body, expected) in examples.items():
+        tool, observed = _tool_inference(
+            {"kind": kind, "source_id": "crtsh" if kind == "domain" else kind, "subject": subjects[kind]},
+            {"outcome": "answered", **response},
+            body,
+        )
+        if tool == "none" or observed != expected:
+            raise RuntimeError(f"{kind} production adapter self-check failed")
+    rdap_tool, rdap = _tool_inference(
+        {"kind": "domain", "source_id": "rdap", "subject": "fixture.example"},
+        {"outcome": "answered", "status": 200},
+        b'{"handle":"FIXTURE","ldhName":"fixture.example","nameservers":[],"status":["active"]}',
+    )
+    if rdap_tool != "research-rdap" or rdap["ldh_name"] != "fixture.example":
+        raise RuntimeError("domain RDAP adapter self-check failed")
     print("osint-profile-self-check")
 
 

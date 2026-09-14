@@ -56,7 +56,7 @@ from solver.target_broker_contracts import (
     TcpTargetExchangeRequest,
 )
 from solver.target_broker_transport import exchange as transport_exchange
-from solver.target_broker_transport import HttpSessionTransport, HttpTransportRequest
+from solver.target_broker_transport import HttpSessionTransport, HttpTransportRequest, http_request_size
 from solver.target_broker_transport import TcpSessionTransport
 from solver.target_broker_transport import request_size
 from solver.target_broker_ffuf import FfufResult, FfufRunner
@@ -657,25 +657,38 @@ class TargetBrokerRuntime:
         certificate = ""
         transported = None
         for redirect_index in range(self.limits.max_redirects + 1):
-            with self._lock:
-                used_connections = self._connections.get(binding.generation_id, 0)
-                if used_connections >= self.limits.max_connections:
-                    return self._http_result(
-                        TargetOutcome.BUDGET_EXHAUSTED,
-                        request_id,
-                        request_digest,
-                        binding,
-                        request_bytes=request_bytes,
-                        response_bytes=response_bytes,
-                        elapsed_ms=elapsed_ms,
-                        redirect_chain=redirect_chain,
-                        cookies=cookies,
-                    )
-                self._connections[binding.generation_id] = used_connections + 1
             request_headers = list(headers)
             if cookies:
                 request_headers.append(
                     ("Cookie", "; ".join(f"{name}={value}" for name, value in sorted(cookies.items())))
+                )
+            outbound = HttpTransportRequest(method, target, body, tuple(request_headers))
+            measured_request = http_request_size(self.endpoint, outbound)
+            with self._lock:
+                used_connections = self._connections.get(binding.generation_id, 0)
+                total_request = (
+                    self._session_request_bytes.get(binding.generation_id, 0) + request_bytes + measured_request
+                )
+                total_elapsed = self._session_elapsed_ms.get(binding.generation_id, 0) + elapsed_ms
+                exhausted = (
+                    used_connections >= self.limits.max_connections
+                    or total_request > self.limits.max_total_request_bytes
+                    or total_elapsed >= int(self.limits.max_total_seconds * 1000)
+                )
+                if not exhausted:
+                    self._connections[binding.generation_id] = used_connections + 1
+                    remaining_time_seconds = (int(self.limits.max_total_seconds * 1000) - total_elapsed) / 1000
+            if exhausted:
+                return self._http_result(
+                    TargetOutcome.BUDGET_EXHAUSTED,
+                    request_id,
+                    request_digest,
+                    binding,
+                    request_bytes=request_bytes,
+                    response_bytes=response_bytes,
+                    elapsed_ms=elapsed_ms,
+                    redirect_chain=redirect_chain,
+                    cookies=cookies,
                 )
             remaining_response = self.limits.max_total_response_bytes - self._session_response_bytes.get(
                 binding.generation_id, 0
@@ -693,8 +706,9 @@ class TargetBrokerRuntime:
                     cookies=cookies,
                 )
             transported = session.exchange(
-                HttpTransportRequest(method, target, body, tuple(request_headers)),
+                outbound,
                 max_response_bytes=min(self.limits.max_response_bytes, remaining_response),
+                timeout_seconds=min(self.limits.timeout_seconds, remaining_time_seconds),
             )
             elapsed_ms += transported.elapsed_ms
             request_bytes += transported.request_bytes

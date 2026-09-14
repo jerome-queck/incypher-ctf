@@ -27,7 +27,13 @@ from solver.target_broker import TargetBrokerRuntime
 from solver.target_broker_browser import close_browser_launcher, prepare_browser_launcher
 from solver.target_broker_contracts import TargetCandidateBinding, TargetEndpoint, TargetProtocol
 from solver.research_broker import ResearchBrokerRuntime
-from solver.research_broker_contracts import ResearchKind, ResearchLimits, ResearchSource, ResearchTransportResult
+from solver.research_broker_contracts import (
+    ResearchKind,
+    ResearchLimits,
+    ResearchOutcome,
+    ResearchSource,
+    ResearchTransportResult,
+)
 from solver.tool_control import AttemptToolRuntime, ToolController, ToolInvocation, profile_components
 from solver.tool_control_receipt import verify_receipt, write_receipt
 from solver.work_generation import GenerationDisposition, GenerationFence
@@ -273,6 +279,24 @@ def qualify(
                     browser_launcher=browser_launcher,
                 )
             if any(policies[capability_id]["network"] == "research-broker" for capability_id in capability_ids):
+
+                def research_fixture(url, *_args):
+                    bodies = {
+                        "github.fixture": b'{"login":"fixture-user"}',
+                        "gravatar.fixture": b'{"entry":[{"displayName":"Fixture User","profileUrl":"https://example.test/u"}]}',
+                        "crtsh.fixture": b'[{"name_value":"*.fixture.example"},{"name_value":"api.fixture.example"}]',
+                        "geo.fixture": b'[{"lat":"1.3521","lon":"103.8198"}]',
+                    }
+                    body = next((body for marker, body in bodies.items() if marker in url), None)
+                    if body is None:
+                        return ResearchTransportResult(outcome=ResearchOutcome.DENIED)
+                    return ResearchTransportResult(
+                        status=200,
+                        headers={"content-type": "application/json"},
+                        body=body,
+                        elapsed_ms=1,
+                    )
+
                 research_broker = ResearchBrokerRuntime(
                     state=state,
                     run_id=RUN_ID,
@@ -280,16 +304,12 @@ def qualify(
                     limits=ResearchLimits(1024 * 1024, 10, 2, 0, max_requests=16),
                     timestamp=timestamp,
                     resolve=lambda _host: ("8.8.8.8",),
-                    transport=lambda *_args: ResearchTransportResult(
-                        status=200,
-                        headers={"content-type": "application/json"},
-                        body=b'{"controlled_live":true}',
-                        elapsed_ms=1,
-                    ),
+                    dns_resolve=lambda _host: ("8.8.8.8",),
+                    transport=research_fixture,
                     sources={
                         "github": ResearchSource(
                             ResearchKind.IDENTITY,
-                            "https://example.test/{subject}",
+                            "https://github.fixture/{subject}",
                             "fixture",
                             "fixture",
                             terms_decision="allow",
@@ -297,15 +317,15 @@ def qualify(
                         ),
                         "gravatar": ResearchSource(
                             ResearchKind.EMAIL,
-                            "https://example.test/{subject}",
+                            "https://gravatar.fixture/{subject}",
                             "fixture",
                             "fixture",
                             terms_decision="allow",
                             robots_decision="not-applicable",
                         ),
-                        "rdap": ResearchSource(
+                        "crtsh": ResearchSource(
                             ResearchKind.DOMAIN,
-                            "https://example.test/{subject}",
+                            "https://crtsh.fixture/{subject}",
                             "fixture",
                             "fixture",
                             terms_decision="allow",
@@ -313,7 +333,7 @@ def qualify(
                         ),
                         "nominatim": ResearchSource(
                             ResearchKind.GEO,
-                            "https://example.test/{subject}",
+                            "https://geo.fixture/{subject}",
                             "fixture",
                             "fixture",
                             terms_decision="allow",

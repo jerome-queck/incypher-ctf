@@ -7,6 +7,7 @@ import tempfile
 import hashlib
 import datetime as dt
 import json
+import struct
 import threading
 import time
 from dataclasses import replace
@@ -23,7 +24,7 @@ from solver.recon import recon
 from solver.record import Recorder
 from solver.recovery.runtime import DeterministicRecovery
 from solver.recovery.incident import RECEIPT
-from solver.research_broker import ResearchBrokerRuntime
+from solver.research_broker import ResearchBrokerRuntime, _dns_answers
 from solver.research_broker_contracts import (
     RESEARCH_BROKER_RECORDED,
     ResearchKind,
@@ -153,6 +154,52 @@ def test_typed_osint_recordings_obey_cumulative_request_and_byte_budgets(tmp_pat
     assert first.outcome is ResearchOutcome.ANSWERED
     assert exhausted.outcome is ResearchOutcome.BUDGET_EXHAUSTED
     assert exhausted.body == b""
+
+
+@pytest.mark.parametrize(
+    ("subject", "resolved"),
+    [
+        ("private.example", ("127.0.0.1",)),
+        ("metadata.example", ("169.254.169.254",)),
+        ("127.0.0.1", ("127.0.0.1",)),
+    ],
+)
+def test_live_dns_refuses_private_subjects_and_answers(tmp_path: Path, subject: str, resolved: tuple[str, ...]) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("c", "a")
+    runtime = ResearchBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        limits=ResearchLimits(256, 1, 0, 0),
+        timestamp=lambda: "2026-09-13T00:00:00+00:00",
+        dns_resolve=lambda _host: resolved,
+    )
+    left, right = socket.socketpair()
+    try:
+        runtime.prepare_attempt(CapabilityBinding("run-1", "boot-1", generation.generation_id, "l", "a", "s"))
+        result = runtime.query(
+            left,
+            runtime.claim(left, generation.generation_id),
+            ResearchQuery.live(ResearchKind.DNS, "dns", subject),
+        )
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is ResearchOutcome.DENIED
+    assert result.body == b""
+
+
+def test_public_dns_parser_accepts_only_the_requested_address_record() -> None:
+    request_id = 0x1234
+    question = b"\x07example\x03com\0" + struct.pack("!HH", 1, 1)
+    answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + socket.inet_aton("8.8.8.8")
+    payload = struct.pack("!HHHHHH", request_id, 0x8180, 1, 1, 0, 0) + question + answer
+
+    assert _dns_answers(payload, request_id, 1, socket.AF_INET) == ("8.8.8.8",)
+    with pytest.raises(OSError, match="invalid"):
+        _dns_answers(payload, request_id + 1, 1, socket.AF_INET)
 
 
 def test_research_client_query_decodes_malformed_provenance_consistently() -> None:

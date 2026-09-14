@@ -780,7 +780,7 @@ def _run_admitted(
                 ),
                 "gravatar": ResearchSource(
                     ResearchKind.EMAIL,
-                    "https://www.gravatar.com/{subject}.json",
+                    "https://en.gravatar.com/{md5_subject}.json",
                     "gravatar-public-profile",
                     "public-profile-route",
                     terms_decision="allow",
@@ -791,6 +791,14 @@ def _run_admitted(
                     "https://rdap.org/domain/{subject}",
                     "rdap-bootstrap-service",
                     "protocol-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
+                ),
+                "crtsh": ResearchSource(
+                    ResearchKind.DOMAIN,
+                    "https://crt.sh/?q=%25.{subject}&exclude=expired&deduplicate=Y&output=json",
+                    "crtsh-public-certificate-search",
+                    "api-route-not-robots",
                     terms_decision="allow",
                     robots_decision="not-applicable",
                 ),

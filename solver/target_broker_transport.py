@@ -10,7 +10,7 @@ import threading
 import time
 import zlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from solver.target_broker_contracts import (
     TargetEndpoint,
@@ -71,15 +71,38 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         )
         self._address = address
         self._cancelled = cancelled
+        self._connect_lock = threading.RLock()
+        self._closed = False
 
     def connect(self) -> None:
-        if self._cancelled is not None and self._cancelled.is_set():
-            raise OSError("Target session was revoked")
+        with self._connect_lock:
+            if self._closed or (self._cancelled is not None and self._cancelled.is_set()):
+                raise OSError("Target session was revoked")
         opened = socket.create_connection((self._address, self.port), self.timeout)
-        if self._cancelled is not None and self._cancelled.is_set():
-            opened.close()
-            raise OSError("Target session was revoked")
-        self.sock = self._context.wrap_socket(opened, server_hostname=self.host)
+        secured = None
+        try:
+            if self._cancelled is not None and self._cancelled.is_set():
+                raise OSError("Target session was revoked")
+            secured = self._context.wrap_socket(opened, server_hostname=self.host)
+            opened = None
+            with self._connect_lock:
+                if self._closed:
+                    raise OSError("Target session was revoked")
+                cancelled = self._cancelled is not None and self._cancelled.is_set()
+                if self._closed or cancelled:
+                    raise OSError("Target session was revoked")
+                self.sock = secured
+                secured = None
+        finally:
+            if secured is not None:
+                secured.close()
+            if opened is not None:
+                opened.close()
+
+    def close(self) -> None:
+        with self._connect_lock:
+            self._closed = True
+            super().close()
 
 
 class _PinnedHTTPConnection(http.client.HTTPConnection):
@@ -87,15 +110,31 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         super().__init__(address, endpoint.port, timeout=timeout)
         self._address = address
         self._cancelled = cancelled
+        self._connect_lock = threading.RLock()
+        self._closed = False
 
     def connect(self) -> None:
-        if self._cancelled.is_set():
-            raise OSError("Target session was revoked")
+        with self._connect_lock:
+            if self._closed or self._cancelled.is_set():
+                raise OSError("Target session was revoked")
         opened = socket.create_connection((self._address, self.port), self.timeout)
-        if self._cancelled.is_set():
-            opened.close()
-            raise OSError("Target session was revoked")
-        self.sock = opened
+        try:
+            with self._connect_lock:
+                if self._closed:
+                    raise OSError("Target session was revoked")
+                cancelled = self._cancelled.is_set()
+                if self._closed or cancelled:
+                    raise OSError("Target session was revoked")
+                self.sock = opened
+                opened = None
+        finally:
+            if opened is not None:
+                opened.close()
+
+    def close(self) -> None:
+        with self._connect_lock:
+            self._closed = True
+            super().close()
 
 
 class _IncompleteFrame(OSError):
@@ -119,12 +158,13 @@ class TcpSessionTransport:
         self._socket: socket.socket | None = None
         self._closed = False
         self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
 
     def exchange(self, request: TcpSessionRequest) -> TransportResult:
         if not self._lock.acquire(blocking=False):
             return TransportResult(TargetOutcome.DENIED)
         try:
-            if self._closed:
+            if self._is_closed():
                 return TransportResult(TargetOutcome.REVOKED)
             started = time.monotonic()
             timed_out = threading.Event()
@@ -151,11 +191,21 @@ class TcpSessionTransport:
             except _TimedOutFrame as error:
                 outcome, body, wire_bytes = TargetOutcome.TIMEOUT, error.body, error.wire_bytes
             except _IncompleteFrame as error:
-                outcome = TargetOutcome.TIMEOUT if timed_out.is_set() else TargetOutcome.AMBIGUOUS_CLOSE
+                outcome = (
+                    TargetOutcome.TIMEOUT
+                    if timed_out.is_set()
+                    else TargetOutcome.REVOKED
+                    if self._is_closed()
+                    else TargetOutcome.AMBIGUOUS_CLOSE
+                )
                 body, wire_bytes = error.body, error.wire_bytes
             except OSError:
                 outcome, body, wire_bytes = (
-                    (TargetOutcome.TIMEOUT, b"", 0) if timed_out.is_set() else (TargetOutcome.UNREACHABLE, b"", 0)
+                    (TargetOutcome.TIMEOUT, b"", 0)
+                    if timed_out.is_set()
+                    else (TargetOutcome.REVOKED, b"", 0)
+                    if self._is_closed()
+                    else (TargetOutcome.UNREACHABLE, b"", 0)
                 )
             finally:
                 timer.cancel()
@@ -170,8 +220,9 @@ class TcpSessionTransport:
             self._lock.release()
 
     def close(self) -> None:
-        self._closed = True
-        target, self._socket = self._socket, None
+        with self._state_lock:
+            self._closed = True
+            target, self._socket = self._socket, None
         if target is not None:
             try:
                 target.shutdown(socket.SHUT_RDWR)
@@ -180,12 +231,32 @@ class TcpSessionTransport:
             target.close()
 
     def _connection(self) -> socket.socket:
-        if self._socket is None:
-            self._socket = socket.create_connection(
-                (self._address, self._endpoint.port),
-                self._limits.timeout_seconds,
-            )
-        return self._socket
+        with self._state_lock:
+            if self._closed:
+                raise OSError("Target session was revoked")
+            if self._socket is not None:
+                return self._socket
+        opened = socket.create_connection(
+            (self._address, self._endpoint.port),
+            self._limits.timeout_seconds,
+        )
+        try:
+            with self._state_lock:
+                if self._closed:
+                    raise OSError("Target session was revoked")
+                self._socket = opened
+                opened = None
+                return self._socket
+        finally:
+            if opened is not None:
+                try:
+                    opened.close()
+                except OSError:
+                    pass
+
+    def _is_closed(self) -> bool:
+        with self._state_lock:
+            return self._closed
 
 
 class HttpSessionTransport:
@@ -200,16 +271,27 @@ class HttpSessionTransport:
         self._state_lock = threading.Lock()
         self._active: http.client.HTTPConnection | None = None
 
-    def exchange(self, request: HttpTransportRequest, *, max_response_bytes: int) -> HttpTransportResult:
+    def exchange(
+        self,
+        request: HttpTransportRequest,
+        *,
+        max_response_bytes: int,
+        timeout_seconds: float | None = None,
+    ) -> HttpTransportResult:
         if not self._exchange_lock.acquire(blocking=False):
             return HttpTransportResult(TargetOutcome.DENIED)
         try:
             if self._cancelled.is_set():
                 return HttpTransportResult(TargetOutcome.REVOKED)
+            limits = (
+                self._limits
+                if timeout_seconds is None
+                else replace(self._limits, timeout_seconds=min(self._limits.timeout_seconds, timeout_seconds))
+            )
             return _http_session_exchange(
                 self._endpoint,
                 self._address,
-                self._limits,
+                limits,
                 request,
                 max_response_bytes=max_response_bytes,
                 cancelled=self._cancelled,
@@ -222,11 +304,12 @@ class HttpSessionTransport:
         self._cancelled.set()
         with self._state_lock:
             connection = self._active
-        if connection is not None and connection.sock is not None:
-            try:
-                connection.sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+        if connection is not None:
+            if connection.sock is not None:
+                try:
+                    connection.sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
             connection.close()
 
     def _activate(self, connection: http.client.HTTPConnection | None) -> None:

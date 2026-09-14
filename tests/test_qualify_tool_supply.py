@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import qualify_tool_supply
 import strict_runtime
 
@@ -34,6 +36,7 @@ def test_build_metadata_binds_the_loaded_config_to_the_oci_manifest(monkeypatch)
     assert qualify_tool_supply.build_image(runner) == ("linux/arm64", MANIFEST, CONFIG)
     assert "--load" in runner.commands[0]
     assert "--provenance=false" in runner.commands[0]
+    assert runner.commands[0][runner.commands[0].index("--platform") + 1] == "linux/arm64"
     assert runner.commands[1][-1] == strict_runtime.IMAGE_TAG
     assert runner.commands[2] == [
         qualify_tool_supply.sys.executable,
@@ -55,6 +58,16 @@ def test_native_docker_build_does_not_require_colima(monkeypatch) -> None:
         MANIFEST,
         CONFIG,
     )
+
+
+def test_build_refuses_when_loaded_architecture_differs_from_requested(monkeypatch) -> None:
+    runner = Runner()
+    monkeypatch.setattr(qualify_tool_supply.runtime, "verify", lambda: 0)
+
+    with pytest.raises(qualify_tool_supply.ReceiptInvalid, match="platform"):
+        qualify_tool_supply.build_image(runner, platform="linux/amd64")
+
+    assert runner.commands[0][runner.commands[0].index("--platform") + 1] == "linux/amd64"
 
 
 def test_strict_observation_cleans_only_its_cgroup() -> None:
@@ -127,7 +140,11 @@ def test_tool_handle_qualification_retains_state_until_merge(tmp_path, monkeypat
     runner = Runner()
     monkeypatch.setattr(qualify_tool_supply, "REPO_ROOT", root)
     monkeypatch.setattr(qualify_tool_supply, "new_retained_directory", retain)
-    monkeypatch.setattr(qualify_tool_supply, "build_image", lambda _runner: ("linux/arm64", MANIFEST, CONFIG))
+    monkeypatch.setattr(
+        qualify_tool_supply,
+        "build_image",
+        lambda _runner, *, platform, runtime_host="colima": (platform, MANIFEST, CONFIG),
+    )
     monkeypatch.setattr(qualify_tool_supply, "strict_observation", lambda *args, **kwargs: {"outcome": "pass"})
     monkeypatch.setattr(
         qualify_tool_supply,

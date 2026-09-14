@@ -16,6 +16,7 @@ from solver.redaction import Redactor
 
 SCHEMA_VERSION = 1
 RECEIPT_TYPE = "tool-supply-receipt"
+SUPPORTED_IMAGE_PLATFORMS = frozenset({"linux/amd64", "linux/arm64"})
 
 
 class ReceiptInvalid(ValueError):
@@ -111,7 +112,9 @@ def _validate_image(document: Mapping[str, Any], expected_manifest: str | None) 
     image = _mapping(document["image"], "image")
     if set(image) != {"platform", "manifest_digest", "config_digest"}:
         raise ReceiptInvalid("image binding must contain platform, manifest_digest and config_digest")
-    _string(image["platform"], "image.platform")
+    platform = _string(image["platform"], "image.platform")
+    if platform not in SUPPORTED_IMAGE_PLATFORMS:
+        raise ReceiptInvalid("image platform is unsupported")
     manifest = _digest(image["manifest_digest"], "image.manifest_digest", prefixed=True)
     _digest(image["config_digest"], "image.config_digest", prefixed=True)
     if expected_manifest is not None and manifest != expected_manifest:
@@ -324,6 +327,8 @@ def validate_receipt(receipt: Mapping[str, object], *, expected_image_manifest_d
     manifest_digest = _validate_image(document, expected_image_manifest_digest)
     _validate_isolation(document, manifest_digest)
     materials, component = _embedded_build_documents(document)
+    if document["image"]["platform"].removeprefix("linux/") not in component.get("platforms", []):
+        raise ReceiptInvalid("image platform is absent from the locked component")
     closure = _validate_closure(materials, component)
     evidence = _BuildEvidence(component, closure)
     expected_stdout = _validate_authorities(materials, component, closure)

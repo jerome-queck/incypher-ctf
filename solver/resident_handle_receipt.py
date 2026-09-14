@@ -442,7 +442,7 @@ def _validate_research_observation(research: Mapping[str, object], capability_id
         "osint.dns": "dns",
         "osint.identity": "github",
         "osint.email": "gravatar",
-        "osint.domain": "rdap",
+        "osint.domain": "crtsh",
         "osint.geo": "nominatim",
     }.get(capability_id)
     content_type = "application/vnd.incypher.osint+json" if source == "dns" else "application/json"

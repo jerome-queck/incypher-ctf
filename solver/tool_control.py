@@ -168,10 +168,10 @@ PROFILE_COMMANDS = {
         "web.browser": ("chromium", "playwright"),
     },
     "osint": {
-        "osint.dns": ("dig", "bind9-dnsutils"),
+        "osint.dns": ("incypher-osint", None),
         "osint.identity": ("sherlock", "sherlock"),
         "osint.email": ("holehe", "holehe"),
-        "osint.domain": ("whois", "whois"),
+        "osint.domain": ("theharvester", "theharvester"),
         "osint.geo": ("python3", "python3-geopy"),
     },
     "misc-protocols": {
@@ -212,7 +212,7 @@ def attempt_components(inventory_path: Path) -> tuple[ToolComponent, ...]:
 def _profile_components(
     inventory_path: Path,
     profile_id: str,
-    commands: Mapping[str, tuple[str, str]],
+    commands: Mapping[str, tuple[str, str | None]],
     *,
     require_complete: bool,
 ) -> tuple[ToolComponent, ...]:
@@ -231,7 +231,7 @@ def _profile_components(
                 raise ValueError(f"{profile_id} capability catalogue is invalid: {capability_id}")
             _command, package = commands[capability_id]
             policy = policies.get(capability_id)
-            if package not in versions or not isinstance(policy, dict):
+            if (package is not None and package not in versions) or not isinstance(policy, dict):
                 raise ValueError(f"{profile_id} capability has no locked component: {capability_id}")
             argv = policy.get("argv")
             if not isinstance(argv, list) or len(argv) != 4 or argv[-1] != "{input}":

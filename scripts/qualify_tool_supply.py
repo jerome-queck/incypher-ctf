@@ -26,6 +26,7 @@ from solver.resident_handle_receipt import create_receipt as create_handle_recei
 
 Runner = Callable[..., Any]
 RUNTIME_HOSTS = ("colima", "native-docker")
+PLATFORMS = ("linux/amd64", "linux/arm64")
 NATIVE_CGROUP_PARENT = "incypher-v2-strict.slice"
 NATIVE_CGROUP_SOURCE = "/sys/fs/cgroup/incypher-v2-strict.slice"
 
@@ -57,16 +58,23 @@ def _strict_command(command: list[str], runtime_host: str) -> list[str]:
     ]
 
 
-def build_image(runner: Runner = _run, *, runtime_host: str = "colima") -> tuple[str, str, str]:
+def build_image(
+    runner: Runner = _run,
+    *,
+    platform: str = "linux/arm64",
+    runtime_host: str = "colima",
+) -> tuple[str, str, str]:
     """Return platform, OCI manifest digest and config digest for the one loaded build."""
 
     if runtime_host not in RUNTIME_HOSTS:
         raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    if platform not in PLATFORMS:
+        raise ReceiptInvalid(f"unsupported qualification platform: {platform}")
     if runtime_host == "colima" and runtime.verify() != 0:
         raise ReceiptInvalid("the pinned container runtime is unavailable")
     metadata_path = new_retained_directory("image-metadata", "tool-") / "metadata.json"
     tag = strict_runtime.IMAGE_TAG
-    command = ["docker", "buildx", "build", "--load", "--provenance=false"]
+    command = ["docker", "buildx", "build", "--load", "--provenance=false", "--platform", platform]
     command.extend(("--metadata-file", str(metadata_path), "--tag", tag, "."))
     runner(command, check=True)
     metadata = json.loads(metadata_path.read_text())
@@ -86,11 +94,11 @@ def build_image(runner: Runner = _run, *, runtime_host: str = "colima") -> tuple
     )
     if not isinstance(config_digest, str) or not config_digest.startswith("sha256:"):
         raise ReceiptInvalid("BuildKit did not return the OCI config digest")
-    if len(inspected) != 2 or inspected[0] != manifest_digest:
-        raise ReceiptInvalid("the loaded strict image is not the OCI manifest")
+    if len(inspected) != 2 or inspected[0] != manifest_digest or inspected[1] != platform:
+        raise ReceiptInvalid("the loaded strict image is not the requested platform and OCI manifest")
     if runtime_host == "colima":
         strict_runtime.enforce_host_storage("development", runner)
-    return inspected[1], manifest_digest, config_digest
+    return platform, manifest_digest, config_digest
 
 
 def strict_observation(
@@ -147,10 +155,11 @@ def qualify(
     component_id: str,
     destination: Path,
     *,
+    platform: str = "linux/arm64",
     runtime_host: str = "colima",
     runner: Runner = _run,
 ) -> dict[str, object]:
-    binding = build_image(runner) if runtime_host == "colima" else build_image(runner, runtime_host=runtime_host)
+    binding = build_image(runner, platform=platform, runtime_host=runtime_host)
     platform, manifest_digest, config_digest = binding
     observation = strict_observation(
         component_id,
@@ -225,11 +234,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("component_id")
     parser.add_argument("--into", type=Path)
+    parser.add_argument("--platform", choices=PLATFORMS, default="linux/arm64")
     parser.add_argument("--runtime-host", choices=RUNTIME_HOSTS, default="colima")
     arguments = parser.parse_args(argv)
-    destination = arguments.into or REPO_ROOT / "tool-supply" / "receipts" / f"{arguments.component_id}.json"
+    receipt_root = REPO_ROOT / "tool-supply" / "receipts"
+    if arguments.platform == "linux/amd64":
+        receipt_root /= "amd64"
+    destination = arguments.into or receipt_root / f"{arguments.component_id}.json"
     try:
-        receipt = qualify(arguments.component_id, destination, runtime_host=arguments.runtime_host)
+        receipt = qualify(
+            arguments.component_id,
+            destination,
+            platform=arguments.platform,
+            runtime_host=arguments.runtime_host,
+        )
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print(f"Tool qualification refused: {error}", file=sys.stderr)
         return 2

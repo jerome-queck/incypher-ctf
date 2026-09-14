@@ -8,7 +8,9 @@ import binascii
 import json
 import re
 import ipaddress
+import secrets
 import socket
+import struct
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -92,6 +94,7 @@ class ResearchBrokerRuntime:
         limits: ResearchLimits,
         timestamp: Callable[[], str],
         resolve: Callable[[str], tuple[str, ...]] | None = None,
+        dns_resolve: Callable[[str], tuple[str, ...]] | None = None,
         transport: Callable[[str, str, ResearchLimits], ResearchTransportResult] | None = None,
         denied_hosts: tuple[str, ...] = (),
         sources: dict[str, ResearchSource] | None = None,
@@ -102,6 +105,7 @@ class ResearchBrokerRuntime:
         self.limits = limits
         self._timestamp = timestamp
         self._resolve = resolve or self._system_resolve
+        self._dns_resolve = dns_resolve
         self._transport = transport
         self._denied_hosts = tuple(host.lower().rstrip(".") for host in denied_hosts)
         self._sources = dict(sources or {})
@@ -290,8 +294,25 @@ class ResearchBrokerRuntime:
             if refused is not None:
                 return ResearchResult(refused)
             try:
-                addresses = tuple(dict.fromkeys(self._resolve(query.subject)))
+                supplied_address = ipaddress.ip_address(query.subject)
+            except ValueError:
+                supplied_address = None
+            try:
+                if self._dns_resolve is None:
+                    addresses = _public_dns_resolve(
+                        query.subject,
+                        timeout_seconds=self.limits.timeout_seconds,
+                        cancelled=self._cancelled.setdefault(grant.binding.generation_id, threading.Event()),
+                        activate=lambda active: self._activate(grant.binding.generation_id, active),
+                    )
+                else:
+                    addresses = self._dns_resolve(query.subject)
+                addresses = tuple(dict.fromkeys(addresses))
             except OSError:
+                addresses = ()
+            if supplied_address is not None and not supplied_address.is_global:
+                addresses = ()
+            elif not addresses or not all(_public(address) for address in addresses):
                 addresses = ()
             body = json.dumps({"addresses": addresses}, sort_keys=True, separators=(",", ":")).encode()
             if not self._consume(grant.binding.generation_id, len(body), 0):
@@ -322,6 +343,9 @@ class ResearchBrokerRuntime:
             self._append(grant.binding, f"dns:{query_digest}", result)
             return result
         url = source.url_template.replace("{subject}", quote(query.subject, safe=""))
+        if "{md5_subject}" in url:
+            normalized = query.subject.strip().lower().encode()
+            url = url.replace("{md5_subject}", hashlib.md5(normalized, usedforsecurity=False).hexdigest())
         return self.fetch(connection, handle, url, _query_metadata=metadata)
 
     def fetch(
@@ -570,6 +594,92 @@ def _public(address: str) -> bool:
         return ipaddress.ip_address(address).is_global
     except ValueError:
         return False
+
+
+def _public_dns_resolve(
+    host: str,
+    *,
+    timeout_seconds: float,
+    cancelled: threading.Event,
+    activate: Callable[[object | None], None],
+) -> tuple[str, ...]:
+    """Resolve through one fixed public recursive resolver, never the host resolver."""
+
+    labels = host.rstrip(".").encode("idna").split(b".")
+    if not labels or any(not label or len(label) > 63 for label in labels):
+        raise OSError("DNS subject is invalid")
+    qname = b"".join(bytes((len(label),)) + label for label in labels) + b"\0"
+    if len(qname) > 255:
+        raise OSError("DNS subject is invalid")
+    addresses: list[str] = []
+    for record_type, family in ((1, socket.AF_INET), (28, socket.AF_INET6)):
+        if cancelled.is_set():
+            raise OSError("Research generation was revoked")
+        request_id = secrets.randbits(16)
+        query = struct.pack("!HHHHHH", request_id, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", record_type, 1)
+        opened = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        opened.settimeout(timeout_seconds)
+        activate(opened)
+        try:
+            if cancelled.is_set():
+                raise OSError("Research generation was revoked")
+            opened.sendto(query, ("1.1.1.1", 53))
+            response, peer = opened.recvfrom(4096)
+        finally:
+            activate(None)
+            opened.close()
+        if peer != ("1.1.1.1", 53):
+            raise OSError("DNS response came from another resolver")
+        addresses.extend(_dns_answers(response, request_id, record_type, family))
+    return tuple(addresses)
+
+
+def _dns_answers(payload: bytes, request_id: int, record_type: int, family: socket.AddressFamily) -> tuple[str, ...]:
+    if len(payload) < 12:
+        raise OSError("DNS response is truncated")
+    response_id, flags, questions, answers, authorities, additional = struct.unpack("!HHHHHH", payload[:12])
+    if response_id != request_id or flags & 0x8000 == 0 or flags & 0x000F or flags & 0x0200:
+        raise OSError("DNS response is invalid")
+    if questions != 1 or answers + authorities + additional > 128:
+        raise OSError("DNS response is invalid")
+    offset = _skip_dns_name(payload, 12)
+    if offset + 4 > len(payload):
+        raise OSError("DNS question is truncated")
+    offset += 4
+    resolved: list[str] = []
+    expected_size = 4 if family == socket.AF_INET else 16
+    for _ in range(answers):
+        offset = _skip_dns_name(payload, offset)
+        if offset + 10 > len(payload):
+            raise OSError("DNS answer is truncated")
+        answer_type, answer_class, _ttl, size = struct.unpack("!HHIH", payload[offset : offset + 10])
+        offset += 10
+        if offset + size > len(payload):
+            raise OSError("DNS answer is truncated")
+        if answer_type == record_type and answer_class == 1 and size == expected_size:
+            resolved.append(socket.inet_ntop(family, payload[offset : offset + size]))
+        offset += size
+    return tuple(resolved)
+
+
+def _skip_dns_name(payload: bytes, offset: int) -> int:
+    labels = 0
+    while offset < len(payload):
+        size = payload[offset]
+        if size & 0xC0 == 0xC0:
+            if offset + 1 >= len(payload):
+                break
+            return offset + 2
+        if size & 0xC0 or size > 63:
+            break
+        offset += 1
+        if size == 0:
+            return offset
+        offset += size
+        labels += 1
+        if labels > 127 or offset > len(payload):
+            break
+    raise OSError("DNS name is invalid")
 
 
 def _expires(observed_at: str, seconds: int) -> str:

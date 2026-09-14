@@ -24,7 +24,12 @@ def sha(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def receipt(*, packages: list[dict[str, str]] | None = None) -> dict[str, object]:
+def receipt(
+    *,
+    packages: list[dict[str, str]] | None = None,
+    platform: str = "linux/arm64",
+    supported_platforms: list[str] | None = None,
+) -> dict[str, object]:
     source = b"#!/usr/bin/python3\nprint('fixture')\n"
     licence = b"MIT License\n"
     fixture_input = b"alpha beta\n"
@@ -68,7 +73,7 @@ def receipt(*, packages: list[dict[str, str]] | None = None) -> dict[str, object
             "expected_stdout_sha256": sha(expected),
             "timeout_seconds": 5,
         },
-        "platforms": ["amd64", "arm64"],
+        "platforms": supported_platforms or ["amd64", "arm64"],
         "packages": packages or [],
         "files": files,
     }
@@ -106,7 +111,7 @@ def receipt(*, packages: list[dict[str, str]] | None = None) -> dict[str, object
         "component_id": "fixture.identity",
         "profile_id": "resident-fixture",
         "image": {
-            "platform": "linux/arm64",
+            "platform": platform,
             "manifest_digest": "sha256:" + "1" * 64,
             "config_digest": "sha256:" + "2" * 64,
         },
@@ -199,6 +204,17 @@ def test_one_receipt_carries_supply_chain_semantics_and_manifest_link() -> None:
         "kind": "tool-supply-receipt",
         "digest": document["identity"].removeprefix("sha256:"),
     }
+
+
+@pytest.mark.parametrize("platform", ["linux/mips64", "arm64", "linux/arm/v7"])
+def test_receipt_rejects_an_unsupported_image_platform(platform: str) -> None:
+    with pytest.raises(ReceiptInvalid, match="platform"):
+        validate_receipt(receipt(platform=platform))
+
+
+def test_receipt_rejects_a_platform_absent_from_the_locked_component() -> None:
+    with pytest.raises(ReceiptInvalid, match="platform"):
+        validate_receipt(receipt(platform="linux/amd64", supported_platforms=["arm64"]))
 
 
 def test_sbom_accepts_the_canonical_inventory_order_without_weakening_package_identity() -> None:
@@ -308,7 +324,7 @@ def test_broker_proofs_reject_unknown_authority_fields_and_stringified_limits() 
             "content_type": "application/json",
             "kind": "domain",
             "max_body_bytes": 4096,
-            "source_id": "rdap",
+            "source_id": "crtsh",
         }
     )
     _validate_research_proof(

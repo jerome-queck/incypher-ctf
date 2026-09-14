@@ -614,6 +614,9 @@ def test_fixed_worker_has_private_namespaces_uid_root_and_no_control_path(tmp_pa
     assert ["--ro-bind", "/opt/solver/tool-supply", "/opt/solver/tool-supply"] in [
         command[index : index + 3] for index in range(len(command) - 2)
     ]
+    assert ["--ro-bind", "/etc/alternatives", "/etc/alternatives"] in [
+        command[index : index + 3] for index in range(len(command) - 2)
+    ]
 
 
 def test_first_cause_precedence() -> None:

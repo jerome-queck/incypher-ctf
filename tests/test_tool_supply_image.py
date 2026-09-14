@@ -212,6 +212,24 @@ def test_web_probe_checks_the_package_and_the_runtime_banner() -> None:
     assert 'TemporaryDirectory(prefix="target-browser-driver-")' in browser_driver
 
 
+def test_osint_profile_keeps_only_production_orchestrated_dependencies() -> None:
+    lock = json.loads((REPO_ROOT / "tool-supply" / "locks" / "osint.json").read_text())
+    component = lock["components"][0]
+    packages = {package["name"] for package in component["packages"]}
+    adapter = (REPO_ROOT / "tool-supply" / "fixtures" / "osint" / "osint.py").read_text()
+
+    assert {"sherlock", "holehe", "theharvester", "python3-geopy"} <= packages
+    assert {"bind9-dnsutils", "whois", "python3-piexif", "staticmap"}.isdisjoint(packages)
+    for production_adapter in (
+        "sherlock_module.sherlock",
+        "holehe.modules.cms.gravatar",
+        "SearchCrtsh",
+        "geopy.point",
+    ):
+        assert production_adapter in adapter
+    assert "tool_inference=" in adapter
+
+
 def test_misc_supply_drops_generic_smb_and_proves_one_multi_language_jail_fixture() -> None:
     lock = json.loads((REPO_ROOT / "tool-supply" / "locks" / "misc-protocols.json").read_text())
     component = lock["components"][0]
@@ -310,5 +328,19 @@ def test_amd64_image_job_runs_every_required_profile_semantic_probe() -> None:
     workflow = CI_WORKFLOW.read_text()
 
     assert "--runtime-host native-docker" in workflow
-    for component_id in ("web.core", "osint.core", "misc-protocols.core"):
+    assert "--platform linux/amd64" in workflow
+    assert "docker build --platform linux/amd64" in workflow
+    for component_id in ("resident.network-data", "web.core", "osint.core", "misc-protocols.core"):
         assert component_id in workflow
+
+
+def test_required_arm64_receipts_share_one_exact_candidate_manifest() -> None:
+    receipts = [
+        json.loads((REPO_ROOT / "tool-supply" / "receipts" / f"{component_id}.json").read_text())
+        for component_id in ("resident.network-data", "web.core", "osint.core", "misc-protocols.core")
+    ]
+
+    assert {receipt["image"]["platform"] for receipt in receipts} == {"linux/arm64"}
+    assert len({receipt["image"]["manifest_digest"] for receipt in receipts}) == 1
+    for receipt in receipts:
+        validate_receipt(receipt, expected_image_manifest_digest=receipt["image"]["manifest_digest"])

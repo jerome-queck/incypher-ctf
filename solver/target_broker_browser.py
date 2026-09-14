@@ -35,6 +35,7 @@ BROWSER_LAUNCHER_FD_ENV = "INCYPHER_BROWSER_LAUNCHER_FD"
 MAX_DRIVER_OUTPUT_BYTES = 1024 * 1024
 MAX_DRIVER_OUTPUT_BASE64_BYTES = 4 * ((MAX_DRIVER_OUTPUT_BYTES + 2) // 3)
 MAX_FRAME_BYTES = 2 * 1024 * 1024
+LAUNCHER_ABORT_TIMEOUT_SECONDS = 1.0
 BROWSER_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 FORBIDDEN_BROWSER_HEADERS = frozenset(
     {
@@ -95,6 +96,7 @@ class BrowserLauncher:
     ) -> tuple[str, int, bytes] | None:
         if not self._request_lock.acquire(blocking=False):
             return None
+        request_started = False
         try:
             if self._closed:
                 return None
@@ -108,13 +110,77 @@ class BrowserLauncher:
                 },
                 self._send_lock,
             )
+            request_started = True
             if self._transport_connection is None:
                 raise OSError("browser transport channel is absent")
             deadline = time.monotonic() + timeout_seconds
+
+            def service_transport() -> None:
+                exchange = _receive(self._transport_connection)
+                transport_request_id = exchange.get("request_id")
+                if (
+                    not isinstance(transport_request_id, str)
+                    or not transport_request_id
+                    or not isinstance(exchange.get("exchange"), dict)
+                ):
+                    raise OSError("browser transport request changed identity")
+                try:
+                    result = dict(transport(exchange["exchange"]))
+                except (OSError, ValueError):
+                    result = {"outcome": TargetOutcome.DENIED.value}
+                _send(
+                    self._transport_connection,
+                    {"request_id": transport_request_id, "result": result},
+                    self._send_lock,
+                )
+
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("browser launcher response timed out")
+                readable, _, _ = select.select(
+                    (self._connection, self._transport_connection),
+                    (),
+                    (),
+                    remaining,
+                )
+                if self._transport_connection in readable:
+                    service_transport()
+                    continue
+                if self._connection in readable:
+                    response = _receive(self._connection)
+                    break
+            if response.get("request_id") != request_id:
+                raise OSError("browser launcher response changed request identity")
+            outcome = response.get("outcome")
+            returncode = response.get("returncode")
+            stdout = response.get("stdout")
+            if not isinstance(outcome, str) or not isinstance(returncode, int) or not isinstance(stdout, str):
+                raise OSError("browser launcher response is invalid")
+            if len(stdout) > MAX_DRIVER_OUTPUT_BASE64_BYTES:
+                raise OSError("browser launcher output exceeds its byte bound")
+            return outcome, returncode, base64.b64decode(stdout, validate=True)
+        except (TimeoutError, OSError, ValueError, binascii.Error):
+            if request_started:
+                self._cancel_and_drain(request_id, transport)
+            raise
+        finally:
+            self._request_lock.release()
+
+    def _cancel_and_drain(
+        self,
+        request_id: str,
+        transport: Callable[[Mapping[str, object]], Mapping[str, object]],
+    ) -> None:
+        try:
+            self.cancel(request_id)
+            if self._transport_connection is None:
+                raise OSError("browser transport channel is absent")
+            deadline = time.monotonic() + LAUNCHER_ABORT_TIMEOUT_SECONDS
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("browser launcher cancellation timed out")
                 readable, _, _ = select.select(
                     (self._connection, self._transport_connection),
                     (),
@@ -142,19 +208,10 @@ class BrowserLauncher:
                     continue
                 if self._connection in readable:
                     response = _receive(self._connection)
-                    break
-            if response.get("request_id") != request_id:
-                raise OSError("browser launcher response changed request identity")
-            outcome = response.get("outcome")
-            returncode = response.get("returncode")
-            stdout = response.get("stdout")
-            if not isinstance(outcome, str) or not isinstance(returncode, int) or not isinstance(stdout, str):
-                raise OSError("browser launcher response is invalid")
-            if len(stdout) > MAX_DRIVER_OUTPUT_BASE64_BYTES:
-                raise OSError("browser launcher output exceeds its byte bound")
-            return outcome, returncode, base64.b64decode(stdout, validate=True)
-        finally:
-            self._request_lock.release()
+                    if response.get("request_id") == request_id:
+                        return
+        except (TimeoutError, OSError, ValueError, binascii.Error):
+            self.close()
 
     def cancel(self, request_id: str) -> None:
         if not self._closed:
@@ -421,6 +478,11 @@ class BrowserSessionTransport:
                 request_bytes,
                 connections,
                 certificate_sha256,
+            )
+        except TimeoutError:
+            return BrowserTransportResult(
+                TargetOutcome.TIMEOUT,
+                elapsed_ms=max(0, int((time.monotonic() - started) * 1000)),
             )
         except (KeyError, OSError, ValueError, json.JSONDecodeError):
             return BrowserTransportResult(TargetOutcome.UNREACHABLE)

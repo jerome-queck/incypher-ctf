@@ -12,9 +12,10 @@ def test_osint_self_check_names_bounded_functional_fixture_probes() -> None:
     assert "fixture-user" in source
     assert "fixture@example.test" in source
     assert "fixture.example" in source
-    assert "geodesic" in source
-    assert "piexif.dump" in source
-    assert "StaticMap" in source
+    assert "sherlock_module.sherlock(" in source
+    assert "gravatar(" in source
+    assert "SearchCrtsh" in source
+    assert "Point(" in source
     self_check = source[source.index("def self_check") : source.index("def main")]
     assert "--version" not in self_check
     assert "--help" not in self_check
