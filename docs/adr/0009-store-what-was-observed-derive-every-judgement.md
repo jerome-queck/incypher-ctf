@@ -280,9 +280,11 @@ description of a program nobody wrote.
 - **Observation bodies live only in `/state`.** Delete it and the digests in git can never be
   resolved back to content. Accepted, because what decisions rest on is the *judgements*, and those
   stay re-derivable from the committed stream.
-- **Flags appear in the committed stream**, since redaction never touches that field. Fine in a
-  private repository among the team who earned them, and one more reason the repository stays
-  private.
+- **Flags appear in a raw Run stream**, since redaction never touches that field. ADR-0060 changes
+  the publication boundary: a scored or still-live event's flag-bearing stream stays in untracked
+  Run state. Only sanitized evidence, or an explicitly approved stream after the event and its
+  disclosure restriction end, may enter this public repository. Existing expired Brunner evidence
+  remains historical data.
 - **Shadow mode is not a Solver feature.** Nothing in the hot path implements it, and it can be
   written after a run that has already happened.
 - **`runs/` is a new top-level area** — data, so excluded from lint and from the conformance scan,

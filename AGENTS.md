@@ -13,9 +13,14 @@ intervention, which scoring penalises — [spec #63](https://github.com/jerome-q
 is the shape and `CONTEXT.md` is the vocabulary. This repository is that Solver — whose own code
 paths wait for nobody — and the conventions it is built under.
 
-- **Owner:** [jerome-queck](https://github.com/jerome-queck) — Jerome, sole admin; repo is private
+- **Owner:** [jerome-queck](https://github.com/jerome-queck) — Jerome, sole admin; repo is public
 - **Team:** [nonsense00](https://github.com/nonsense00) — Elson · [aacceeOP](https://github.com/aacceeOP) — Aidan ·
   [chareechard](https://github.com/chareechard) — Richard. All write access; `gh` takes the handle.
+
+**Public is visibility, not permission.** `LICENSE` reserves current and future repository-owned
+work; public viewing/forking and earlier MIT revisions are the explicit limits. An agent may use
+the tree only to work for the Owner/team in this repository. It never republishes source, Run
+state, flags or solution material elsewhere. ADR-0060 owns this boundary.
 
 ## Getting it running
 
@@ -38,6 +43,10 @@ itself, one package per line with the reason beside it (ADR-0024 amends them), a
 14:00 on competition day. **Three checks run before you push, because the workflows fire *after*
 it:** `sh conformance/check-conformance.sh .` and `sh conformance/check-trailers.sh main..HEAD`,
 which need no interpreter, and `docker build .`, which CI has run since #81 and which needs Colima.
+
+**Adding a Python test:** assign every new pytest-named module to exactly one family in
+`tests/shards.toml`; `python3 scripts/check_test_shards.py` is the fast guard. Each hosted job has
+an eight-minute target and ten-minute hard cap. Split an overgrown family; never raise the cap.
 
 To point the Solver at a board, run `bash scripts/setup-board.sh`. **What this machine actually
 holds is `python3 scripts/credentials_held.py`** — ask it rather than inferring from the
@@ -108,9 +117,9 @@ here, that they want the commit alone.
 session, follow [Pull-request lifecycle cleanup](CONTRIBUTING.md#pull-request-lifecycle-cleanup);
 its clean primary worktree and bounded local branch/worktree inventory are the completion criteria.
 
-**Protection here is by convention, not by mechanism.** GitHub enforces neither branch protection
-nor required checks on a free private repository (ADR-0003), so nothing stops a push to `main` or
-a merge over red. A red conformance or CI check is a stop anyway.
+**Protection is both mechanism and convention.** The public-repository ruleset requires the pull
+request and green checks ADR-0060 names. The social rule remains stricter: a missing or misconfigured
+ruleset never authorises a direct push or merge over red.
 
 Before you stop, every acceptance criterion you satisfied is ticked on the issue and every one
 you did not is left unticked and explained — `docs/agents/acceptance-criteria.md`.
@@ -173,7 +182,7 @@ exception).
 ### Dependency updates
 
 Surfaced at both ends of any session that touches a pull request — `docs/agents/dependencies.md`.
-This repository auto-merges **nothing** (ADR-0003): every bump is landed by hand on a green check.
+This repository auto-merges **nothing** (ADR-0060): every bump is landed by hand on a green check.
 
 ## Repository notes
 

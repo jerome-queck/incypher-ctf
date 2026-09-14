@@ -1,10 +1,9 @@
 # Dependency updates: what an agent does with a Dependabot pull request
 
 This repository takes Dependabot's `github-actions` bumps (`.github/dependabot.yml`) and lands
-them **by hand, one at a time, on a green check**. It auto-merges nothing — the reason is a plan
-limit, recorded in [ADR-0003](../adr/0003-protection-and-automerge-are-convention-not-mechanism.md):
-pull-request auto-merge is a paid feature on a private repository, so there is no queue to hand a
-bump to. Every open bump is somebody's to review and merge.
+them **by hand, one at a time, on a green check**. Public visibility makes auto-merge available,
+but ADR-0060 keeps it disabled: each dependency remains somebody's reviewed merge rather than an
+unattended release input.
 
 ## Surface them, twice
 
@@ -37,7 +36,7 @@ An agent may merge a Dependabot pull request when all four hold:
 Everything else goes to a human with a one-line reason: every major, anything red, and anything
 editing more than the pin — including a bump that also rewrites a workflow's inputs.
 
-There is no auto-merge workflow to enforce this in parallel (ADR-0003), so the four conditions are
+There is no auto-merge workflow by decision (ADR-0060), so the four conditions are
 a checklist a person actually runs, not a second encoding of a machine rule. That is the whole
 difference from the organisation this repository came from, where a workflow queued the same set
 unattended.

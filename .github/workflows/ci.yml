@@ -1,7 +1,7 @@
 name: CI
 
 # All three triggers, because this repository's check is not a pure function of its own tree —
-# the Python job installs its linter and its test runner from a network, so this can rot in place
+# the Python jobs install their linter and test runner from a network, so this can rot in place
 # while nothing is pushed. Drop one only with the reason recorded in `docs/adr/`.
 on:
   pull_request:
@@ -24,8 +24,8 @@ permissions:
 # that goes red on an empty glob is a check people learn to route around, and the point of these
 # is to bite the moment code arrives rather than to be argued with before it does.
 #
-# No ruleset can *require* these checks on a free private repository (ADR-0003), so red does not
-# block a merge mechanically — it blocks one by convention, and CONTRIBUTING.md says so.
+# The public-repository ruleset requires these contexts (ADR-0060). Convention remains the
+# backstop: a missing or bypassed mechanism never turns red into permission to merge.
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -76,7 +76,7 @@ jobs:
           echo "$scripts"
           echo "$scripts" | xargs shellcheck
 
-  python:
+  ruff:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -92,29 +92,48 @@ jobs:
       # changed rule on the Monday run rather than inside somebody's pull request. What the
       # linter enforces is pinned where it belongs — `pyproject.toml` names the rule set rather
       # than inheriting whichever one ships.
-      # `cryptography` deliberately floats here as an API-compatibility check; the image job below
-      # installs and probes the actual `python3-cryptography` runtime package shipped by Docker.
-      - run: python -m pip install --disable-pip-version-check cryptography ruff pytest
+      - run: python -m pip install --disable-pip-version-check ruff
 
       - run: ruff check --output-format=github .
 
       - run: ruff format --check .
 
-      - name: pytest
+  pytest:
+    name: pytest (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - foundation/state
+          - authority/Board
+          - autonomy/inference
+          - tools/integration
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # `cryptography` deliberately floats here as an API-compatibility check; the image job below
+      # installs and probes the actual `python3-cryptography` runtime package shipped by Docker.
+      - run: python -m pip install --disable-pip-version-check cryptography pytest
+
+      # Every shard first proves that the static semantic partition is exhaustive. A new tracked
+      # test cannot silently miss CI, and a duplicate cannot spend two jobs' time. Keep the
+      # ten-minute hard limit above; §5 requires splitting again rather than raising it.
+      - name: test shard manifest is exact
+        run: python scripts/check_test_shards.py
+
+      - name: pytest ${{ matrix.shard }}
         run: |
-          # Any tracked Python under `tests/`, rather than the `tests/test_*.py` pytest happens to
-          # collect today: a guard written to pytest's naming would match nothing the day a suite
-          # moves into a subdirectory or a file is named `*_test.py`, and would then report "no
-          # tests" forever on a repository full of them. Tracked, because an untracked stray is
-          # not a test this repository ships.
-          #
-          # So the skip below means the tree has no Python tests at all. Once it has any, pytest
-          # runs and its exit 5 — "no tests collected" — is a real failure rather than a shrug.
-          if git ls-files 'tests/' | grep -q '\.py$'; then
-            pytest
-          else
-            echo "No Python under tests/ yet — nothing to run."
-          fi
+          set --
+          while IFS= read -r test_file; do
+            set -- "$@" "$test_file"
+          done < <(python scripts/check_test_shards.py --shard '${{ matrix.shard }}')
+          pytest "$@"
 
   image:
     runs-on: ubuntu-latest

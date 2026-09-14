@@ -17,6 +17,18 @@ Born from the Jerome-Group private template and adapted to stand alone — see
 [ADR-0002](docs/adr/0002-org-machinery-is-vendored-to-stand-alone.md) for what was kept, adapted,
 and dropped.
 
+## Public source, reserved rights
+
+This repository is public to use GitHub's public-repository Actions capacity. It is **not open
+source**. The top-level [`LICENSE`](LICENSE) grants no new permission to copy, use, modify,
+redistribute or compete with current work beyond GitHub's required public-repository operation,
+express written authorisation, third-party terms and applicable law. Public viewing or forking is
+not a broader reuse licence.
+
+Earlier revisions were published under MIT and keep those rights; the new reservation cannot
+withdraw them. [ADR-0060](docs/adr/0060-public-visibility-reserves-future-solver-rights.md) records
+that limit, the public controls and why source-available licences were rejected.
+
 ## Status
 
 🚀 **v1 has landed**, tagged `v1` against spec #63, and **its gate is closed with one clause

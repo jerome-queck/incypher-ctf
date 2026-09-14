@@ -1,21 +1,32 @@
-MIT License
+INCYPHER CTF SOLVER — PROPRIETARY NOTICE
 
-Copyright (c) 2026 Jerome Queck
+Copyright (c) 2026 Jerome Queck. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository is source-visible, not open source.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Except for the limited permissions stated below, no licence is granted to use, copy, modify,
+adapt, merge, publish, distribute, sublicense, sell, execute, train on, benchmark against, or
+otherwise exploit this repository or any repository-owned portion of it. In particular, no
+permission is granted to use it to enter, prepare for, assist, benchmark against, or obtain an
+advantage in IN-CYPHER or any other competition.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Limited permissions and exclusions:
+
+1. GitHub and GitHub users may exercise only the rights necessarily granted by the GitHub Terms
+   of Service for hosting and ordinary public-repository functionality, including viewing and
+   forking on GitHub. A permitted GitHub fork grants no broader right to use its contents.
+2. People expressly authorised in writing by Jerome Queck may use the repository only within the
+   scope of that authorisation. IN-CYPHER organisers may receive, execute, assess and retain a
+   submitted Solver solely to administer and judge the event.
+3. Third-party, generated and vendored material identified by its own licence or notice remains
+   governed by that material's terms. This notice neither replaces nor restricts those terms.
+4. Revisions made available under the MIT License, including commit
+   510f995eddfa80743781bf589273e7d11e9c4dfe and its ancestors, remain available under that
+   licence. This notice applies prospectively to the revision containing it and later original
+   work unless a later notice expressly says otherwise.
+5. Rights provided by applicable law remain unaffected.
+
+THE REPOSITORY IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY
+ARISING FROM THE REPOSITORY OR ITS USE.

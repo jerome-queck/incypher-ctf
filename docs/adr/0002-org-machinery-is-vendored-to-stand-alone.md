@@ -1,5 +1,8 @@
 # The org's machinery is vendored so this repository stands alone
 
+> **Revisited by ADR-0060.** The predicted public transition occurred. Vendoring remains, while a
+> repository-local ruleset now restores required checks without restoring a hub dependency.
+
 This repository was generated from the `Jerome-Group/private-template`, which is one repository in
 an organisation held together by a management hub: a public `.github` repository serving a reusable
 conformance workflow, a private Terraform hub owning a closed label set and a "Baseline" ruleset,

@@ -1,9 +1,17 @@
 # Contributing
 
-This is a small, private, four-person hackathon repository. If you have not worked this way
+This is a small, public-source, four-person hackathon repository. If you have not worked this way
 before, this page is the whole of it — a two-minute read, and nothing here assumes you have seen
 it anywhere else. The short version: **open an issue, send one pull request per change, squash to
 merge, and say who (or what AI) helped.**
+
+Public visibility is not an invitation to reuse or contribute. [`LICENSE`](LICENSE) reserves
+repository-owned current and future work, including competition use; older MIT revisions and
+separately licensed material keep their existing terms. Unsolicited contributions are not
+accepted. A team member submitting a contribution represents that they may do so and grants
+Jerome Queck a perpetual, worldwide, royalty-free right to use, modify, distribute and sublicense
+that contribution as part of this repository and its Solver submissions; the contributor keeps
+their copyright.
 
 ## What lives outside this page
 
@@ -56,15 +64,13 @@ merged by doing so, and an open pull request is the only form in which work here
 
 How `main` is treated — and one honest caveat:
 
-- **A pull request is expected. Nobody pushes to `main` directly.** On a free private repository
-  GitHub cannot *enforce* that (branch protection is a paid feature there), so this is a rule the
-  four of us keep, not a wall the platform builds. Keeping it is what keeps the repository
-  reviewable.
+- **A pull request is required. Nobody pushes to `main` directly.** The public-repository ruleset
+  enforces this and required checks; the team rule still applies if that mechanism is absent or
+  misconfigured.
 - **No approvals are required to merge** — with four teammates and no reviewer rota, the pull
   request itself is the review surface. Ping someone if a change deserves a second pair of eyes.
-- **A red check is a stop.** CI and the conformance check run on every pull request. GitHub will
-  *let* you merge past a red one here (no required-check enforcement on this plan) — don't. Red
-  means the change is not finished.
+- **A red check is a stop.** CI and conformance run on every pull request and are required by the
+  ruleset. Red means the change is not finished even if an administrator can bypass the mechanism.
 - **Merges are squashes, and history stays linear.** Your branch does not need to be tidy; it
   needs to be one coherent change. If it is two changes, send two pull requests. The repository is
   set to squash-only, so the button does the right thing.
