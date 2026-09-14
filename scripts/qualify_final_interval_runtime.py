@@ -20,16 +20,42 @@ from solver.event_store import EventStore
 from solver.final_interval_profile import selected_profile_document
 from solver.final_interval_evaluator import link_manifest
 from solver.manifest import generate_manifest, parse_manifest
+from solver.submission.authority import SUBMISSION_REQUEST_DEADLINE_SECONDS, SUBMISSION_UNCERTAINTY_MARGIN_SECONDS
 from scripts.eval_final_interval import evaluate
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_ROOT = ROOT / "state"
 AUTH = Path("/Volumes/Working/001 Projects/incypher-ctf/state/codex/auth.json")
+QUALIFICATION_WINDOW_SECONDS = 180
+QUALIFICATION_CLOCK_RATE = 2
+QUALIFICATION_FINAL_SUBMISSION_RESERVE_SECONDS = 60
+QUALIFICATION_ATTEMPT_FLOOR_SECONDS = 60
+QUALIFICATION_RESTART_HOST_BUDGET_SECONDS = 35
+QUALIFICATION_FINAL_CHANCE_TIMEOUT_SECONDS = 60
+QUALIFICATION_TERMINAL_TIMEOUT_SECONDS = 90
 TRUST_RECEIPT = {
     "digest": "672b8a4f435628a41eb590ee563c9e395cbebfbc766accf20efc2e028d302c5b",
     "kind": "evaluator-trust-anchor",
     "ref": "trust:evaluator-ed25519",
 }
+
+
+def final_interval_restart_headroom_seconds() -> float:
+    """Return simulated seconds between the final-chance threshold and safe wire start.
+
+    The qualification image's cold replacement took about 30 host seconds in the retained
+    diagnostic, so the 35-second bound includes measured startup variation.  The calculation is
+    deliberately tied to the sealed reserve and submission safety dials: changing the accelerated
+    clock cannot silently make a restart miss the only legal POST start.
+    """
+
+    safe_start_window = (
+        QUALIFICATION_FINAL_SUBMISSION_RESERVE_SECONDS
+        + QUALIFICATION_ATTEMPT_FLOOR_SECONDS
+        - SUBMISSION_REQUEST_DEADLINE_SECONDS
+        - SUBMISSION_UNCERTAINTY_MARGIN_SECONDS
+    )
+    return safe_start_window - QUALIFICATION_CLOCK_RATE * QUALIFICATION_RESTART_HOST_BUDGET_SECONDS
 
 
 def _sign(private_key: Path, source: Path, destination: Path) -> None:
@@ -99,7 +125,7 @@ def prepare_strict_cgroup_command(binding) -> list[str]:
 
 
 def launch_until_terminal(
-    command: list[str], receipts: tuple[Path, ...], *, timeout: float = 60
+    command: list[str], receipts: tuple[Path, ...], *, timeout: float = QUALIFICATION_TERMINAL_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess:
     """Observe the default Supervisor's terminal quiescence, then stop PID 1 cleanly."""
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -118,7 +144,9 @@ def launch_until_terminal(
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def launch_until_final_chance_then_crash(command: list[str], state: Path, *, timeout: float = 45):
+def launch_until_final_chance_then_crash(
+    command: list[str], state: Path, *, timeout: float = QUALIFICATION_FINAL_CHANCE_TIMEOUT_SECONDS
+):
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.monotonic() + timeout
     observed = []
@@ -165,9 +193,9 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
         final_profile = selected_profile_document(
             manifest,
             signer_public_key_digest=hashlib.sha256(public).hexdigest(),
-            window_seconds=180,
-            final_submission_reserve_seconds=60,
-            attempt_floor_seconds=60,
+            window_seconds=QUALIFICATION_WINDOW_SECONDS,
+            final_submission_reserve_seconds=QUALIFICATION_FINAL_SUBMISSION_RESERVE_SECONDS,
+            attempt_floor_seconds=QUALIFICATION_ATTEMPT_FLOOR_SECONDS,
         )
         atomic_write(controls / "final-interval-profile.json", canonical_bytes(final_profile) + b"\n")
         _sign(private_key, controls / "final-interval-profile.json", controls / "final-interval-profile.sig")
@@ -177,7 +205,7 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
             "kind": "exact-image-qualification-clock",
             "anchor_unix_seconds": time.time(),
             "opened_at": "2026-09-22T01:00:00+00:00",
-            "rate": 3,
+            "rate": QUALIFICATION_CLOCK_RATE,
             "rules": {
                 "event": "controlled-final-interval",
                 "flag_wrappers": [r"qualification\{[^}]+\}"],
@@ -185,7 +213,7 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
                 "requires": [],
                 "url": board_url,
                 "web_search": False,
-                "window_seconds": 180,
+                "window_seconds": QUALIFICATION_WINDOW_SECONDS,
             },
             "schema_version": 1,
             "seed": "final-interval-v1",
@@ -217,7 +245,9 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
         run = state / "runs/controlled-final-interval"
         host_started = time.monotonic()
         try:
-            crashed, pre_restart_records = launch_until_final_chance_then_crash(command, state)
+            crashed, pre_restart_records = launch_until_final_chance_then_crash(
+                command, state, timeout=QUALIFICATION_FINAL_CHANCE_TIMEOUT_SECONDS
+            )
             completed = launch_until_terminal(
                 command,
                 (
@@ -225,6 +255,7 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
                     run / "canonical" / "serial-submission.receipt.json",
                     run / "canonical" / "ambiguous-submission.receipt.json",
                 ),
+                timeout=QUALIFICATION_TERMINAL_TIMEOUT_SECONDS,
             )
         except RuntimeError:
             diagnostic = Path(tempfile.mkdtemp(prefix="final-interval-failure-", dir=ROOT / ".cache"))

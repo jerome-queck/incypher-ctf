@@ -24,6 +24,8 @@ from solver.candidate_admission_contracts import (
 )
 from solver.__main__ import _submission_identity_composition
 from solver.event_store import EventStore
+from solver.event_store import InvalidReceiptError
+from solver.event_store_storage import canonical_bytes
 from solver.instance_ledger import POPULATED, LedgerResult, LedgerRow
 from solver.record import Recorder
 from solver.redaction import Redactor
@@ -890,6 +892,80 @@ def test_retained_serial_and_crash_trace_verifies_without_live_authority():
         "possibly-sent",
         "aborted",
     ]
+
+
+def _serial_receipt(tmp_path, states, ordinals):
+    candidate_id = "a" * 64
+    identity = EffectIdentity("board.submit-candidate", "7", candidate_id)
+    row = {
+        "reservation_id": "submission:7",
+        "candidate_id": candidate_id,
+        "effect_id": identity.fingerprint,
+        "operation": identity.operation,
+        "challenge_id": "7",
+        "states": states,
+        "ordinals": ordinals,
+        "result": (
+            {
+                "ready_at": "2026-09-13T00:00:00Z",
+                "reserved_at": "2026-09-13T00:00:01Z",
+                "requested_at": "2026-09-13T00:00:02Z",
+                "result_at": "2026-09-13T00:00:03Z",
+            }
+            if states[-1] == "committed"
+            else {}
+        ),
+    }
+    document = {
+        "schema_version": 2,
+        "receipt_type": "serial-submission",
+        "run_id": "run-1",
+        "manifest_link": {"row_id": "core.submission-tail", "receipt_ref": "receipt:serial-submission"},
+        "evidence_class": "controlled-runtime-trace",
+        "dispatch_order": [candidate_id] if "started" in states else [],
+        "in_flight_maximum": 1 if "started" in states else 0,
+        "submissions": [row],
+    }
+    path = tmp_path / "serial-submission.receipt.json"
+    path.write_bytes(canonical_bytes(document) + b"\n")
+    return path
+
+
+def test_receipt_accepts_repeated_before_wire_retries_before_one_dispatch(tmp_path):
+    path = _serial_receipt(
+        tmp_path,
+        ["reserved", "aborted", "reserved", "aborted", "reserved", "started", "committed"],
+        [1, 2, 4, 5, 7, 8, 9],
+    )
+
+    assert verify_receipt(path) == path
+
+
+def test_receipt_accepts_repeated_before_wire_deferrals_without_dispatch(tmp_path):
+    path = _serial_receipt(
+        tmp_path,
+        ["reserved", "aborted", "reserved", "aborted"],
+        [1, 2, 4, 5],
+    )
+
+    assert verify_receipt(path) == path
+
+
+@pytest.mark.parametrize(
+    "states, ordinals",
+    (
+        (["reserved", "started", "committed", "reserved", "aborted"], [1, 2, 3, 4, 5]),
+        (["reserved", "aborted", "reserved", "started", "possibly-sent", "reserved"], [1, 2, 4, 5, 6, 7]),
+        (["reserved", "aborted", "reserved", "aborted"], [1, 1, 2, 3]),
+        (["reserved", "aborted"], [0, 1]),
+        (["reserved", "started", []], [1, 2, 3]),
+    ),
+)
+def test_receipt_rejects_post_wire_reservation_and_illegal_ordinals(tmp_path, states, ordinals):
+    path = _serial_receipt(tmp_path, states, ordinals)
+
+    with pytest.raises(InvalidReceiptError):
+        verify_receipt(path)
 
 
 def test_ambiguous_post_blocks_serial_posts_then_releases_other_work_at_sixty(tmp_path):
