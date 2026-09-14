@@ -178,7 +178,7 @@ class CodexControl:
             "schema_version": 1,
             "run_id": self._run_id,
             "catalogue": self._catalogue_document,
-            "request": request.__dict__ if request else None,
+            "request": _recordable_request(request),
             "result": _result_document(result) if result else None,
             "limits": [item.__dict__ for item in self._limits.values()],
             "secret_probes": self._probes,
@@ -289,6 +289,12 @@ def _result_document(result: CodexControlResult) -> dict[str, object]:
         "turn": result.turn.__dict__ if result.turn else None,
         "limits": [item.__dict__ for item in result.limits],
     }
+
+
+def _recordable_request(request: CodexRequest | None) -> dict[str, object] | None:
+    if request is None:
+        return None
+    return {**request.__dict__, "tool_handle": ""}
 
 
 class CodexControlService:

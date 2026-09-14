@@ -161,6 +161,12 @@ def test_controlled_native_probe_and_v1_adapter_traverse_ipc(tmp_path):
         b'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n'
         b'{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":2,"output_tokens":3}}\n'
     )
+    launched = {}
+
+    def launch(_argv, _workdir, environment, _prompt):
+        launched.update(environment)
+        return Canned(stream)
+
     probe = ControlledNativeProbe(
         workdir=workdir,
         deadline=Deadline(budget=now + dt.timedelta(minutes=1)),
@@ -168,7 +174,7 @@ def test_controlled_native_probe_and_v1_adapter_traverse_ipc(tmp_path):
         attempt_id="attempt-1",
         credential=Credential("codex-subscription", "gpt-5.6", home),
         invocation=Invocation(reasoning_effort="high"),
-        launch=lambda *_args: Canned(stream),
+        launch=launch,
         now=lambda: now,
     )
     generation = GenerationFence(tmp_path, "run-1", Redactor({}), lambda: now.isoformat()).acquire(
@@ -191,7 +197,11 @@ def test_controlled_native_probe_and_v1_adapter_traverse_ipc(tmp_path):
     client = CodexControlClient.open(service.path, binding)
     try:
         turn = V1CodexControlAdapter(client=client, model="gpt-5.6", effort="high").turn(
-            "solve this", request_id="request-1", turn_id="turn-1"
+            "solve this",
+            request_id="request-1",
+            turn_id="turn-1",
+            tool_socket=tmp_path / "attempt-tool.sock",
+            tool_handle="attempt-tool-handle",
         )
     finally:
         client.close()
@@ -199,16 +209,22 @@ def test_controlled_native_probe_and_v1_adapter_traverse_ipc(tmp_path):
         runtime.rmdir()
 
     assert (turn.tokens_in, turn.tokens_out, turn.text) == (10, 3, "done")
+    assert launched["INCYPHER_TOOL_SOCKET"] == str(tmp_path / "attempt-tool.sock")
+    assert launched["INCYPHER_TOOL_HANDLE"] == "attempt-tool-handle"
 
 
 def test_receipt_is_versioned_sanitized_and_independently_verified(tmp_path):
+    tool_handle = "ephemeral-attempt-tool-handle"
     control = CodexControl(
         CATALOGUE,
         Native(CodexTurn("request-1", "turn-1", "gpt-5.6", "secret prose", 12, 3, 40)),
         state=tmp_path,
         run_id="run-1",
     )
-    control.request(REQUEST, origin="run-controller")
+    control.request(
+        CodexRequest("request-1", "turn-1", "gpt-5.6", "high", "solve this", tool_handle=tool_handle),
+        origin="run-controller",
+    )
     secret = b"native-subscription-secret"
     probe = classify_surfaces(
         {name: b"attempt-owned-data" for name in ("memory", "environment", "argv", "file", "event")},
@@ -234,6 +250,11 @@ def test_receipt_is_versioned_sanitized_and_independently_verified(tmp_path):
         "duration_ms": 40,
     }
     assert "secret prose" not in json.dumps(receipt)
+    assert all(
+        tool_handle.encode() not in path.read_bytes()
+        for path in (tmp_path / "runs" / "run-1").rglob("*")
+        if path.is_file()
+    )
 
 
 def test_only_transferred_codex_service_accepts_clear_attempt_secret_probe(tmp_path):

@@ -73,13 +73,7 @@ class AttemptHandle:
         self._error: BaseException | None = None
 
     def cancel(self) -> None:
-        if self._cancelled.is_set():
-            return
-        self._cancelled.set()
-        self._executor._revoke_generation(self._request.generation_id)
-        cancel = getattr(self._executor._runtime, "cancel", None)
-        if cancel is not None:
-            cancel(self.envelope_id)
+        self._executor.cancel_generation(self._request.generation_id)
 
     def result(self) -> AttemptResult:
         self._done.wait()
@@ -126,6 +120,7 @@ class AttemptExecutor:
         self._canonical_lock = threading.RLock()
         self._handles: set[AttemptHandle] = set()
         self._handles_lock = threading.Lock()
+        self._generation_cancellations: dict[str, threading.Event] = {}
         self._generation_revocations: list[Callable[[str], None]] = []
         self._lock_file = self._open_lock()
         self._owner_epoch = self._next_owner_epoch()
@@ -183,6 +178,8 @@ class AttemptExecutor:
 
     def start(self, request: AttemptRequest) -> AttemptHandle:
         with self._canonical_lock:
+            if request.generation_id in self._generation_cancellations:
+                raise ValueError("Attempt generation is closing")
             state = next(
                 (
                     item
@@ -206,10 +203,10 @@ class AttemptExecutor:
                 request=request,
                 declared=request.envelope.document(),
             )
-        handle = AttemptHandle(self, envelope_id, request)
-        with self._handles_lock:
-            self._handles.add(handle)
-        threading.Thread(target=self._run, args=(handle,), daemon=True).start()
+            handle = AttemptHandle(self, envelope_id, request)
+            with self._handles_lock:
+                self._handles.add(handle)
+            threading.Thread(target=self._run, args=(handle,), daemon=True).start()
         return handle
 
     def close(self) -> None:
@@ -233,7 +230,9 @@ class AttemptExecutor:
     def close_generation(self, generation_id: str, disposition) -> None:
         """Fence one Work generation, then terminate and drain all of its envelopes."""
 
-        self._revoke_generation(generation_id)
+        owner, cancelled, handles = self._begin_generation_cancellation(generation_id)
+        if not owner:
+            cancelled.wait()
         with self._canonical_lock:
             self._generations.close(generation_id, disposition)
             close = next(
@@ -259,16 +258,52 @@ class AttemptExecutor:
                         fence_sequence=close.sequence,
                         fence_ts=str(close.payload["ts"]),
                     )
-        with self._handles_lock:
-            handles = tuple(handle for handle in self._handles if handle._request.generation_id == generation_id)
+        if owner:
+            try:
+                self._cancel_and_drain(handles)
+            finally:
+                cancelled.set()
+        self._write_process_receipt()
+
+    def cancel_generation(self, generation_id: str) -> None:
+        """Revoke and drain one generation while leaving its durable Lane fence to its owner."""
+
+        owner, cancelled, handles = self._begin_generation_cancellation(generation_id)
+        if not owner:
+            cancelled.wait()
+            return
+        try:
+            self._cancel_and_drain(handles)
+        finally:
+            cancelled.set()
+
+    def _begin_generation_cancellation(
+        self, generation_id: str
+    ) -> tuple[bool, threading.Event, tuple[AttemptHandle, ...]]:
+        with self._canonical_lock:
+            existing = self._generation_cancellations.get(generation_id)
+            if existing is not None:
+                return False, existing, ()
+            cancelled = threading.Event()
+            self._generation_cancellations[generation_id] = cancelled
+            self._revoke_generation(generation_id)
+            with self._handles_lock:
+                handles = tuple(handle for handle in self._handles if handle._request.generation_id == generation_id)
+            return True, cancelled, handles
+
+    def _cancel_and_drain(self, handles: tuple[AttemptHandle, ...]) -> None:
+        cancel = getattr(self._runtime, "cancel", None)
         for handle in handles:
-            handle.cancel()
+            if handle._cancelled.is_set():
+                continue
+            handle._cancelled.set()
+            if cancel is not None:
+                cancel(handle.envelope_id)
         for handle in handles:
             try:
                 handle.result()
             except LateAttemptResult:
                 pass
-        self._write_process_receipt()
 
     def add_generation_revocation(self, revoke: Callable[[str], None]) -> None:
         """Register authority removed before any owned process cancellation or teardown."""

@@ -2,7 +2,8 @@
 
 > **ADR-0057 moved the VM onto the external Working volume. ADR-0058 now makes host image/cache
 > sizing and the 4 GiB profile-delta value advisory; signed Tool receipts and per-worker Resource
-> envelopes remain authoritative.**
+> envelopes remain authoritative. Issue #302's final fielding narrows OSINT to the brokered
+> adapters actually proved and retains SMB as triggered/unavailable.**
 
 [The complete v2 tool image](https://github.com/jerome-queck/incypher-ctf/issues/186)
 turns the capability coverage from
@@ -154,15 +155,18 @@ every name in the research catalogue:
 - Stego/media composes `ffmpeg`, zsteg, `steghide`, `stegseek`, pinned `stego-lsb` and pinned
   PySSTV. Overlapping barcode, LSB and SSTV decoders remain comparative until one recovers a format
   the selected components miss.
-- OSINT composes `bind9-dnsutils`, `whois`, pinned Sherlock, Holehe and theHarvester plus geopy,
-  Piexif and StaticMap under the Research proxy. No inherited account enters the image.
+- OSINT composes Research-broker DNS, pinned Sherlock, Holehe, theHarvester plus the broker's RDAP
+  parser, and geopy coordinate normalisation. Standalone `bind9-dnsutils`, `whois`, Piexif and
+  StaticMap have no proved production-handle result and do not ship. No inherited account enters
+  the image.
 - Mobile static composes JADX, pinned Apktool 3.0.3, `libplist-utils`, IPA/archive handling and
   shared Mach-O, Objective-C/Swift, SQLite and decompiler paths. `android-sdk-platform-tools`, an
   emulator, Frida, device and `ipsw` work remains triggered and authority-gated.
 - AI/ML begins with PickleScan and Fickling. ModelScan's separate CPython 3.12 component and heavy
   ART, Torchattacks, Garak or PyRIT paths are task-triggered; no local inference model ships.
 - Misc/protocols composes a pinned CyberChef release through a Solver-owned thin CLI, Qiling,
-  `webcrack`, `socat`, `smbclient`, DNS/protocol clients and curated jail guidance. `sigrok-cli`, `multimon-ng`,
+  `webcrack`, `socat` and curated jail guidance. SMB remains triggered until its own semantics are
+  proved; generic TCP relay is not that proof. `sigrok-cli`, `multimon-ng`,
   `minimodem` and `rtl_433`; upstream blockchain/chain SDKs; provider CLIs; engine-specific game
   extractors; and Go/Rust toolchains attach only on detected evidence and after their own admission
   probes.
@@ -203,10 +207,10 @@ not ship without a reviewed change to this record and the manifests.
 | `forensics.document`, `forensics.filesystem`, `forensics.carve` | `forensics`: `oletools`, `qpdf`, Sleuth Kit, Scalpel | Recover the distinct macro/PDF, deleted filesystem and carved-file facts from hashed images. |
 | `forensics.disk-container` | `disk-adapters`: `ewf-tools`, `afflib-tools`, `qemu-utils`, `libbde-utils`, `libfsapfs-utils`, `libvshadow-utils`, `dislocker` | Open E01, AFF, QCOW/VMDK, BitLocker, APFS and VSS fixtures read-only; expose the inner filesystem while every held-input hash stays fixed. |
 | `media.inspect`, `stego.image`, `stego.audio`, `stego.sstv` | `stego-media`: `ffmpeg`, zsteg, `steghide`, Stegseek, pinned `stego-lsb`, pinned PySSTV | Extract a stream/frame and recover distinct PNG/BMP, JPEG/WAV and SSTV payloads under byte/time bounds. |
-| `osint.dns`, `osint.identity`, `osint.email`, `osint.domain`, `osint.geo` | authority-gated `osint`: `bind9-dnsutils`, `whois`, pinned Sherlock, Holehe, theHarvester, geopy, Piexif and StaticMap | Recorded responses plus controlled live identities/domains/coordinates; recover each distinct fact within provenance and rate policy and without inherited accounts. |
+| `osint.dns`, `osint.identity`, `osint.email`, `osint.domain`, `osint.geo` | authority-gated `osint`: Research-broker DNS, pinned Sherlock, Holehe, theHarvester plus broker RDAP, and geopy | Recorded responses plus controlled live identities/domains/coordinates; recover each distinct fact within provenance and rate policy and without inherited accounts. |
 | `mobile.android-static`, `mobile.ios-static` | `mobile-static`: JADX, pinned Apktool 3.0.3, `libplist-utils`, shared ZIP/SQLite/radare2/Ghidra | Decode/rebuild a modern APK and recover manifest/class data; inspect IPA, binary/XML plist, Mach-O metadata and an iOS backup database. |
 | `model.pickle-inspect` | `ai-ml`: pinned PickleScan and Fickling | Detect and explain distinct malicious pickle opcodes without loading the model. |
-| `misc.transform`, `misc.emulate`, `protocol.relay`, `protocol.smb`, `jail.reason` | `misc-protocols`: pinned CyberChef release with Solver-owned thin CLI, Qiling, `webcrack`, `nodejs`, `socat`, `smbclient`, shared resident `python3` and `dash` at `/bin/dash`, and a versioned jail playbook | Decode/deobfuscate known transforms, emulate a foreign fixture, relay loopback streams, read a local SMB share and solve disposable JavaScript, Python and Dash jails. Other language runtimes use the triggered `language.extra` path. |
+| `misc.transform`, `misc.emulate`, `protocol.relay`, `jail.reason` | `misc-protocols`: pinned CyberChef release with Solver-owned thin CLI, Qiling, `webcrack`, `nodejs`, `socat`, shared resident `python3` and `dash` at `/bin/dash`, and a versioned jail playbook | Decode/deobfuscate known transforms, emulate a foreign fixture, relay admitted streams and solve disposable JavaScript, Python and Dash jails. Other language runtimes use the triggered `language.extra` path. |
 
 Triggered capabilities below begin unavailable. A named candidate becomes profile-contained only
 after the full admission bar and its row's differential or detected-input probe passes; otherwise
@@ -226,6 +230,7 @@ their current handle. This conditional is the exact component decision, not a be
 | `hardware-rf.decode` | `sigrok-cli`, `multimon-ng`, `minimodem`, `rtl_433` only for detected capture formats; no physical-device authority. |
 | `blockchain.toolchain`, `cloud.provider`, `game.extract`, `language.extra` | Correctly identified pinned upstream chain tools/SDKs, provider CLIs, engine-specific extractors and Go/Rust toolchains only after a representative detected-input fixture on each declared platform. |
 | `network.service-fingerprint` | No component: Nmap is rejected as non-free; the resident bounded TCP/banner/TLS probe is explicitly partial. |
+| `protocol.smb` | No component: generic TCP relay is not SMB semantics. Promote only after a licensed client and bounded local SMB Target pass on both platforms. |
 | `web.oast`, `jail.pyjailbreaker` | No component: public OAST and unlicensed `pyjailbreaker` are rejected. A Challenge-supplied controlled callback or newly licensed component requires a reviewed manifest change. |
 
 The resident and required-profile rows are the minimum release closure. All legacy catalogue names

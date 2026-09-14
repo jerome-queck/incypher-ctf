@@ -132,6 +132,7 @@ def compose(
             _opening(challenge, rules, workdir, budget_s),
             _forbidden(rules),
             _finding_the_flag(rules),
+            _tools(),
             boundary.carried(facts=_facts(challenge, staged, lease), recon=recon),
             _closing(),
         ]
@@ -166,6 +167,19 @@ def _finding_the_flag(rules: Rules) -> str:
         f"is not yours and there is nothing here to submit to; the Flag is taken from your output.\n"
         f"{DERIVATION}\n"
         f"{UNWINNABLE}"
+    )
+
+
+def _tools() -> str:
+    return (
+        "## Governed Tools\n"
+        "List available capabilities with `python3 "
+        "/opt/solver/solver/attempt_tool_client.py list`. Put a capability's JSON or file input "
+        "under your working directory, then run `python3 "
+        "/opt/solver/solver/attempt_tool_client.py run <capability> <input-path>`. The port fixes "
+        "the executable, arguments, resources and network authority; do not invoke supplied "
+        "component binaries directly. Read-only request examples and adapters are under "
+        "`/opt/solver/tool-supply/` when an input shape is unclear."
     )
 
 

@@ -49,6 +49,14 @@ def _cleanup_cgroup(runtime_host: str, runner: Runner) -> None:
         raise ReceiptInvalid(f"native cgroup cleanup failed: {result.stderr.strip() or result.returncode}")
 
 
+def _prepare_cgroup(runtime_host: str, runner: Runner) -> None:
+    if runtime_host == "colima":
+        return
+    if runtime_host != "native-docker":
+        raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    runner(["sudo", "mkdir", NATIVE_CGROUP_SOURCE], check=True)
+
+
 def _strict_command(command: list[str], runtime_host: str) -> list[str]:
     if runtime_host == "colima":
         return command
@@ -117,20 +125,21 @@ def strict_observation(
 ) -> dict[str, object]:
     """Execute the fixture under the pinned strict command and always clean its cgroup."""
 
-    runner(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--cgroup-parent",
-            NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
-            "--entrypoint",
-            "/bin/true",
-            image_id,
-        ],
-        check=True,
-    )
+    _prepare_cgroup(runtime_host, runner)
     try:
+        runner(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--cgroup-parent",
+                NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
+                "--entrypoint",
+                "/bin/true",
+                image_id,
+            ],
+            check=True,
+        )
         result = runner(
             _strict_command(
                 strict_runtime.tool_probe_command(
@@ -184,20 +193,21 @@ def qualify(
         raise ReceiptInvalid(f"no generated component named {component_id}") from error
     handle_solve = None
     if component.get("capability_policies"):
-        runner(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--cgroup-parent",
-                NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
-                "--entrypoint",
-                "/bin/true",
-                binding.image_id,
-            ],
-            check=True,
-        )
+        _prepare_cgroup(runtime_host, runner)
         try:
+            runner(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--cgroup-parent",
+                    NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
+                    "--entrypoint",
+                    "/bin/true",
+                    binding.image_id,
+                ],
+                check=True,
+            )
             state = new_retained_directory("tool-handles", f"{component_id}-")
             result = runner(
                 _strict_command(

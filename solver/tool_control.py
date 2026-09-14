@@ -306,20 +306,23 @@ class ToolController:
         *,
         enabled_profiles: Sequence[str],
     ) -> tuple[ToolView, str]:
-        enabled = set(enabled_profiles)
-        capabilities = tuple(
-            sorted(
-                component.capability_id
-                for component in self._components.values()
-                if enabled.intersection(component.profiles)
-            )
-        )
+        capabilities = self.capability_ids(enabled_profiles=enabled_profiles)
         document = {"capability_ids": capabilities, "image_digest": self._image_digest}
         view = ToolView(capabilities, _digest(document))
         handle = self._authority.issue(binding, f"tool.view:{view.digest}", peer)
         self._views[view.digest] = view
         self._handles[handle] = binding.generation_id
         return view, handle
+
+    def capability_ids(self, *, enabled_profiles: Sequence[str]) -> tuple[str, ...]:
+        enabled = set(enabled_profiles)
+        return tuple(
+            sorted(
+                component.capability_id
+                for component in self._components.values()
+                if enabled.intersection(component.profiles)
+            )
+        )
 
     def resident_component(self, capability_id: str) -> ToolComponent:
         component = self._components.get(capability_id)
@@ -648,11 +651,16 @@ class AttemptToolRuntime:
         self._enabled_profiles = tuple(enabled_profiles)
         executor.add_generation_revocation(controller.revoke_generation)
 
+    @property
+    def capability_ids(self) -> tuple[str, ...]:
+        return self._controller.capability_ids(enabled_profiles=self._enabled_profiles)
+
     def invoke(
         self,
         *,
         generation_id: str,
         attempt_id: str,
+        lane_id: str | None = None,
         step_id: str,
         workspace: Path,
         envelope: EnvelopeSpec,
@@ -666,7 +674,7 @@ class AttemptToolRuntime:
             self._run_id,
             self._boot_id,
             generation_id,
-            self._lane_id,
+            lane_id or self._lane_id,
             attempt_id,
             step_id,
         )
@@ -685,6 +693,7 @@ class AttemptToolRuntime:
         *,
         generation_id: str,
         attempt_id: str,
+        lane_id: str | None = None,
         step_id: str,
         workspace: Path,
         capability_id: str,
@@ -696,6 +705,7 @@ class AttemptToolRuntime:
         return self.invoke_capability(
             generation_id=generation_id,
             attempt_id=attempt_id,
+            lane_id=lane_id,
             step_id=step_id,
             workspace=workspace,
             capability_id=capability_id,
@@ -707,6 +717,7 @@ class AttemptToolRuntime:
         *,
         generation_id: str,
         attempt_id: str,
+        lane_id: str | None = None,
         step_id: str,
         workspace: Path,
         capability_id: str,
@@ -744,6 +755,7 @@ class AttemptToolRuntime:
         return self.invoke(
             generation_id=generation_id,
             attempt_id=attempt_id,
+            lane_id=lane_id,
             step_id=step_id,
             workspace=root,
             envelope=envelope,

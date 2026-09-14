@@ -126,6 +126,14 @@ def test_an_instance_is_given_only_as_an_opaque_target_broker_and_an_expiry():
     assert until.isoformat() in text
 
 
+def test_the_governed_tool_port_is_discoverable_from_an_ordinary_attempt():
+    text = prompt_for()
+
+    assert "List available capabilities" in text
+    assert "/opt/solver/solver/attempt_tool_client.py list" in text
+    assert "/opt/solver/solver/attempt_tool_client.py run <capability> <input-path>" in text
+
+
 def test_the_one_line_the_model_writes_is_asked_for_by_its_marker():
     """Read from a marker rather than inferred from prose, so a label is something the model chose
     to write and never a sentence a parser picked out of a paragraph."""

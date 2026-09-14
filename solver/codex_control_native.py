@@ -57,6 +57,8 @@ class ControlledNativeProbe:
                     launch=launch,
                     now=now,
                     first_step=self._first_step,
+                    tool_socket=Path(request.tool_socket) if request.tool_socket else None,
+                    tool_handle=request.tool_handle,
                 )
             )
         finally:
@@ -112,6 +114,8 @@ class V1CodexControlAdapter:
         attempt_id: str = "",
         deadline: dt.datetime | None = None,
         first_step: int = 1,
+        tool_socket: Path | None = None,
+        tool_handle: str = "",
     ) -> CodexTurn:
         result = self._client.request(
             CodexRequest(
@@ -124,6 +128,8 @@ class V1CodexControlAdapter:
                 attempt_id,
                 deadline.isoformat() if deadline else "",
                 first_step,
+                str(tool_socket) if tool_socket else "",
+                tool_handle,
             )
         )
         if result.outcome != "answered" or result.turn is None:
