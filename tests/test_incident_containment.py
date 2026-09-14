@@ -13,12 +13,19 @@ from solver.recovery.contracts import FaultKind, IncidentRecorded
 from solver.recovery.incident import Fault, IncidentEngine, ModelRemedyRejected, Remedy, verify_receipt
 from solver.recovery.supervisor import WorkerSupervisor
 from solver.redaction import Redactor
+from solver.event_store import EventStore
 from solver.supervisor_process import SpawnedBoot
 from solver.supervisor import Supervisor
 from solver.supervisor_services import SupervisorServices
 from solver.work_generation import GenerationFence
 from solver.write_reservation import WriteAuthority
-from solver.write_reservation_contracts import DEFAULT_WRITE_PROFILE, ReservationState
+from solver.write_reservation_contracts import (
+    Capacity,
+    DEFAULT_WRITE_PROFILE,
+    EffectIdentity,
+    ReservationState,
+    RetentionPolicy,
+)
 
 RETAINED = (
     Path(__file__).parent.parent
@@ -166,6 +173,52 @@ def test_uncertain_fault_has_no_replacement_authority(tmp_path, kind):
     assert verify_receipt(result.receipt_path) == result.receipt_path
 
 
+def test_replay_preserves_non_worker_classification_without_replacement(tmp_path):
+    uncertain = Fault(
+        "target-read-unsettled",
+        "target:challenge-7",
+        "generation-7",
+        "transport ended without a verdict",
+        FaultKind.AMBIGUOUS,
+    )
+    authority = WriteAuthority(tmp_path / "runs/run-1", DEFAULT_WRITE_PROFILE)
+    authority.reserve(
+        f"incident:{uncertain.identity}:replacement",
+        EffectIdentity("replace-worker-once", uncertain.identity),
+        Capacity(4096, 1, 8),
+        retention=RetentionPolicy.RECORD,
+    )
+    authority.close()
+    EventStore(tmp_path, run_id="run-1", redactor=Redactor({})).append(
+        IncidentRecorded(
+            event_id="incident-000001:revision-000001",
+            incident_id="incident-000001",
+            fault_identity=uncertain.identity,
+            fault_id=uncertain.fault_id,
+            generation_id=uncertain.generation_id,
+            scope=uncertain.scope,
+            fault_kind=uncertain.kind.value,
+            reason="ambiguous-fault-refused",
+            authority_state="reserved",
+            disposition="containing",
+            steps=(),
+            completed_steps=(),
+            duplicate_reports=0,
+            replay_count=0,
+            terminal=False,
+        ),
+        body=b"",
+    )
+    ports = Ports()
+
+    result = IncidentEngine(tmp_path, "run-1", ports, Redactor({})).replay()[0]
+
+    receipt = json.loads(result.receipt_path.read_text())
+    assert result.disposition == "replacement-refused"
+    assert receipt["fault_kind"] == "ambiguous"
+    assert ports.trace == []
+
+
 def test_incident_contract_rejects_invalid_domain_values_and_counts():
     valid = IncidentRecorded(
         event_id="event",
@@ -252,7 +305,9 @@ def test_production_supervisor_fences_real_crash_before_one_real_replacement(tmp
     state = next(item for item in fence.projection().generations if item.generation_id == generation.generation_id)
     assert state.active is False
     receipt = json.loads((tmp_path / "runs/run-production/canonical/incident-containment.receipt.json").read_text())
-    assert receipt["disposition"] == "replacement-admitted"
+    assert receipt["disposition"] == "resolved"
+    assert receipt["catalogue_version"] == "deterministic-recovery-v1"
+    assert receipt["probation_outcome"] == "passed"
     assert json.loads(receipt["evidence"]["projection"])["exit_code"] == 17
 
 

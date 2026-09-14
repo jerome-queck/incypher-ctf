@@ -9,7 +9,7 @@ from solver.instance_lease_archive import persist_reconciled_close, replay_lease
 from solver.instance_ledger import EMPTY, NOT_OURS, POPULATED, UNSETTLED, LedgerPage, LedgerResult, LedgerRow
 from solver.instance_ledger import identify_ledger, write_receipt as write_ledger_receipt
 from solver.instance_reconciliation import InstanceReconciler
-from solver.instance_reconciliation_contracts import AdmissionVerdict
+from solver.instance_reconciliation_contracts import AdmissionVerdict, ReconciliationResult
 from solver.instance_reconciliation_contracts import BootOwnership
 from solver.instance_reconciliation_receipt import verify_receipt, write_receipt
 from solver.instance_reconciliation_receipt import link_manifest
@@ -24,6 +24,10 @@ from solver.write_reservation import (
 )
 from solver.work_generation import GenerationState
 from solver.event_store import GenerationDisposition
+from solver.recovery.instance import InstanceObservation, instance_recovery
+from solver.recovery.runtime import DeterministicRecovery, RecoveryRegistry
+from solver.recovery.contracts import FaultKind
+from solver.redaction import Redactor
 
 
 PROFILE = WriteProfile(Capacity(0, 0, 0), Capacity(128 * 1024, 32, 256), Capacity(4096, 1, 8))
@@ -85,6 +89,50 @@ def test_unreadable_or_foreign_rows_never_trigger_cleanup_or_admission(tmp_path)
     assert result.unsettled == ("ledger:unreadable",)
     assert changed == []
     authority.close()
+
+
+def test_instance_adapter_reconciles_only_after_authoritative_join_changes_and_replays_by_identity(tmp_path):
+    joins = ["join-1", "join-2"]
+    reconciled = []
+
+    def observe():
+        current = joins.pop(0)
+        return InstanceObservation(
+            current,
+            lambda: (
+                reconciled.append(current)
+                or ReconciliationResult("boot-2", "snapshot-2", current, (), (), AdmissionVerdict.OPEN)
+            ),
+            current.encode(),
+        )
+
+    runtime = DeterministicRecovery(
+        tmp_path,
+        "run-1",
+        Redactor({}),
+        now=lambda: __import__("datetime").datetime(2026, 9, 14, tzinfo=__import__("datetime").timezone.utc),
+    )
+    runtime.handle(
+        kind=FaultKind.INSTANCE,
+        fault_id="instance:boot-1",
+        scope="external:instance",
+        generation_id="all-active",
+        evidence="ledger unsettled",
+        failed_action_value="join-1",
+        original_deadline=__import__("datetime").datetime(
+            2026, 9, 14, 0, 3, tzinfo=__import__("datetime").timezone.utc
+        ),
+        recovery=instance_recovery("join-1", observe),
+    )
+    registry = RecoveryRegistry()
+    registry.register(
+        "instance-reconciliation-v1", lambda config: instance_recovery(config["failed_join_digest"], observe)
+    )
+
+    result = runtime.replay(registry)[0]
+
+    assert result.disposition == "resolved"
+    assert reconciled == ["join-2"]
 
 
 def test_owned_row_with_dead_generation_gets_one_fixed_cleanup_then_admits(tmp_path):

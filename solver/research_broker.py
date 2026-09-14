@@ -17,6 +17,7 @@ from solver.event_store import EventStore
 from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED
 from solver.redaction import Redactor
 from solver.research_broker_contracts import (
+    RESEARCH_BROKER_RECORDED,
     ResearchBrokerRecorded,
     ResearchLimits,
     ResearchOutcome,
@@ -41,6 +42,7 @@ class ResearchBrokerRuntime:
         resolve: Callable[[str], tuple[str, ...]] | None = None,
         transport: Callable[[str, str, ResearchLimits], ResearchTransportResult] | None = None,
         denied_hosts: tuple[str, ...] = (),
+        recovery=None,
     ) -> None:
         self.run_id = run_id
         self.boot_id = boot_id
@@ -61,9 +63,23 @@ class ResearchBrokerRuntime:
         self._authority.reconcile_restart(RESEARCH_SCOPE)
         self._expected: dict[str, CapabilityBinding] = {}
         self._handles: dict[str, set[str]] = {}
-        self._serial = 0
+        self._serial = max(
+            (
+                int(str(event.payload["request_id"]).rsplit(":", 1)[-1])
+                for event in self._store.events()
+                if event.event_type == RESEARCH_BROKER_RECORDED
+                and str(event.payload.get("request_id", "")).startswith("research-broker:")
+            ),
+            default=0,
+        )
         self._lock = threading.Lock()
         self._cache: dict[str, ResearchResult] = {}
+        self._recovery = recovery
+        self._recovering = False
+        if recovery is not None:
+            from solver.recovery.safe_read import SafeReadRecovery
+
+            SafeReadRecovery(recovery).replay()
 
     def prepare_attempt(self, binding: CapabilityBinding) -> None:
         if binding.run_id != self.run_id or binding.boot_id != self.boot_id:
@@ -191,6 +207,24 @@ class ResearchBrokerRuntime:
         if outcome is ResearchOutcome.ANSWERED:
             self._cache[url] = result
         self._append(grant.binding, url, result)
+        if (
+            self._recovery is not None
+            and not self._recovering
+            and outcome in {ResearchOutcome.TIMEOUT, ResearchOutcome.UNREACHABLE}
+        ):
+            from solver.recovery.safe_read import SafeReadFault, SafeReadRecovery
+
+            now = datetime.fromisoformat(self._timestamp())
+            SafeReadRecovery(self._recovery).contain(
+                SafeReadFault(
+                    fault_id=f"research:{request_id}:{outcome.value}",
+                    scope="external:research",
+                    generation_id=grant.binding.generation_id,
+                    evidence=result.provenance.body_digest,
+                    failed_request=request_id,
+                    observed_at=now,
+                )
+            )
         return result
 
     def _append(self, binding: CapabilityBinding, url: str, result: ResearchResult) -> None:

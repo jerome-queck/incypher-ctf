@@ -3,6 +3,7 @@
 import errno
 import json
 import copy
+import datetime as dt
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -11,6 +12,8 @@ import pytest
 from solver.event_store import EventStore, InvalidEventError, ObservationRecorded
 from solver.observation import digest_of
 from solver.redaction import Redactor
+from solver.recovery.incident import RECEIPT
+from solver.recovery.storage import recover_storage_pressure
 from solver.storage_governor import (
     AdmissionClass,
     PressureState,
@@ -402,6 +405,50 @@ def test_retirement_releases_only_an_unreachable_canonical_blob_and_replays_with
         "retirement-tombstone",
         "retirement-complete",
     ]
+
+
+def test_pressure_recovery_runs_actual_governed_retirement_under_incident_authority(tmp_path):
+    store = EventStore(tmp_path, run_id="run-1")
+    disposable = store.append(observation("disposable"), body=b"retire")
+    candidate = RetirementCandidate(
+        path=f"sealed/sha256/{disposable.blob_digest}",
+        storage_class="raw-observation",
+        digest=disposable.blob_digest,
+        length=disposable.blob_bytes,
+        event_sequences=(disposable.sequence,),
+    )
+    recovery_profile = StorageGovernorProfile(
+        writable_envelope=capacity(10_000),
+        warning_remaining=capacity(9_000),
+        stop_admission_remaining=capacity(8_000),
+        authority_only_remaining=capacity(7_000),
+        shared_authority_pool=capacity(6_000),
+        terminal_floor=capacity(500),
+        recovery_floor=capacity(500),
+    )
+    governor = StorageGovernor(tmp_path, "run-1", recovery_profile)
+    governor.classify(candidate)
+
+    result = recover_storage_pressure(
+        governor,
+        governor.recovery_composition(
+            tmp_path,
+            Redactor({}),
+            now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+        ),
+        (candidate,),
+        ReachabilityRoots(),
+        failed_revision="pressure-revision-1",
+        reason="controlled-pressure",
+        now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+    )
+
+    assert result.disposition == "resolved"
+    assert not (store.sealed_dir / disposable.blob_digest).exists()
+    receipt = json.loads((tmp_path / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["changed_action"]["dimension"] == "storage-revision"
+    assert receipt["changed_action"]["source"] == "canonical-storage-classification"
+    assert receipt["probation_outcome"] == "passed"
 
 
 @pytest.mark.parametrize(

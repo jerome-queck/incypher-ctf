@@ -352,6 +352,85 @@ def _verify_296(capsule: Path, document: dict[str, object], fixed: dict[str, obj
         raise ValueError("#296 Incident containment proof is incomplete")
 
 
+def _verify_297(capsule: Path, document: dict[str, object], fixed: dict[str, object]) -> None:
+    from solver.recovery.catalogue import CATALOGUE_VERSION
+    from solver.recovery.incident import verify_receipt
+
+    _verify_external_runtime(capsule, fixed)
+    trace = _json(capsule / "deterministic-recovery.trace.json")
+    dimensions = {
+        "route-local-inference": "inference-route",
+        "instance": "instance-authority-join",
+        "submission-ambiguity": "submission-epoch",
+        "storage": "storage-revision",
+    }
+    fault_kinds = {
+        "worker-crash",
+        "route-local-inference",
+        "target-research",
+        "instance",
+        "submission-ambiguity",
+        "storage",
+        "final-interval",
+    }
+    changed = trace.get("changed_actions", [])
+    unsettled = trace.get("no_inference", [])
+    replayed = trace.get("cross_boot", [])
+    expired = trace.get("expired_bound", {})
+    receipt_names = {
+        row.get("receipt")
+        for rows in (changed, unsettled, replayed, [expired])
+        for row in rows
+        if isinstance(row, dict)
+    }
+    for name in receipt_names:
+        if not isinstance(name, str):
+            raise ValueError("#297 Recovery receipt reference is invalid")
+        verify_receipt(capsule / name)
+    if (
+        trace.get("schema_version") != 1
+        or trace.get("catalogue_version") != CATALOGUE_VERSION
+        or {row.get("kind"): row.get("dimension") for row in changed} != dimensions
+        or any(
+            row.get("effect_count") != 1
+            or row.get("before") == row.get("after")
+            or row.get("final_outcome") != "resolved"
+            or not str(row.get("source", ""))
+            for row in changed
+        )
+        or {row.get("kind") for row in unsettled} != fault_kinds
+        or any(
+            row.get("effect_count") != 0 or row.get("final_outcome") != "" or row.get("authority_state") != "aborted"
+            for row in unsettled
+        )
+        or {(row.get("probation_outcome"), row.get("final_outcome")) for row in replayed}
+        != {("passed", "resolved"), ("failed", "contained")}
+        or any(
+            row.get("replay_count", 0) < 1
+            or row.get("effect_count") != 1
+            or row.get("allowance") != 1
+            or row.get("consumed_allowance") != 1
+            or not row.get("original_deadline")
+            for row in replayed
+        )
+        or expired.get("replay_count", 0) < 1
+        or expired.get("effect_count") != 0
+        or expired.get("consumed_allowance") != 0
+        or expired.get("final_outcome") != "contained"
+        or expired.get("original_deadline") != "2026-09-14T00:03:00+00:00"
+        or document.get("observed_results")
+        != [
+            "seven-fixed-probes:pass",
+            "changed-actions:pass",
+            "cross-boot-probation:pass",
+            "bounded-escalation:pass",
+            "no-inference-fences:pass",
+        ]
+        or document.get("scanner_annotation") != "gitleaks:allow"
+    ):
+        raise ValueError("#297 deterministic Recovery proof is incomplete")
+
+
 def _verify_299(capsule: Path, _document: dict[str, object], fixed: dict[str, object]) -> None:
     from solver.crypto_tool_receipt import verify_receipt
 
@@ -374,6 +453,7 @@ TICKET_VERIFIERS = {
     283: _verify_283,
     293: _verify_293,
     296: _verify_296,
+    297: _verify_297,
     298: _verify_298,
     299: _verify_299,
 }
@@ -453,6 +533,7 @@ def verify_candidate(root: Path, capsules: list[tuple[Path, dict[str, object]]],
         283: "core.inference-native",
         293: "core.submission-tail",
         296: "core.deterministic-recovery",
+        297: "core.deterministic-recovery",
         298: "core.tool-surface",
         299: "core.tool-surface",
     }

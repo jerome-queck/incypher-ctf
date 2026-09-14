@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import socket
 import threading
+import datetime as dt
 from dataclasses import replace
 from pathlib import Path
 from collections.abc import Callable, Mapping
@@ -57,6 +58,7 @@ class TargetBrokerRuntime:
         timestamp: Callable[[], str],
         denied_endpoints: Mapping[str, TargetEndpoint] | None = None,
         request_namespace: str = "",
+        recovery=None,
     ) -> None:
         if not challenge_id or not boot_id:
             raise ValueError("Target binding needs Challenge and Boot identity")
@@ -84,12 +86,20 @@ class TargetBrokerRuntime:
         self._timestamp = timestamp
         self._connections: dict[str, int] = {}
         self._generation_handles: dict[str, set[str]] = {}
-        self._serial = 0
         if request_namespace and any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for character in request_namespace
         ):
             raise ValueError("Target request namespace is invalid")
         self._request_prefix = f"target-broker:{request_namespace}:" if request_namespace else "target-broker:"
+        self._serial = max(
+            (
+                int(str(event.payload["request_id"]).removeprefix(self._request_prefix))
+                for event in self._store.events()
+                if event.event_type == TARGET_EXCHANGE_RECORDED
+                and str(event.payload.get("request_id", "")).startswith(self._request_prefix)
+            ),
+            default=0,
+        )
         self._lock = threading.Lock()
         self._expected: dict[str, CapabilityBinding] = {}
         self._denied_endpoints = dict(denied_endpoints or {})
@@ -98,6 +108,12 @@ class TargetBrokerRuntime:
             for event in self._store.events()
             if event.event_type == TARGET_EXCHANGE_RECORDED and event.payload.get("observation_digest")
         }
+        self._recovery = recovery
+        self._recovering = False
+        if recovery is not None:
+            from solver.recovery.safe_read import SafeReadRecovery
+
+            SafeReadRecovery(recovery).replay()
 
     def prepare_attempt(self, binding: CapabilityBinding) -> None:
         """Install the controller-selected identity claimed by the next hostile peer."""
@@ -231,6 +247,31 @@ class TargetBrokerRuntime:
             result=result,
             body=body,
         )
+        if (
+            self._recovery is not None
+            and not self._recovering
+            and outcome in {TargetOutcome.TIMEOUT, TargetOutcome.UNREACHABLE}
+        ):
+            safe_read = self.endpoint.protocol is TargetProtocol.HTTP and typed_request.get("method") == "GET"
+            from solver.recovery.safe_read import SafeReadFault, SafeReadRecovery
+
+            try:
+                now = dt.datetime.fromisoformat(self._timestamp())
+            except ValueError:
+                now = dt.datetime.now(dt.timezone.utc)
+            SafeReadRecovery(
+                self._recovery,
+                fence=(lambda: None) if safe_read else lambda: self.revoke_generation(grant.binding.generation_id),
+            ).contain(
+                SafeReadFault(
+                    fault_id=f"target:{request_id}:{outcome.value}",
+                    scope="external:target",
+                    generation_id=grant.binding.generation_id,
+                    evidence=result.provenance.transcript_digest,
+                    failed_request=request_id,
+                    observed_at=now,
+                )
+            )
         return result
 
     def record_denial(self, binding: CapabilityBinding, kind: str) -> TargetResult:

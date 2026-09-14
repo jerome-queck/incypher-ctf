@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import datetime as dt
 import json
 import math
 import re
@@ -13,6 +14,8 @@ from typing import Any, TypeVar
 
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
 from solver.write_reservation import Capacity, EffectIdentity, ReservedEffect, WriteAuthority
+from solver.recovery.contracts import FaultKind, ProbationOutcome
+from solver.recovery.runtime import AuthoritativeChange, DeterministicRecovery, DomainRecovery
 
 SCHEMA_VERSION = 1
 RECEIPT_TYPE = "route-and-quota"
@@ -189,10 +192,19 @@ class RouteAndQuotaPolicy:
 class RouteAndQuotaController:
     """Controller adapter that fences requests before either transport is invoked."""
 
-    def __init__(self, policy: RouteAndQuotaPolicy, *, authority: WriteAuthority | None = None) -> None:
+    def __init__(
+        self,
+        policy: RouteAndQuotaPolicy,
+        *,
+        authority: WriteAuthority | None = None,
+        recovery: DeterministicRecovery | None = None,
+        now: Callable[[], dt.datetime] | None = None,
+    ) -> None:
         self._policy = policy
         self._authority = authority
         self._effect = ReservedEffect(authority) if authority is not None else None
+        self._recovery = recovery
+        self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
 
     @property
     def policy(self) -> RouteAndQuotaPolicy:
@@ -245,6 +257,43 @@ class RouteAndQuotaController:
             raise failure
         alternate = route.alternate
         if alternate not in transports:
+            raise failure
+        if self._recovery is not None:
+            recovered: list[Result] = []
+
+            def apply() -> bool:
+                outcome = self._execute_route(
+                    request_id + ":switch",
+                    generation_id,
+                    payload_digest,
+                    alternate,
+                    transports,
+                    encode,
+                    decode,
+                )
+                if isinstance(outcome, _FailedRoute):
+                    return False
+                recovered.append(outcome)
+                return True
+
+            self._recovery.handle(
+                kind=FaultKind.ROUTE_LOCAL_INFERENCE,
+                fault_id=f"{request_id}:{failure.kind.value}",
+                scope=f"owner-local:inference:{route.value}",
+                generation_id=generation_id,
+                evidence=failure.evidence_digest,
+                failed_action_value=route.value,
+                original_deadline=self._now() + dt.timedelta(seconds=180),
+                recovery=DomainRecovery(
+                    "inference-route",
+                    lambda: AuthoritativeChange(route.value, alternate.value, "canonical-route-policy"),
+                    apply,
+                    lambda: ProbationOutcome.PASSED if recovered else ProbationOutcome.FAILED,
+                    capture=lambda: failure.evidence_digest.encode(),
+                ),
+            )
+            if recovered:
+                return recovered[0]
             raise failure
         second = self._execute_route(
             request_id + ":switch", generation_id, payload_digest, alternate, transports, encode, decode

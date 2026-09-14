@@ -138,6 +138,10 @@ class InstanceReconciler:
         self._commit_decision(result)
         return result
 
+    def project_join(self, ledger, leases, generations, ownership) -> str:
+        """Digest the authoritative inputs without admitting a reconciliation effect."""
+        return digest_bytes(canonical_bytes(self._join_document(ledger, leases, generations, ownership)))
+
     def _record_snapshot(self, boot_id, ledger_document) -> str:
         snapshot_id = digest_bytes(canonical_bytes({"boot_id": boot_id, "ledger": ledger_document}))
         key = f"instance-reconciliation:{self._run_id}:snapshot:{snapshot_id}"

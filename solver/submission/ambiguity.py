@@ -52,6 +52,7 @@ class AmbiguousSubmissionFence:
         monotonic: Callable[[], float],
         wall_time: Callable[[], float] | None = None,
         probe: Callable[[PendingSubmission], Evidence | AuthenticatedSubmissionEvidence],
+        on_close: Callable[[PendingSubmission], None] = lambda _state: None,
     ) -> None:
         self._root = Path(state)
         self._path = self._root / "runs" / run_id / "canonical" / RECEIPT_FILENAME
@@ -62,6 +63,7 @@ class AmbiguousSubmissionFence:
         self._wall = wall_time or monotonic
         self._anchors: dict[str, tuple[float, float]] = {}
         self._probe = probe
+        self._on_close = on_close
         self._lock = threading.Lock()
 
     def reserve_path(
@@ -315,6 +317,7 @@ class AmbiguousSubmissionFence:
             if budget.state.value == "started":
                 budget = self._authority.possibly_sent(budget, "ambiguity-lifecycle-active")
             self._authority.refuse_indeterminate(budget, disposition.value)
+        self._on_close(state)
 
     @property
     def barrier_open(self) -> bool:

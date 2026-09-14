@@ -24,6 +24,7 @@ tool-supply/generated/*
 !scripts
 scripts/*
 !scripts/apply_tool_supply_modes.py
+!scripts/deterministic_recovery_qualification.py
 !scripts/runtime_qualification.py
 !scripts/verify_sage_closure.py
 

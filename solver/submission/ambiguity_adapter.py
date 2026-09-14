@@ -19,12 +19,14 @@ class AmbiguityAwareSerialSubmission:
         epoch_authority=None,
         board_identity=None,
         quiesce: Callable[[], None] = lambda: None,
+        probation: Callable[[], object] = lambda: (),
     ):
         self._serial, self._fence, self._identity_for = serial, fence, identity_for
         self._epochs, self._board_identity = epoch_authority, board_identity
         self._prepared = {}
         self._deferred = set()
         self._quiesce = quiesce
+        self._probation = probation
 
     def quiesce(self) -> None:
         self._quiesce()
@@ -94,6 +96,7 @@ class AmbiguityAwareSerialSubmission:
             raise
         complete = self._prepared.get(admission.candidate.identity) or self._identity_for(admission.candidate)
         self._fence.release_unused_path(complete.effect_id)
+        self._probation()
         return result
 
     def _prepare(self, admission):

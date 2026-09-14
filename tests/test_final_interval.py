@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from solver.final_interval import FinalIntervalController, RunInventory, verify_receipt as verify_runtime_receipt
+from solver.final_interval_runtime import FinalIntervalRuntime
 from solver.final_interval_evaluator import verify_receipt as verify_evaluator
 from solver.final_interval_evaluator import _verify_production_observation
 from solver.final_interval_evaluator import _verify_submission_timing
@@ -19,6 +20,8 @@ from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.lane_topology import LaneController
 from solver.lane_topology_contracts import LaneOutcome, LaneProfile, OwnerTermination, WorkCandidate
 from solver.redaction import Redactor
+from solver.recovery.incident import RECEIPT
+from solver.recovery.runtime import DeterministicRecovery
 from solver.work_generation import GenerationFence
 from solver.order_runtime import CanonicalScheduler
 from solver.record import Recorder
@@ -163,6 +166,49 @@ def test_final_interval_phase_never_regresses_or_regrants_after_terminal_restart
     restarted = controller(tmp_path, clock, lanes=("lane-1",))
     assert restarted.admission_mode("lane-1") is AdmissionMode.CLOSED
     assert restarted.reserve_final_chance("lane-1", "challenge-b") is None
+
+
+def test_final_interval_unsettled_cleanup_is_durably_contained_without_inference(tmp_path):
+    clock = [END]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+    cleanup_calls = []
+
+    class RunPort:
+        def wait_until(self, _deadline):
+            return False
+
+        def interrupted_boot(self):
+            return "interrupted"
+
+        def final_inventory(self):
+            return RunInventory()
+
+        def reclaim_final_resources(self):
+            cleanup_calls.append(True)
+            return (("instance-7",), "generation-9", {"worker:lane-1": "released"})
+
+        def drain_legacy_candidates(self):
+            raise AssertionError("closed interval cannot drain")
+
+        def finish_final_interval(self, terminal, left_held, unswept):
+            return terminal, left_held, unswept
+
+    recovery = DeterministicRecovery(tmp_path, "run-1", Redactor({}), now=lambda: clock[0])
+    result = FinalIntervalRuntime(final, None, RunPort(), now=lambda: clock[0], recovery=recovery).close()
+
+    assert cleanup_calls == [True]
+    assert result[1:] == (("instance-7",), "generation-9")
+    receipt = json.loads((tmp_path / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["fault_kind"] == "final-interval"
+    assert receipt["disposition"] == "probation"
+    assert receipt["changed_action"] == {}
+    assert receipt["adapter"]["id"] == "final-interval-containment-v1"
+
+    restarted = controller(tmp_path, clock, lanes=("lane-1",))
+    FinalIntervalRuntime(restarted, None, RunPort(), now=lambda: clock[0], recovery=recovery).close()
+    replayed = json.loads((tmp_path / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert replayed["replay_count"] == 1
+    assert replayed["original_deadline"] == receipt["original_deadline"]
 
 
 def test_receipt_rejects_duplicate_or_mistimed_final_chance_trace(tmp_path):

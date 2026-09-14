@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING, Protocol
 
 from solver.final_candidate_queue import FinalCandidateQueue
 from solver.final_interval import FinalIntervalController, RunInventory
+from solver.recovery.contracts import FaultKind, ProbationOutcome
+from solver.recovery.runtime import DomainRecovery, RecoveryRegistry
+
+FINAL_INTERVAL_RECOVERY_ADAPTER = "final-interval-containment-v1"
 
 if TYPE_CHECKING:
     from solver.run import Ending
@@ -37,11 +41,17 @@ class FinalIntervalRuntime:
         run: FinalRunPort,
         *,
         now: Callable[[], dt.datetime],
+        recovery=None,
     ) -> None:
         self._final, self._queue, self._run, self._now = controller, queue, run, now
+        self._recovery = recovery
 
     def close(self) -> Ending:
         final = self._final
+        if self._recovery is not None:
+            registry = RecoveryRegistry()
+            registry.register(FINAL_INTERVAL_RECOVERY_ADAPTER, self._containment)
+            self._recovery.replay(registry)
         stopped = self._run.wait_until(final.cutoff)
         now = self._now()
         if stopped and now < final.ends_at:
@@ -59,14 +69,38 @@ class FinalIntervalRuntime:
         def cleanup():
             nonlocal left_held, unswept
             left_held, unswept, outcomes = self._run.reclaim_final_resources()
-            return (
+            result = (
                 outcomes
                 | {f"instance:{name}": "unsettled" for name in left_held}
                 | {"run-cleanup": "unsettled" if unswept else "released"}
             )
+            if self._recovery is not None and "unsettled" in result.values():
+                self._recovery.handle(
+                    kind=FaultKind.FINAL_INTERVAL,
+                    fault_id="final-interval:cleanup-unsettled",
+                    scope="run-shared:final-interval",
+                    generation_id="final-interval",
+                    evidence=str(sorted(result.items())),
+                    failed_action_value="reconciling",
+                    original_deadline=self._now() + dt.timedelta(seconds=180),
+                    recovery=self._containment({"run_id": final.run_id, "evidence": str(sorted(result.items()))}),
+                )
+            return result
 
         terminal = final.close(self._run.final_inventory, cleanup)
         return self._run.finish_final_interval(terminal, left_held, unswept)
+
+    def _containment(self, config: dict[str, str]) -> DomainRecovery:
+        return DomainRecovery(
+            "final-interval-phase",
+            lambda: None,
+            lambda: False,
+            lambda: ProbationOutcome.UNSETTLED,
+            fence=self._queue.quiesce if self._queue is not None else lambda: None,
+            capture=lambda: config.get("evidence", "").encode(),
+            adapter_id=FINAL_INTERVAL_RECOVERY_ADAPTER,
+            adapter_config=config,
+        )
 
     def _reconcile_submissions(self) -> None:
         if self._queue is None:

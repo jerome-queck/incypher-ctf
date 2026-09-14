@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-import json
 import fcntl
 import os
+import datetime as dt
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
+from solver.event_store_storage import canonical_bytes, digest_bytes
 from solver.event_store import EventStore
 from solver.recovery.contracts import (
     FAULT_REASONS,
-    INCIDENT_RECORDED,
     FaultKind,
     IncidentDisposition,
-    IncidentRecorded,
     IncidentStep,
+    ProbeObservation,
+    ProbationOutcome,
+    RecoveryContext,
 )
+from solver.recovery.catalogue import CATALOGUE_VERSION
+from solver.recovery.receipt import verify_receipt as verify_receipt
 from solver.redaction import Redactor
 from solver.write_reservation import WriteAuthority
 from solver.write_reservation_contracts import (
@@ -49,6 +52,7 @@ class Fault:
     generation_id: str
     evidence: str
     kind: FaultKind = FaultKind.WORKER_CRASH
+    recovery: RecoveryContext | None = None
 
     @property
     def identity(self) -> str:
@@ -60,6 +64,9 @@ class ContainmentPorts(Protocol):
     def evidence(self, fault: Fault) -> bytes: ...
     def teardown(self, fault: Fault) -> None: ...
     def replace(self, fault: Fault) -> bool: ...
+    def probe(self, fault: Fault, probe_id: str) -> ProbeObservation: ...
+    def apply_remedy(self, fault: Fault, remedy_id: str, changed_action) -> bool: ...
+    def probation(self, fault: Fault, remedy_id: str) -> ProbationOutcome: ...
 
 
 @dataclass(frozen=True)
@@ -74,7 +81,16 @@ class IncidentEngine:
 
     remedy = Remedy.REPLACE_ONCE
 
-    def __init__(self, state: Path, run_id: str, ports: ContainmentPorts, redactor: Redactor) -> None:
+    def __init__(
+        self,
+        state: Path,
+        run_id: str,
+        ports: ContainmentPorts,
+        redactor: Redactor,
+        *,
+        now=None,
+        authority: WriteAuthority | None = None,
+    ) -> None:
         self._root = Path(state) / "runs" / run_id / "canonical"
         self._run_id = run_id
         self._ports = ports
@@ -82,6 +98,8 @@ class IncidentEngine:
         self._store = EventStore(state, run_id=run_id, redactor=redactor)
         self._receipt_path = self._root / RECEIPT
         self._lock_path = self._root / "incident.lock"
+        self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
+        self._authority = authority
 
     def accept_model_remedy(self, _claim: str) -> None:
         raise ModelRemedyRejected("model output has no Core Recovery authority")
@@ -104,26 +122,51 @@ class IncidentEngine:
                 self._write(document)
                 self._write_receipt(active)
                 return self._result(active)
-            authority = WriteAuthority(self._root.parent, DEFAULT_WRITE_PROFILE, redactor=self._redactor)
+            authority = self._authority or WriteAuthority(
+                self._root.parent, DEFAULT_WRITE_PROFILE, redactor=self._redactor
+            )
             try:
                 row, reservation = self._open(document, fault, authority)
+                if fault.recovery is not None:
+                    return self._recover(document, row, fault, authority, reservation)
                 if fault.kind is not FaultKind.WORKER_CRASH:
                     return self._refuse(document, row, fault, authority, reservation)
                 return self._contain(document, row, fault, authority, reservation)
             finally:
-                authority.close()
+                if self._authority is None:
+                    authority.close()
 
-    def replay(self) -> tuple[IncidentResult, ...]:
+    def replay(self, *, adapter_ids: frozenset[str] | None = None) -> tuple[IncidentResult, ...]:
         with self._serialized():
             document = self._read()
             results = []
             for row in document["incidents"]:
                 if row["terminal"]:
                     continue
+                if adapter_ids is not None and row.get("adapter_id") not in adapter_ids:
+                    continue
                 row["replay_count"] += 1
-                fault = Fault(row["fault"]["fault_id"], row["scope"], row["fault"]["generation_id"], "replay")
+                recovery = None
+                if row.get("catalogue_version"):
+                    recovery = RecoveryContext(
+                        row["original_deadline"],
+                        row["allowance"],
+                        row["failed_action_value"],
+                        row["adapter_id"],
+                        row["adapter_config"],
+                    )
+                fault = Fault(
+                    row["fault"]["fault_id"],
+                    row["scope"],
+                    row["fault"]["generation_id"],
+                    "replay",
+                    FaultKind(row["kind"]),
+                    recovery,
+                )
                 self._write(document)
-                authority = WriteAuthority(self._root.parent, DEFAULT_WRITE_PROFILE, redactor=self._redactor)
+                authority = self._authority or WriteAuthority(
+                    self._root.parent, DEFAULT_WRITE_PROFILE, redactor=self._redactor
+                )
                 try:
                     reservation = authority.current(self._reservation_key(row["fault_identity"]))
                     if reservation is None:
@@ -132,7 +175,12 @@ class IncidentEngine:
                         authority.refuse_indeterminate(reservation, "replacement-launch-indeterminate")
                         row["authority_state"] = ReservationState.TERMINAL.value
                         row["replacement_admitted"] = False
-                        row["disposition"] = IncidentDisposition.REPLACEMENT_REFUSED.value
+                        if row.get("catalogue_version"):
+                            row["disposition"] = IncidentDisposition.CONTAINED.value
+                            row["probation_outcome"] = ProbationOutcome.UNSETTLED.value
+                            row["final_outcome"] = IncidentDisposition.CONTAINED.value
+                        else:
+                            row["disposition"] = IncidentDisposition.REPLACEMENT_REFUSED.value
                         row["terminal"] = True
                         self._write(document)
                         self._write_receipt(row)
@@ -140,9 +188,15 @@ class IncidentEngine:
                         continue
                     if reservation.state is ReservationState.ABORTED:
                         reservation = self._reserve(authority, row["fault_identity"], retry_aborted=True)
-                    results.append(self._contain(document, row, fault, authority, reservation))
+                    if fault.recovery is not None:
+                        results.append(self._recover(document, row, fault, authority, reservation))
+                    elif fault.kind is not FaultKind.WORKER_CRASH:
+                        results.append(self._refuse(document, row, fault, authority, reservation))
+                    else:
+                        results.append(self._contain(document, row, fault, authority, reservation))
                 finally:
-                    authority.close()
+                    if self._authority is None:
+                        authority.close()
             return tuple(results)
 
     def _open(self, document, fault, authority):
@@ -161,10 +215,29 @@ class IncidentEngine:
             "terminal": False,
             "disposition": IncidentDisposition.CONTAINING.value,
             "authority_state": ReservationState.RESERVED.value,
+            "catalogue_version": CATALOGUE_VERSION if fault.recovery else "",
+            "probe_id": "",
+            "probe_outcome": "",
+            "remedy_id": "",
+            "remedy_version": "",
+            "changed_action": {},
+            "original_deadline": fault.recovery.original_deadline if fault.recovery else "",
+            "allowance": fault.recovery.allowance if fault.recovery else 0,
+            "consumed_allowance": 0,
+            "probation_outcome": "",
+            "final_outcome": "",
+            "failed_action_value": fault.recovery.failed_action_value if fault.recovery else "",
+            "adapter_id": fault.recovery.adapter_id if fault.recovery else "",
+            "adapter_config": fault.recovery.adapter_config if fault.recovery else "{}",
         }
         document["incidents"].append(row)
         self._write(document)
         return row, reservation
+
+    def _recover(self, document, row, fault, authority, reservation):
+        from solver.recovery.deterministic_lifecycle import recover
+
+        return recover(self, document, row, fault, authority, reservation)
 
     def _contain(self, document, row, fault, authority, reservation):
         self._step(document, row, IncidentStep.GENERATION_FENCE, lambda: self._ports.fence(fault))
@@ -210,6 +283,17 @@ class IncidentEngine:
         row["steps"][name] = "complete"
         self._write(document)
 
+    def _step_result(self, document, row, step: IncidentStep, action):
+        name = step.value
+        row["steps"][name] = "reserved"
+        if name not in row["trace"]:
+            row["trace"].append(name)
+        self._write(document)
+        result = action()
+        row["steps"][name] = "complete"
+        self._write(document)
+        return result
+
     def _capture(self, row, fault):
         body = self._redactor.redact(self._ports.evidence(fault))[:4096]
         row["evidence"] = {
@@ -245,90 +329,19 @@ class IncidentEngine:
         return f"incident:{fault_identity}:replacement"
 
     def _read(self):
-        incidents = {}
-        for event in self._store.events():
-            if event.event_type != INCIDENT_RECORDED:
-                continue
-            value = event.payload
-            incidents[value["incident_id"]] = {
-                "incident_id": value["incident_id"],
-                "fault_identity": value["fault_identity"],
-                "fault": {"fault_id": value["fault_id"], "generation_id": value["generation_id"]},
-                "scope": value["scope"],
-                "kind": value["fault_kind"],
-                "reason": value["reason"],
-                "authority_state": value["authority_state"],
-                "steps": {
-                    name: "complete" if name in value["completed_steps"] else "reserved" for name in value["steps"]
-                },
-                "trace": value["steps"],
-                "duplicate_reports": value["duplicate_reports"],
-                "replay_count": value["replay_count"],
-                "terminal": value["terminal"],
-                "disposition": value["disposition"],
-                "replacement_admitted": value["replacement_admitted"],
-                "evidence": {
-                    "digest": value["evidence_digest"],
-                    "projection": value["evidence_projection"],
-                    "bytes": len(value["evidence_projection"].encode()),
-                },
-            }
-        return {"schema_version": SCHEMA_VERSION, "run_id": self._run_id, "incidents": list(incidents.values())}
+        from solver.recovery.projection import read
+
+        return read(self._store, self._run_id, SCHEMA_VERSION)
 
     def _write(self, document):
-        revision = sum(1 for event in self._store.events() if event.event_type == INCIDENT_RECORDED)
-        for offset, row in enumerate(document["incidents"], 1):
-            evidence = row.get("evidence", {})
-            self._store.append(
-                IncidentRecorded(
-                    event_id=f"{row['incident_id']}:revision-{revision + offset:06d}",
-                    incident_id=row["incident_id"],
-                    fault_identity=row["fault_identity"],
-                    fault_id=row["fault"]["fault_id"],
-                    generation_id=row["fault"]["generation_id"],
-                    scope=row["scope"],
-                    fault_kind=row["kind"],
-                    reason=row["reason"],
-                    authority_state=row.get("authority_state", ""),
-                    disposition=row["disposition"],
-                    steps=tuple(row["trace"]),
-                    completed_steps=tuple(name for name, state in row["steps"].items() if state == "complete"),
-                    duplicate_reports=row["duplicate_reports"],
-                    replay_count=row["replay_count"],
-                    terminal=row["terminal"],
-                    evidence_digest=evidence.get("digest", ""),
-                    evidence_projection=evidence.get("projection", ""),
-                    replacement_admitted=row.get("replacement_admitted", False),
-                ),
-                body=b"",
-            )
+        from solver.recovery.projection import write
+
+        write(self._store, document)
 
     def _write_receipt(self, row):
-        receipt = {
-            "schema_version": SCHEMA_VERSION,
-            "receipt_type": "incident-containment",
-            "run_id": self._run_id,
-            "incident_id": row["incident_id"],
-            "fault_id": row["fault"]["fault_id"],
-            "fault_identity": row["fault_identity"],
-            "generation_id": row["fault"]["generation_id"],
-            "scope": row["scope"],
-            "reason": row["reason"],
-            "fault_kind": row["kind"],
-            "authority_state": row.get("authority_state", ""),
-            "trace": row["trace"],
-            "replay_count": row["replay_count"],
-            "duplicate_reports": row["duplicate_reports"],
-            "disposition": row["disposition"],
-            "evidence": row.get("evidence", {}),
-            "remedy_authority": "fixed-core:no-inference:replace-once",
-            "manifest_link": {
-                "row_id": "core.deterministic-recovery",
-                "receipt_ref": "receipt:incident-containment",
-            },
-        }
-        receipt["receipt_digest"] = digest_bytes(canonical_bytes(receipt))
-        atomic_write(self._receipt_path, canonical_bytes(receipt) + b"\n")
+        from solver.recovery.receipt import write_receipt
+
+        write_receipt(self._receipt_path, self._run_id, row)
 
     def _result(self, row):
         return IncidentResult(row["incident_id"], row["disposition"], self._receipt_path)
@@ -348,44 +361,3 @@ class IncidentEngine:
                 inner.file.close()
 
         return Lock()
-
-
-def verify_receipt(path: Path) -> Path:
-    value = json.loads(Path(path).read_text())
-    digest = value.pop("receipt_digest", None)
-    if value.get("schema_version") != SCHEMA_VERSION or value.get("receipt_type") != "incident-containment":
-        raise ValueError("incident-containment receipt version or kind is invalid")
-    if digest != digest_bytes(canonical_bytes(value)):
-        raise ValueError("incident-containment receipt digest is invalid")
-    if value.get("remedy_authority") != "fixed-core:no-inference:replace-once":
-        raise ValueError("incident-containment remedy authority is invalid")
-    complete_trace = [
-        "generation-fence",
-        "evidence-capture",
-        "full-teardown",
-        "bounded-replacement",
-    ]
-    refused_kind = value.get("fault_kind") in {FaultKind.AMBIGUOUS.value, FaultKind.UNCLASSIFIED.value}
-    if value.get("trace") != ([] if refused_kind else complete_trace):
-        raise ValueError("incident-containment order is invalid")
-    if value.get("disposition") not in {"replacement-admitted", "replacement-refused"}:
-        raise ValueError("incident-containment disposition is invalid")
-    if not isinstance(value.get("replay_count"), int) or value["replay_count"] < 0:
-        raise ValueError("incident-containment replay count is invalid")
-    if value.get("authority_state") not in {
-        ReservationState.COMMITTED.value,
-        ReservationState.ABORTED.value,
-        ReservationState.TERMINAL.value,
-    }:
-        raise ValueError("incident-containment authority is not closed")
-    expected_reason = {kind.value: reason for kind, reason in FAULT_REASONS.items()}
-    if value.get("reason") != expected_reason.get(value.get("fault_kind")):
-        raise ValueError("incident-containment fault classification is invalid")
-    evidence = value.get("evidence")
-    if not isinstance(evidence, dict) or digest_bytes(str(evidence.get("projection", "")).encode()) != evidence.get(
-        "digest"
-    ):
-        raise ValueError("incident-containment evidence projection is invalid")
-    if refused_kind and not evidence.get("projection"):
-        raise ValueError("incident-containment refusal evidence is absent")
-    return Path(path)

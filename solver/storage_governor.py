@@ -84,6 +84,18 @@ class StorageGovernor:
         self._retirement_hook = retirement_hook
         self.replay_pending_retirements()
 
+    def recovery_composition(self, state: Path, redactor: Redactor, *, now):
+        """Compose Incident Recovery with this governor's sole writer authority."""
+        from solver.recovery.runtime import DeterministicRecovery
+
+        return DeterministicRecovery(
+            state,
+            self.run_id,
+            redactor,
+            now=now,
+            authority=self._authority,
+        )
+
     def close(self) -> None:
         self._authority.close()
 

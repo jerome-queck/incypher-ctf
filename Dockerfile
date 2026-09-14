@@ -354,6 +354,7 @@ RUN python3 -m scripts.apply_tool_supply_modes \
       --inventory /opt/solver/tool-supply/inventory.json --root / \
     && rm -r scripts
 COPY scripts/runtime_qualification.py scripts/runtime_qualification.py
+COPY scripts/deterministic_recovery_qualification.py scripts/deterministic_recovery_qualification.py
 COPY docs/competitions/*.board.json boards/
 
 # PID 1 is the Supervisor in exec form, with no shell between it and Docker. It owns one

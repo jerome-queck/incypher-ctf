@@ -93,6 +93,38 @@ def test_replay_and_storage_admission_precede_the_effect_capable_boot(tmp_path):
     assert result.disposition == NORMAL
 
 
+def test_supervisor_reconstructs_its_persisted_process_adapter_after_probe_crash(tmp_path, monkeypatch):
+    boots = iter((ExitedBoot(1), ExitedBoot(0)))
+    original = supervisor_module._SupervisorContainment.project_change
+    crashed = [False]
+
+    def crash_once(self):
+        if not crashed[0]:
+            crashed[0] = True
+            raise RuntimeError("crash before refusal finishes")
+        return original(self)
+
+    monkeypatch.setattr(supervisor_module._SupervisorContainment, "project_change", crash_once)
+    with pytest.raises(RuntimeError, match="refusal finishes"):
+        Supervisor(
+            state=tmp_path,
+            run_id="run-replay",
+            redactor=Redactor({}),
+            services=services(launch=lambda _boot_id: next(boots)),
+        ).run()
+    monkeypatch.setattr(supervisor_module._SupervisorContainment, "project_change", original)
+
+    result = Supervisor(
+        state=tmp_path,
+        run_id="run-replay",
+        redactor=Redactor({}),
+        services=services(launch=lambda _boot_id: next(boots)),
+    ).run()
+
+    assert result.disposition == NORMAL
+    assert result.boot_id == "boot-000002"
+
+
 def test_one_normal_boot_leaves_canonical_lifecycle_and_a_verifiable_receipt(tmp_path):
     result = Supervisor(
         state=tmp_path,
