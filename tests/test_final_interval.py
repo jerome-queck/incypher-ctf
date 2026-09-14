@@ -8,12 +8,13 @@ import pytest
 from solver.final_interval import FinalIntervalController, RunInventory, verify_receipt as verify_runtime_receipt
 from solver.final_interval_evaluator import verify_receipt as verify_evaluator
 from solver.final_interval_evaluator import _verify_production_observation
+from solver.final_interval_evaluator import _verify_submission_timing
 from solver.event_store_storage import canonical_bytes
 from solver.manifest import generate_manifest
 from scripts.eval_final_interval import evaluate
 from test_manifest import release_candidate_profile
 from solver.attempt_executor_contracts import EnvelopeSpec, NetworkPolicy
-from solver.instance_lease_contracts import LeaseIdentity
+from solver.instance_lease_contracts import LeaseIdentity, LeasePhase
 from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.lane_topology import LaneController
 from solver.lane_topology_contracts import LaneOutcome, LaneProfile, OwnerTermination, WorkCandidate
@@ -24,7 +25,7 @@ from solver.record import Recorder
 from solver.schedule import Dials, Ended
 from solver.event_store_contracts import GenerationDisposition
 from solver.event_store import EventStore
-from solver.final_interval_contracts import FINAL_INTERVAL_RECORDED
+from solver.final_interval_contracts import FINAL_INTERVAL_RECORDED, AdmissionMode, SubmissionDeferred
 from solver.write_reservation import Capacity, EffectIdentity, ReservationUnavailable, RetentionPolicy
 from test_order_runtime import _canonical_authority, _legacy, _window
 from test_entry_point import PlayableBoard, env, wired
@@ -60,6 +61,19 @@ def test_boundary_stops_normal_admission_exactly_at_declared_submission_reserve(
     assert final.admit_final_chance("lane-1", "challenge-7") is None
 
 
+def test_reserved_final_chance_closes_if_admission_crosses_exact_cutoff(tmp_path):
+    clock = [END - dt.timedelta(seconds=61)]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+    grant = final.reserve_final_chance("lane-1", "challenge-7")
+    assert grant is not None
+
+    clock[0] = END - dt.timedelta(seconds=60)
+    with pytest.raises(ValueError, match="crossed"):
+        final.spend_final_chance(grant)
+
+    assert final.receipt()["final_chances"] == {"lane-1": {"challenge_id": "", "state": "closed"}}
+
+
 def test_each_enabled_lane_gets_at_most_one_final_chance_across_restart(tmp_path):
     clock = [END - dt.timedelta(seconds=120)]
     first = controller(tmp_path, clock)
@@ -79,7 +93,10 @@ def test_each_enabled_lane_gets_at_most_one_final_chance_across_restart(tmp_path
         for event in EventStore(tmp_path, run_id="run-1").events()
         if event.event_type == FINAL_INTERVAL_RECORDED
     ]
-    assert records == ["entitlement-reserved", "entitlement-spent"] * 2
+    assert records == ["transition", "entitlement-reserved", "entitlement-spent"] + [
+        "entitlement-reserved",
+        "entitlement-spent",
+    ]
 
 
 def test_reserved_entitlement_reacquires_real_authority_after_restart(tmp_path):
@@ -120,13 +137,32 @@ def test_reserved_entitlement_reacquires_real_authority_after_restart(tmp_path):
     assert restarted.receipt()["final_chances"] == {"lane-1": {"challenge_id": "challenge-7", "state": "spent"}}
 
 
-def test_reserved_entitlement_never_authorizes_newly_ordered_work(tmp_path):
+def test_reserved_lane_entitlement_can_follow_fresh_order_after_restart(tmp_path):
     clock = [END - dt.timedelta(seconds=120)]
     final = controller(tmp_path, clock, lanes=("lane-1",))
 
     assert final.reserve_final_chance("lane-1", "challenge-a") is not None
-    assert final.reserve_final_chance("lane-1", "challenge-b") is None
-    assert final.receipt()["final_chances"] == {"lane-1": {"challenge_id": "challenge-a", "state": "reserved"}}
+    replacement = controller(tmp_path, clock, lanes=("lane-1",)).reserve_final_chance("lane-1", "challenge-b")
+    assert replacement is not None
+    controller(tmp_path, clock, lanes=("lane-1",)).spend_final_chance(replacement)
+    assert controller(tmp_path, clock, lanes=("lane-1",)).receipt()["final_chances"] == {
+        "lane-1": {"challenge_id": "challenge-b", "state": "spent"}
+    }
+
+
+def test_final_interval_phase_never_regresses_or_regrants_after_terminal_restart(tmp_path):
+    clock = [END - dt.timedelta(seconds=120)]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+
+    assert final.admission_mode("lane-1") is AdmissionMode.FINAL_CHANCE
+    clock[0] = OPEN + dt.timedelta(seconds=1)
+    assert final.admission_mode("lane-1") is AdmissionMode.FINAL_CHANCE
+    clock[0] = END
+    final.close(RunInventory(), lambda: {})
+    clock[0] = OPEN + dt.timedelta(seconds=1)
+    restarted = controller(tmp_path, clock, lanes=("lane-1",))
+    assert restarted.admission_mode("lane-1") is AdmissionMode.CLOSED
+    assert restarted.reserve_final_chance("lane-1", "challenge-b") is None
 
 
 def test_receipt_rejects_duplicate_or_mistimed_final_chance_trace(tmp_path):
@@ -145,7 +181,8 @@ def test_receipt_rejects_duplicate_or_mistimed_final_chance_trace(tmp_path):
         verify_runtime_receipt(duplicate)
 
     mistimed = copy.deepcopy(receipt)
-    mistimed["trace"][0]["observed_at"] = (END - dt.timedelta(seconds=30)).isoformat()
+    reserved = next(row for row in mistimed["trace"] if row["record"] == "entitlement-reserved")
+    reserved["observed_at"] = (END - dt.timedelta(seconds=30)).isoformat()
     mistimed["trace_digest"] = __import__("hashlib").sha256(canonical_bytes(mistimed["trace"])).hexdigest()
     with pytest.raises(ValueError, match="final-chance clock"):
         verify_runtime_receipt(mistimed)
@@ -166,6 +203,32 @@ def test_receipt_rejects_duplicate_or_mistimed_final_chance_trace(tmp_path):
     invented_terminal["terminal"]["closed_at"] = (END + dt.timedelta(seconds=1)).isoformat()
     with pytest.raises(ValueError, match="terminal projection"):
         verify_runtime_receipt(invented_terminal)
+
+    changed_challenge = copy.deepcopy(receipt)
+    entitlement = [row for row in changed_challenge["trace"] if row["record"].startswith("entitlement-")]
+    entitlement[-1]["challenge_id"] = "another-challenge"
+    entitlement[-1]["state"] = "invented"
+    changed_challenge["trace_digest"] = (
+        __import__("hashlib").sha256(canonical_bytes(changed_challenge["trace"])).hexdigest()
+    )
+    with pytest.raises(ValueError, match="final-chance trace"):
+        verify_runtime_receipt(changed_challenge)
+
+    unknown_record = copy.deepcopy(receipt)
+    unknown_record["trace"][0]["record"] = "invented"
+    unknown_record["trace_digest"] = __import__("hashlib").sha256(canonical_bytes(unknown_record["trace"])).hexdigest()
+    with pytest.raises(ValueError, match="trace"):
+        verify_runtime_receipt(unknown_record)
+
+    missing_cleanup_request = copy.deepcopy(receipt)
+    missing_cleanup_request["trace"] = [
+        row for row in missing_cleanup_request["trace"] if row["record"] != "cleanup-requested"
+    ]
+    missing_cleanup_request["trace_digest"] = (
+        __import__("hashlib").sha256(canonical_bytes(missing_cleanup_request["trace"])).hexdigest()
+    )
+    with pytest.raises(ValueError, match="cleanup"):
+        verify_runtime_receipt(missing_cleanup_request)
 
 
 def test_failed_whole_path_reservation_has_no_event_or_effect(tmp_path):
@@ -190,6 +253,54 @@ def test_failed_whole_path_reservation_has_no_event_or_effect(tmp_path):
         final.drain(("candidate-a",), lambda candidate: effects.append(candidate) or "accepted")
     assert effects == []
     assert not EventStore(tmp_path, run_id="run-1").events()
+
+
+def test_receipt_binds_phase_drain_and_cleanup_authority(tmp_path):
+    clock = [END - dt.timedelta(seconds=120)]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+    final.admit_final_chance("lane-1", "challenge-7")
+    clock[0] = END - dt.timedelta(seconds=60)
+    final.drain(("candidate-a",), lambda _candidate: "accepted")
+    clock[0] = END
+    final.close(RunInventory(), lambda: {"instance:lease-1": "released"})
+    receipt = final.receipt()
+    verify_runtime_receipt(receipt)
+
+    def reseal(document):
+        document["trace_digest"] = __import__("hashlib").sha256(canonical_bytes(document["trace"])).hexdigest()
+        return document
+
+    wrong_drain = copy.deepcopy(receipt)
+    result = next(row for row in wrong_drain["trace"] if row["record"] == "drain-result")
+    result["reservation_id"] = "another-reservation"
+    with pytest.raises(ValueError, match="drain authority"):
+        verify_runtime_receipt(reseal(wrong_drain))
+
+    missing_phase = copy.deepcopy(receipt)
+    missing_phase["trace"] = [
+        row
+        for row in missing_phase["trace"]
+        if not (row["record"] == "transition" and row["state"] == "submission-reserve")
+    ]
+    with pytest.raises(ValueError, match="transition"):
+        verify_runtime_receipt(reseal(missing_phase))
+
+    wrong_phase_clock = copy.deepcopy(receipt)
+    transition = next(
+        row for row in wrong_phase_clock["trace"] if row["record"] == "transition" and row["state"] == "final-chance"
+    )
+    transition["observed_at"] = OPEN.isoformat()
+    with pytest.raises(ValueError, match="transition clock"):
+        verify_runtime_receipt(reseal(wrong_phase_clock))
+
+    invented_cleanup = copy.deepcopy(receipt)
+    cleanup = next(row for row in invented_cleanup["trace"] if row["record"] == "cleanup-result")
+    cleanup["reservation_id"] = "invented"
+    invented_cleanup["terminal"]["cleanup"] = {"invented": "released"}
+    terminal = next(row for row in invented_cleanup["trace"] if row["record"] == "terminal-inventory")
+    terminal["inventory"]["cleanup"] = {"invented": "released"}
+    with pytest.raises(ValueError, match="cleanup result"):
+        verify_runtime_receipt(reseal(invented_cleanup))
 
 
 def test_ready_candidates_drain_serially_and_ambiguous_candidate_is_never_resent(tmp_path):
@@ -232,16 +343,20 @@ def test_terminal_inventory_is_truthful_and_cleanup_waits_for_official_close(tmp
     inventory = RunInventory(attempts=("attempt-1",), instances=("lease-1",), submissions=("candidate-a",))
 
     with pytest.raises(ValueError, match="official Run window"):
-        final.close(inventory, cleanup=lambda: {"lease-1": "released"})
+        final.close(inventory, cleanup=lambda: {"instance:lease-1": "released"})
     clock[0] = END
-    terminal = final.close(inventory, cleanup=lambda: {"lease-1": "unsettled"})
+    terminal = final.close(inventory, cleanup=lambda: {"instance:lease-1": "unsettled"})
 
     assert terminal["remaining"] == {
         "attempts": ["attempt-1"],
         "instances": ["lease-1"],
         "submissions": ["candidate-a"],
     }
-    assert terminal["cleanup"] == {"lease-1": "unsettled"}
+    assert terminal["cleanup"] == {
+        "run-cleanup": "released",
+        "attempt:attempt-1": "unsettled",
+        "instance:lease-1": "unsettled",
+    }
     assert terminal["closed_at"] == END.isoformat()
 
 
@@ -252,14 +367,18 @@ def test_terminal_inventory_is_projected_after_cleanup(tmp_path):
 
     def cleanup():
         instances.clear()
-        return {"lease-1": "released"}
+        return {"instance:lease-1": "released"}
 
     terminal = final.close(
         lambda: RunInventory(attempts=("attempt-1",), instances=tuple(instances), submissions=()), cleanup
     )
 
     assert terminal["remaining"]["instances"] == []
-    assert terminal["cleanup"] == {"lease-1": "released"}
+    assert terminal["cleanup"] == {
+        "run-cleanup": "released",
+        "attempt:attempt-1": "unsettled",
+        "instance:lease-1": "released",
+    }
 
 
 def test_authority_is_reserved_before_every_effect(tmp_path):
@@ -346,7 +465,7 @@ def test_cleanup_failure_still_records_truthful_terminal_inventory(tmp_path):
 
     assert terminal["disposition"] == "closed-with-unsettled-cleanup"
     assert terminal["remaining"]["instances"] == ["lease-1"]
-    assert terminal["cleanup"] == {"cleanup": "unsettled"}
+    assert terminal["cleanup"] == {"run-cleanup": "unsettled", "instance:lease-1": "unsettled"}
 
 
 def test_crash_after_submit_before_drain_result_reconciles_without_resend(tmp_path):
@@ -382,6 +501,76 @@ def test_crash_after_submit_before_drain_result_reconciles_without_resend(tmp_pa
     restarted = controller(tmp_path, clock, lanes=("lane-1",))
     assert restarted.drain(("candidate-a",), idempotent_submit) == ("accepted",)
     assert posts == ["candidate-a"]
+
+
+def test_pre_wire_deferred_drain_retries_after_restart_without_indeterminate_outer_authority(tmp_path):
+    clock = [END - dt.timedelta(seconds=60)]
+
+    def compose(recorder):
+        def reserve(identity):
+            return recorder.write_authority.reserve(
+                f"final-interval:{identity}",
+                EffectIdentity("final-interval.authority", identity),
+                Capacity(4096, 1, 3),
+                retention=RetentionPolicy.RELEASE,
+                retry_aborted=True,
+            )
+
+        return FinalIntervalController(
+            state=tmp_path,
+            run_id="run-1",
+            opened_at=OPEN,
+            ends_at=END,
+            final_submission_reserve_seconds=60,
+            attempt_floor_seconds=300,
+            enabled_lanes=("lane-1",),
+            now=lambda: clock[0],
+            reserve=reserve,
+            event_store=recorder.event_store,
+            write_authority=recorder.write_authority,
+        )
+
+    first_recorder = Recorder(tmp_path, "run-1", Redactor({}))
+    first = compose(first_recorder)
+
+    def deferred(_candidate):
+        raise SubmissionDeferred("not sent")
+
+    assert first.drain(("candidate-a",), deferred) == ()
+    first_recorder.write_authority.close()
+    restarted_recorder = Recorder(tmp_path, "run-1", Redactor({}))
+    restarted = compose(restarted_recorder)
+    assert restarted.drain(("candidate-a",), lambda _candidate: "accepted") == ("accepted",)
+
+
+def test_terminal_replay_recreates_receipt_after_crash_between_event_and_file(tmp_path, monkeypatch):
+    clock = [END]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+    monkeypatch.setattr(final, "_write_receipt", lambda: (_ for _ in ()).throw(OSError("crash")))
+
+    with pytest.raises(OSError, match="crash"):
+        final.close(RunInventory(), lambda: {})
+    assert not final.receipt_path.exists()
+
+    restarted = controller(tmp_path, clock, lanes=("lane-1",))
+    terminal = restarted.close(RunInventory(attempts=("invented",)), lambda: {"invented": "unsettled"})
+    assert restarted.receipt_path.exists()
+    assert terminal["remaining"]["attempts"] == []
+    verify_runtime_receipt(json.loads(restarted.receipt_path.read_bytes()))
+
+
+def test_resolved_ambiguity_updates_terminal_submission_projection(tmp_path):
+    clock = [END - dt.timedelta(seconds=60)]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+    assert final.drain(("candidate-a",), lambda _candidate: "possibly-sent") == ("possibly-sent",)
+    final.reconcile_submission("candidate-a", "unknown-and-spent")
+    clock[0] = END
+    final.close(RunInventory(), lambda: {})
+
+    receipt = final.receipt()
+    assert receipt["submissions"]["candidate-a"]["outcome"] == "unknown-and-spent"
+    assert receipt["terminal"]["remaining"]["submissions"] == []
+    verify_runtime_receipt(receipt)
 
 
 def test_lane_scheduler_composition_clips_one_final_attempt_to_submission_cutoff(tmp_path):
@@ -476,12 +665,44 @@ def test_lane_admission_crash_reuses_reserved_entitlement_and_spends_once(tmp_pa
     ]
 
 
+def test_ordinary_lane_admission_is_fenced_when_setup_crosses_final_chance_boundary(tmp_path):
+    clock = [END - dt.timedelta(seconds=361)]
+    final = controller(tmp_path, clock, lanes=("lane-1",))
+    generations = GenerationFence(tmp_path, "run-1", Redactor({}), timestamp=lambda: clock[0].isoformat())
+    candidate = WorkCandidate(
+        "challenge-7",
+        1,
+        600,
+        1,
+        None,
+        EnvelopeSpec(10, 50_000, 1000, 1, 1000, NetworkPolicy.DENY, 600, 10),
+    )
+
+    def cross_boundary(point):
+        if point == "after_generation":
+            clock[0] = END - dt.timedelta(seconds=359)
+
+    result = LaneController(
+        state=tmp_path / "runs",
+        run_id="run-1",
+        profile=LaneProfile(lanes=1, global_resource_units=1),
+        generations=generations,
+        timestamp=lambda: clock[0].isoformat(),
+        terminate=lambda _binding: OwnerTermination(True, "terminated"),
+        final_interval=final,
+        hook=cross_boundary,
+    ).run_cycle(lambda _excluded: (candidate,), lambda binding: LaneOutcome.complete(binding, seconds=1))
+
+    assert result.timelines == ()
+    assert [state.disposition.value for state in generations.projection().generations] == ["interrupt"]
+
+
 def test_host_evaluator_signs_observed_board_and_cleanup_trace(tmp_path):
     clock = [END - dt.timedelta(seconds=60)]
     final = controller(tmp_path, clock, lanes=("lane-1",))
     final.drain(("candidate-id-a",), lambda _candidate: "accepted")
     clock[0] = END
-    final.close(RunInventory(), lambda: {"lease-1": "released"})
+    final.close(RunInventory(), lambda: {})
     source = tmp_path / "proof"
     source.mkdir()
     (source / "final-interval.receipt.json").write_bytes(canonical_bytes(final.receipt()) + b"\n")
@@ -502,7 +723,16 @@ def test_host_evaluator_signs_observed_board_and_cleanup_trace(tmp_path):
         image_digest="sha256:" + "a" * 64, release_candidate_profile=release_candidate_profile()
     )
     (source / "final-interval-profile.json").write_bytes(
-        canonical_bytes({"lifecycle": "sealed", "image_digest": manifest["candidate"]["image_digest"]}) + b"\n"
+        canonical_bytes(
+            {
+                "lifecycle": "sealed",
+                "image_digest": manifest["candidate"]["image_digest"],
+                "account_post_interval_seconds": 12.0,
+                "submission_request_deadline_seconds": 30.0,
+                "submission_uncertainty_margin_seconds": 2.0,
+            }
+        )
+        + b"\n"
     )
     subprocess.run(
         [
@@ -644,7 +874,13 @@ def test_evaluator_accepts_truthful_pending_ambiguity_at_official_close():
     effect_id = complete.effect_id
     image = "sha256:" + "c" * 64
     runtime = {
-        "window": {"ends_at": END.isoformat()},
+        "window": {
+            "final_submission_cutoff": (END - dt.timedelta(seconds=60)).isoformat(),
+            "ends_at": END.isoformat(),
+            "account_post_interval_seconds": 12.0,
+            "submission_request_deadline_seconds": 30.0,
+            "submission_uncertainty_margin_seconds": 2.0,
+        },
         "terminal": {
             "closed_at": END.isoformat(),
             "cleanup": {"instance:1": "released"},
@@ -681,7 +917,8 @@ def test_evaluator_accepts_truthful_pending_ambiguity_at_official_close():
                 "candidate_id": complete.payload_identity,
                 "effect_id": effect_id,
                 "reservation_id": complete.reservation_id,
-                "states": ["possibly-sent"],
+                "states": ["reserved", "started", "possibly-sent"],
+                "result": {"requested_at": (END - dt.timedelta(seconds=40)).isoformat()},
             }
         ],
     }
@@ -720,6 +957,33 @@ def test_evaluator_accepts_truthful_pending_ambiguity_at_official_close():
             {"kind": "exact-image-qualification-clock", "image_digest": image},
             {"binding": {"image_digest": image}},
         )
+
+
+def test_evaluator_rejects_serial_posts_inside_account_interval():
+    runtime = {
+        "window": {
+            "final_submission_cutoff": (END - dt.timedelta(seconds=60)).isoformat(),
+            "ends_at": END.isoformat(),
+            "account_post_interval_seconds": 12.0,
+            "submission_request_deadline_seconds": 30.0,
+            "submission_uncertainty_margin_seconds": 2.0,
+        }
+    }
+    serial = {
+        "submissions": [
+            {
+                "states": ["reserved", "started", "committed"],
+                "result": {"requested_at": (END - dt.timedelta(seconds=50)).isoformat()},
+            },
+            {
+                "states": ["reserved", "started", "committed"],
+                "result": {"requested_at": (END - dt.timedelta(seconds=39)).isoformat()},
+            },
+        ]
+    }
+
+    with pytest.raises(ValueError, match="account pacing"):
+        _verify_submission_timing(runtime, serial)
 
 
 def test_order_does_not_spend_final_chance_before_attempt_admission_and_restart_cannot_regrant(tmp_path):
@@ -825,3 +1089,18 @@ def test_boot_object_graph_owns_selected_topology_and_replays_its_final_interval
         assert captured[1]["final_interval"].ends_at == captured[0]["final_interval"].ends_at
     else:
         assert captured[0]["lane_controller"] is None
+
+
+def test_boot_seeds_only_live_instance_leases():
+    from solver.__main__ import _active_initial_leases
+
+    class Grant:
+        def __init__(self, challenge_id, phase):
+            self.challenge_id, self.phase = challenge_id, phase
+
+    class Coordinator:
+        @staticmethod
+        def leases():
+            return (Grant(1, LeasePhase.RECOVERABLE), Grant(2, LeasePhase.CLOSED))
+
+    assert set(_active_initial_leases(Coordinator())) == {1}

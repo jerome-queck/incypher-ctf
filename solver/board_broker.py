@@ -773,12 +773,18 @@ class BoardBrokerClient:
         return self._execute(BoardOperation.DOWNLOAD, file_path=file_path)
 
     def submit(
-        self, challenge_id: int | str, flag: str, *, candidate_id="", complete_identity=None
+        self,
+        challenge_id: int | str,
+        flag: str,
+        *,
+        candidate_id="",
+        complete_identity=None,
+        timeout_seconds: float = 30.0,
     ) -> BoardBrokerResult:
         arguments = {"challenge_id": challenge_id, "flag": flag}
         if complete_identity is not None:
             arguments.update(candidate_id=candidate_id, complete_identity=complete_identity)
-        return self._execute(BoardOperation.SUBMIT, **arguments)
+        return self._execute(BoardOperation.SUBMIT, timeout_seconds=timeout_seconds, **arguments)
 
     def submission_ledger(self, effect_id: str) -> BoardBrokerResult:
         return self._execute(BoardOperation.SUBMISSION_LEDGER, effect_id=effect_id)
@@ -792,7 +798,7 @@ class BoardBrokerClient:
     def instance_ledger_page(self, page: int) -> BoardBrokerResult:
         return self._execute(BoardOperation.INSTANCE_LEDGER_PAGE, page=page)
 
-    def _execute(self, operation: BoardOperation, **arguments) -> BoardBrokerResult:
+    def _execute(self, operation: BoardOperation, *, timeout_seconds: float = 35.0, **arguments) -> BoardBrokerResult:
         if self._closed:
             return BoardBrokerResult(operation, BoardOutcome.REVOKED)
         response = _ipc_request(
@@ -803,6 +809,7 @@ class BoardBrokerClient:
                 "operation": operation.value,
                 "arguments": arguments,
             },
+            timeout_seconds=timeout_seconds,
         )
         if not isinstance(response.get("result"), dict):
             return BoardBrokerResult(operation, BoardOutcome.UNREACHABLE)
@@ -1116,8 +1123,9 @@ def _decode_ipc_result(response: dict[str, object]) -> BoardBrokerResult:
     return dataclasses.replace(result, value=dataclasses.replace(result.value, body=payload))
 
 
-def _ipc_request(path: Path, request: dict[str, object]) -> dict[str, object]:
+def _ipc_request(path: Path, request: dict[str, object], *, timeout_seconds: float = 35.0) -> dict[str, object]:
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(timeout_seconds)
     try:
         connection.connect(str(path))
         connection.sendall(canonical_bytes(request) + b"\n")

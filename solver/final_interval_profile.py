@@ -9,6 +9,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from solver.event_store_storage import canonical_bytes
+from solver.submission.authority import (
+    ACCOUNT_POST_INTERVAL_SECONDS,
+    SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
+)
 
 KIND = "final-interval-selected-profile"
 SCHEMA_VERSION = 1
@@ -63,6 +68,9 @@ def verify_selected_profile(
         "window_seconds",
         "final_submission_reserve_seconds",
         "attempt_floor_seconds",
+        "account_post_interval_seconds",
+        "submission_request_deadline_seconds",
+        "submission_uncertainty_margin_seconds",
         "maximum_authority_effect_reservation",
         "signer_public_key_digest",
     }
@@ -90,6 +98,13 @@ def verify_selected_profile(
         document["attempt_floor_seconds"], int
     ):
         raise ValueError("final-interval reserves must be integers")
+    for name in (
+        "account_post_interval_seconds",
+        "submission_request_deadline_seconds",
+        "submission_uncertainty_margin_seconds",
+    ):
+        if not isinstance(document[name], (int, float)) or isinstance(document[name], bool) or document[name] <= 0:
+            raise ValueError("final-interval submission timing must be positive")
     return document
 
 
@@ -100,6 +115,9 @@ def selected_profile_document(
     window_seconds: int,
     final_submission_reserve_seconds: int,
     attempt_floor_seconds: int,
+    account_post_interval_seconds: float = ACCOUNT_POST_INTERVAL_SECONDS,
+    submission_request_deadline_seconds: float = SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    submission_uncertainty_margin_seconds: float = SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
 ) -> dict[str, object]:
     """Build the canonical unsigned row signed only by the host Evaluator."""
 
@@ -116,6 +134,9 @@ def selected_profile_document(
         "window_seconds": window_seconds,
         "final_submission_reserve_seconds": final_submission_reserve_seconds,
         "attempt_floor_seconds": attempt_floor_seconds,
+        "account_post_interval_seconds": account_post_interval_seconds,
+        "submission_request_deadline_seconds": submission_request_deadline_seconds,
+        "submission_uncertainty_margin_seconds": submission_uncertainty_margin_seconds,
         "maximum_authority_effect_reservation": selected["storage"]["maximum_authority_effect_reservation"],
         "signer_public_key_digest": signer_public_key_digest,
     }

@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from solver.board_broker import BoardBrokerClient
 from solver.submission.ambiguity import AmbiguousSubmissionFence
 from solver.submission.ambiguity_adapter import AmbiguityAwareSerialSubmission
-from solver.submission.authority import SerialSubmission
+from solver.submission.authority import (
+    ACCOUNT_POST_INTERVAL_SECONDS,
+    SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
+    SerialSubmission,
+)
 from solver.submission.reconciliation import SubmissionReconciler, broker_evidence_probe
 
 
@@ -18,8 +23,11 @@ class SubmissionRuntime:
     fence: AmbiguousSubmissionFence
     reconciler: SubmissionReconciler
 
-    def close(self):
+    def quiesce(self):
         self.reconciler.close()
+
+    def close(self):
+        self.quiesce()
         self.fence.write_receipt()
 
 
@@ -36,6 +44,10 @@ def compose_submission_runtime(
     board_identity=None,
     monotonic=time.monotonic,
     wall_time=time.time,
+    sleep=time.sleep,
+    post_interval_seconds=ACCOUNT_POST_INTERVAL_SECONDS,
+    request_deadline_seconds=SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    uncertainty_margin_seconds=SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
     open_client=BoardBrokerClient.open,
     reconcile_interval=0.25,
 ):
@@ -62,13 +74,18 @@ def compose_submission_runtime(
         board_broker_path,
         open_client=lambda path, candidate_binding: open_client(path, candidate_binding, scope="board.submit"),
         identity_for=identity_for,
+        sleep=sleep,
+        post_interval_seconds=post_interval_seconds,
+        request_deadline_seconds=request_deadline_seconds,
+        uncertainty_margin_seconds=uncertainty_margin_seconds,
     )
+    reconciler = SubmissionReconciler(fence, interval_seconds=reconcile_interval).start()
     submission = AmbiguityAwareSerialSubmission(
         serial,
         fence,
         identity_for,
         epoch_authority=epoch_authority,
         board_identity=board_identity,
+        quiesce=reconciler.close,
     )
-    reconciler = SubmissionReconciler(fence, interval_seconds=reconcile_interval).start()
     return SubmissionRuntime(submission, fence, reconciler)

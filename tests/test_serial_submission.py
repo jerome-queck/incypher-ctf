@@ -78,7 +78,7 @@ class Wire:
         self.candidates = []
         self.complete_identities = []
 
-    def submit(self, challenge_id, flag, *, candidate_id="", complete_identity=None):
+    def submit(self, challenge_id, flag, *, candidate_id="", complete_identity=None, timeout_seconds=30):
         with self.lock:
             self.posts += 1
             self.candidates.append(flag)
@@ -129,6 +129,7 @@ def service(tmp_path, *, hook=None, wire=None):
         Clock(),
         tmp_path / "board.sock",
         open_client=lambda _path, _binding: network,
+        post_interval_seconds=0,
     )
     return authority, recorder, network
 
@@ -289,6 +290,7 @@ def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_pa
         wall_time=lambda: wall[0],
         open_client=lambda *_args, **_kwargs: wire,
         reconcile_interval=100,
+        post_interval_seconds=0,
     )
     successor = replace(ready(identity="d" * 64, candidate=b"zephyr{next}"), candidate_digest="e" * 64)
     other = replace(ready(identity="f" * 64, candidate=b"zephyr{other}"), candidate_digest="1" * 64)
@@ -369,6 +371,7 @@ def test_production_identity_predecessor_does_not_deadlock_after_success(tmp_pat
         identity_for=identity_for,
         open_client=lambda _path, _binding, *, scope: wire,
         reconcile_interval=100,
+        post_interval_seconds=0,
     )
     first = queued(ready("1" * 64, b"zephyr{one}"), order=1)
     second_candidate = replace(
@@ -416,6 +419,7 @@ def test_production_identity_predecessor_can_arrive_after_its_successor(tmp_path
         identity_for=identity_for,
         open_client=lambda _path, _binding, *, scope: wire,
         reconcile_interval=100,
+        post_interval_seconds=0,
     )
     first = queued(ready("1" * 64, b"zephyr{one}"), order=1)
     second_candidate = replace(ready("2" * 64, b"zephyr{two}"), candidate_digest="d" * 64)
@@ -475,6 +479,7 @@ def test_production_runtime_fences_ambiguous_post_then_releases_unrelated_candid
         wall_time=lambda: wall[0],
         open_client=open_client,
         reconcile_interval=100,
+        post_interval_seconds=0,
     )
     first = queued()
     second_candidate = replace(
@@ -534,6 +539,7 @@ def test_production_runtime_resumes_open_fence_with_reset_monotonic_epoch(tmp_pa
             wall_time=lambda: wall[0],
             open_client=lambda _path, _binding, *, scope: wire,
             reconcile_interval=100,
+            post_interval_seconds=0,
         )
 
     first_boot = boot("boot-1")
@@ -612,12 +618,13 @@ def test_observed_flag_sweep_enters_candidate_admission_before_typed_board_dispa
     source = next(event for event in admission.store.events() if event.event_digest in evidence.observation_digests)
     recorder = Recorder(tmp_path, "run-1", Redactor({}))
     wire = Wire()
+    opened = []
     submission = SerialSubmission(
         recorder.run_dir / "canonical",
         recorder.write_authority,
         Clock(),
         tmp_path / "board.sock",
-        open_client=lambda _path, _binding: wire,
+        open_client=lambda _path, binding: opened.append(binding) or wire,
     )
     bridge = ObservedCandidateSubmissionBridge(
         admission,
@@ -625,6 +632,7 @@ def test_observed_flag_sweep_enters_candidate_admission_before_typed_board_dispa
         run_id="run-1",
         boot_id="boot-1",
         context_for=lambda _challenge_id: SubmissionContext.static("r1", "b1"),
+        lane_for_attempt=lambda _attempt_id: "lane-2",
     )
     observation_ref = "observations/1.bin"
     (admission.store.run_dir / observation_ref).parent.mkdir(exist_ok=True)
@@ -640,6 +648,85 @@ def test_observed_flag_sweep_enters_candidate_admission_before_typed_board_dispa
     assert result is not None
     assert result.verdict.outcome == CORRECT
     assert wire.posts == 1
+    assert opened[0].lane_id == "lane-2"
+
+
+def test_serial_submission_paces_posts_durably_across_restart(tmp_path):
+    class PacingClock:
+        def __init__(self):
+            self.at = __import__("datetime").datetime(2026, 9, 13, tzinfo=__import__("datetime").timezone.utc)
+            self.sleeps = []
+
+        def timestamp(self):
+            self.at += __import__("datetime").timedelta(milliseconds=1)
+            return self.at.isoformat()
+
+        def sleep(self, seconds):
+            self.sleeps.append(seconds)
+            self.at += __import__("datetime").timedelta(seconds=seconds)
+
+    pacing = PacingClock()
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire()
+
+    def serial():
+        return SerialSubmission(
+            recorder.run_dir / "canonical",
+            recorder.write_authority,
+            pacing.timestamp,
+            tmp_path / "board.sock",
+            open_client=lambda _path, _binding: wire,
+            sleep=pacing.sleep,
+            post_interval_seconds=12,
+        )
+
+    serial().dispatch(queued(ready("1" * 64, b"zephyr{one}")), binding=BINDING)
+    serial().dispatch(queued(ready("2" * 64, b"zephyr{two}")), binding=BINDING)
+
+    posts = sorted(
+        __import__("datetime").datetime.fromisoformat(row.observation["requested_at"])
+        for row in recorder.write_authority.reservations()
+        if row.identity.operation == "board.submit-candidate"
+    )
+    assert (posts[1] - posts[0]).total_seconds() >= 12
+    assert pacing.sleeps and pacing.sleeps[0] > 0
+
+
+def test_final_submission_defers_before_pacing_can_cross_request_deadline(tmp_path):
+    class DeadlineClock:
+        def __init__(self):
+            self.at = __import__("datetime").datetime(2026, 9, 13, tzinfo=__import__("datetime").timezone.utc)
+            self.sleeps = []
+
+        def timestamp(self):
+            self.at += __import__("datetime").timedelta(milliseconds=1)
+            return self.at.isoformat()
+
+        def sleep(self, seconds):
+            self.sleeps.append(seconds)
+            self.at += __import__("datetime").timedelta(seconds=seconds)
+
+    clock = DeadlineClock()
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire()
+    serial = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        clock.timestamp,
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+        sleep=clock.sleep,
+    )
+    serial.dispatch(queued(ready("1" * 64, b"zephyr{one}")), binding=BINDING)
+    deadline = clock.at + __import__("datetime").timedelta(seconds=35)
+
+    with pytest.raises(TimeoutError, match="pacing"):
+        serial.dispatch(queued(ready("2" * 64, b"zephyr{two}")), binding=BINDING, deadline=deadline)
+
+    assert wire.posts == 1
+    assert clock.sleeps == []
+    deferred = recorder.write_authority.current("serial-submit:" + "2" * 64)
+    assert deferred is not None and deferred.state.value == "aborted"
 
 
 def test_observed_bridge_cache_is_generation_scoped(tmp_path):

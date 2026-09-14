@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hashlib
 import json
 import subprocess
@@ -85,6 +86,15 @@ def verify_receipt(path: Path, source_root: Path | None = None) -> Path:
     if (
         selected_profile["lifecycle"] != "sealed"
         or selected_profile["image_digest"] != document["binding"]["image_digest"]
+        or runtime["window"].get("account_post_interval_seconds", 0)
+        < selected_profile.get("account_post_interval_seconds", 0)
+        or any(
+            runtime["window"].get(name) != selected_profile.get(name)
+            for name in (
+                "submission_request_deadline_seconds",
+                "submission_uncertainty_margin_seconds",
+            )
+        )
     ):
         raise ValueError("Evaluator did not observe a sealed exact-image final-interval profile")
     _verify_profile_signature(root, document)
@@ -136,8 +146,6 @@ def _verify_host_observation(runtime, host, production) -> None:
 
 
 def dt_from(value):
-    import datetime as dt
-
     parsed = dt.datetime.fromisoformat(str(value))
     if parsed.tzinfo is None:
         raise ValueError("host clock is not timezone-aware")
@@ -244,6 +252,7 @@ def _verify_production_observation(runtime, production, serial, ambiguity, confi
     ):
         raise ValueError("production observation does not prove one Board POST per final Candidate")
     _verify_submission_bindings(runtime, posts, serial, ambiguity)
+    _verify_submission_timing(runtime, serial)
     ambiguous_rows = [row for row in serial.get("submissions", ()) if row.get("states", [])[-1:] == ["possibly-sent"]]
     starts = [row for row in ambiguity.get("events", ()) if row.get("event") == "possibly-sent"]
     final = {row.get("candidate_id"): row for row in ambiguity.get("final_dispositions", ())}
@@ -272,6 +281,36 @@ def _verify_production_observation(runtime, production, serial, ambiguity, confi
             raise ValueError("controlled final interval lacks restart-safe Lane and Candidate proof")
 
 
+def _verify_submission_timing(runtime, serial) -> None:
+    window = runtime.get("window", {})
+    cutoff = dt_from(window.get("final_submission_cutoff"))
+    ends = dt_from(window.get("ends_at"))
+    interval = float(window.get("account_post_interval_seconds", 0))
+    request_deadline = float(window.get("submission_request_deadline_seconds", 0))
+    margin = float(window.get("submission_uncertainty_margin_seconds", 0))
+    latest_start = ends - dt.timedelta(seconds=request_deadline + margin)
+    rows = [row for row in serial.get("submissions", ()) if "started" in row.get("states", ())]
+    if len(rows) != len(serial.get("submissions", ())):
+        raise ValueError("serial submission evidence omits a wire-start lifecycle")
+    requested = []
+    for row in rows:
+        result = row.get("result", {})
+        try:
+            at = dt_from(result["requested_at"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("serial submission lacks its durable request clock") from error
+        if not cutoff <= at < latest_start:
+            raise ValueError("serial submission started outside its final-window deadline")
+        requested.append(at)
+    requested.sort()
+    if interval < 12 or len(requested) != len(set(requested)):
+        raise ValueError("serial submission pacing profile is unsafe")
+    if any((right - left).total_seconds() < interval for left, right in zip(requested, requested[1:])):
+        raise ValueError("serial submission requests violate account pacing")
+    if any((requested[index] - requested[index - 5]).total_seconds() < 60 for index in range(5, len(requested))):
+        raise ValueError("serial submission requests exceed the rolling account window")
+
+
 def _verify_submission_bindings(runtime, posts, serial, ambiguity) -> None:
     wire_rows = [row for row in ambiguity.get("events", ()) if row.get("event") == "wire-started"]
     by_candidate = {str(row.get("candidate_id")): row for row in wire_rows}
@@ -290,6 +329,9 @@ def _verify_submission_bindings(runtime, posts, serial, ambiguity) -> None:
         (str(row.get("candidate_id")), str(row.get("effect_id")))
         for row in ambiguity.get("events", ())
         if row.get("event") == "possibly-sent"
+    }
+    ambiguity_final = {
+        str(row.get("candidate_id")): str(row.get("disposition")) for row in ambiguity.get("final_dispositions", ())
     }
     for candidate_id, runtime_row in runtime_rows.items():
         wire = by_candidate[candidate_id]
@@ -320,8 +362,15 @@ def _verify_submission_bindings(runtime, posts, serial, ambiguity) -> None:
         ):
             raise ValueError("production Candidate does not bind wire, serial authority, and Board POST")
         result = serial_row.get("result", {})
-        if outcome == "possibly-sent":
-            valid = states[-1:] == ["possibly-sent"] and (candidate_id, complete.effect_id) in ambiguity_starts
+        if states[-1:] == ["possibly-sent"]:
+            expected = {
+                "pending": "possibly-sent",
+                "accepted": "accepted",
+                "rejected": "rejected",
+                "refused-and-spent": "refused-and-spent",
+                "unknown-and-spent": "unknown-and-spent",
+            }.get(ambiguity_final.get(candidate_id))
+            valid = outcome == expected and (candidate_id, complete.effect_id) in ambiguity_starts
         elif outcome == "accepted":
             valid = (
                 states[-1:] == ["committed"]

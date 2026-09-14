@@ -9,6 +9,9 @@ from typing import Any, Mapping
 from solver.event_store_contracts import EMPTY_BLOB_DIGEST, InvalidEventError
 
 FINAL_INTERVAL_RECORDED = "final-interval.recorded"
+SCHEMA_VERSION = 2
+RECEIPT_KIND = "final-interval"
+RECEIPT = "final-interval.receipt.json"
 
 
 class FinalIntervalRecord(str, enum.Enum):
@@ -18,6 +21,7 @@ class FinalIntervalRecord(str, enum.Enum):
     ENTITLEMENT_CLOSED = "entitlement-closed"
     DRAIN_REQUESTED = "drain-requested"
     DRAIN_RESULT = "drain-result"
+    SUBMISSION_RECONCILED = "submission-reconciled"
     CLEANUP_REQUESTED = "cleanup-requested"
     CLEANUP_RESULT = "cleanup-result"
     TERMINAL_INVENTORY = "terminal-inventory"
@@ -132,7 +136,10 @@ __all__ = [
     "FinalChanceState",
     "FinalIntervalRecord",
     "FinalIntervalRecorded",
+    "RECEIPT",
+    "RECEIPT_KIND",
     "RunDisposition",
+    "SCHEMA_VERSION",
     "SubmissionDisposition",
     "SubmissionDeferred",
 ]

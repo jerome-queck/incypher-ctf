@@ -127,6 +127,8 @@ def _fixed_point(
 ) -> tuple[dict[str, str], dict[str, str]]:
     names = set(old_capsule["input_files"])
     names.discard("solver/runtime_qualification.py")
+    names.update(str(path.relative_to(ROOT)) for path in (ROOT / "solver").rglob("*.py"))
+    names.update(str(path.relative_to(ROOT)) for path in (ROOT / "solver").rglob("*.proof.json"))
     names.update(
         {
             "scripts/lock_apt_closure.py",

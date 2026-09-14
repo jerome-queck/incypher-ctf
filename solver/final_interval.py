@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from solver.event_store import EventStore
-from solver.event_store_contracts import CommittedEvent
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
 from solver.final_interval_contracts import (
     FINAL_INTERVAL_RECORDED,
@@ -19,16 +18,22 @@ from solver.final_interval_contracts import (
     FinalChanceState,
     FinalIntervalRecord,
     FinalIntervalRecorded,
+    RECEIPT,
+    RECEIPT_KIND,
+    SCHEMA_VERSION,
     RunDisposition,
     SubmissionDisposition,
     SubmissionDeferred,
 )
+from solver.final_interval_projection import project_final_interval
+from solver.final_interval_receipt import verify_receipt
+from solver.submission.authority import (
+    ACCOUNT_POST_INTERVAL_SECONDS,
+    SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
+)
 from solver.write_reservation import EffectIndeterminate, WriteAuthority
 from solver.write_reservation_contracts import ReservationState, WriteReservation
-
-SCHEMA_VERSION = 2
-RECEIPT_KIND = "final-interval"
-RECEIPT = "final-interval.receipt.json"
 
 
 @dataclass(frozen=True)
@@ -55,40 +60,6 @@ class RunInventory:
         }
 
 
-def project_final_interval(events: Sequence[CommittedEvent]) -> dict[str, object]:
-    """Replay final-interval facts from the already verified canonical chain."""
-    result: dict[str, object] = {"final_chances": {}, "submissions": {}, "cleanup": {}, "terminal": None, "trace": []}
-    for event in events:
-        if event.event_type != FINAL_INTERVAL_RECORDED:
-            continue
-        row = dict(event.payload)
-        record = FinalIntervalRecord(row["record"])
-        trace = result["trace"]
-        assert isinstance(trace, list)
-        trace.append(
-            {
-                key: value
-                for key, value in row.items()
-                if key not in {"blob_digest", "blob_bytes", "event_id"} and value != ""
-            }
-        )
-        chances, submissions, cleanup = result["final_chances"], result["submissions"], result["cleanup"]
-        assert isinstance(chances, dict) and isinstance(submissions, dict) and isinstance(cleanup, dict)
-        if record in {
-            FinalIntervalRecord.ENTITLEMENT_RESERVED,
-            FinalIntervalRecord.ENTITLEMENT_SPENT,
-            FinalIntervalRecord.ENTITLEMENT_CLOSED,
-        }:
-            chances[row["lane_id"]] = {"challenge_id": row["challenge_id"], "state": row["state"]}
-        elif record is FinalIntervalRecord.DRAIN_RESULT:
-            submissions[row["candidate_id"]] = {"outcome": row["outcome"], "observed_at": row["observed_at"]}
-        elif record is FinalIntervalRecord.CLEANUP_RESULT:
-            cleanup[row["reservation_id"]] = row["outcome"]
-        elif record is FinalIntervalRecord.TERMINAL_INVENTORY:
-            result["terminal"] = dict(row["inventory"])
-    return result
-
-
 class FinalIntervalController:
     """One append-only authority for the monotone end-of-Run lifecycle."""
 
@@ -104,6 +75,9 @@ class FinalIntervalController:
         enabled_lanes: Sequence[str],
         now: Callable[[], dt.datetime],
         reserve: Callable[[str], object],
+        account_post_interval_seconds: float = ACCOUNT_POST_INTERVAL_SECONDS,
+        submission_request_deadline_seconds: float = SUBMISSION_REQUEST_DEADLINE_SECONDS,
+        submission_uncertainty_margin_seconds: float = SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
         reserve_terminal: Callable[[str], object] | None = None,
         event_store: EventStore | None = None,
         write_authority: WriteAuthority | None = None,
@@ -114,6 +88,14 @@ class FinalIntervalController:
             or opened_at.tzinfo is None
             or ends_at <= opened_at
             or min(final_submission_reserve_seconds, attempt_floor_seconds) <= 0
+            or min(
+                account_post_interval_seconds,
+                submission_request_deadline_seconds,
+                submission_uncertainty_margin_seconds,
+            )
+            <= 0
+            or submission_request_deadline_seconds + submission_uncertainty_margin_seconds
+            >= final_submission_reserve_seconds
             or final_submission_reserve_seconds >= (ends_at - opened_at).total_seconds()
             or not enabled_lanes
             or len(set(enabled_lanes)) != len(enabled_lanes)
@@ -122,6 +104,9 @@ class FinalIntervalController:
         self.state, self.run_id = Path(state), run_id
         self.opened_at, self.ends_at = opened_at, ends_at
         self.reserve_seconds, self.floor_seconds = final_submission_reserve_seconds, attempt_floor_seconds
+        self.post_interval_seconds = account_post_interval_seconds
+        self.request_deadline_seconds = submission_request_deadline_seconds
+        self.uncertainty_margin_seconds = submission_uncertainty_margin_seconds
         self.enabled_lanes = tuple(enabled_lanes)
         self._now, self._reserve = now, reserve
         self._reserve_terminal = reserve_terminal or reserve
@@ -132,6 +117,12 @@ class FinalIntervalController:
         self._store = event_store or EventStore(self.state, run_id=run_id)
         self.receipt_path = self.state / "runs" / run_id / RECEIPT
         self._document = project_final_interval(self._store.events())
+        observed = [
+            dt.datetime.fromisoformat(str(row["observed_at"]))
+            for row in self._document["trace"]
+            if isinstance(row, Mapping) and row.get("observed_at")
+        ]
+        self._observed_floor = max((self.opened_at, *observed))
         if not set(self._document["final_chances"]).issubset(self.enabled_lanes):
             raise ValueError("final-interval authority names a disabled Lane")
 
@@ -146,41 +137,41 @@ class FinalIntervalController:
         self._require_lane(lane_id)
         chance = self._document["final_chances"].get(lane_id)
         return self.admission_mode(lane_id) is AdmissionMode.FINAL_CHANCE and (
-            chance is None or chance["state"] != FinalChanceState.SPENT.value
+            chance is None or chance["state"] == FinalChanceState.RESERVED.value
         )
 
     def admission_mode(self, lane_id: str) -> AdmissionMode:
-        self._require_lane(lane_id)
-        now = self._observed_now()
-        if now >= self.ends_at:
-            return AdmissionMode.CLOSED
-        if now >= self.cutoff:
-            return AdmissionMode.SUBMISSION_RESERVE
-        if (self.cutoff - now).total_seconds() < self.floor_seconds:
-            return AdmissionMode.FINAL_CHANCE
-        return AdmissionMode.ORDINARY
+        with self._lock:
+            self._require_lane(lane_id)
+            now = self._observed_now()
+            observed = self._mode_at(now)
+            durable = AdmissionMode(str(self._document["mode"]))
+            if self._document.get("terminal") is not None:
+                observed = AdmissionMode.CLOSED
+            if self._mode_rank(observed) > self._mode_rank(durable):
+                self._record(FinalIntervalRecord.TRANSITION, now, state=observed.value)
+                durable = observed
+            return durable
 
     def reserve_final_chance(self, lane_id: str, challenge_id: str) -> FinalChanceGrant | None:
         with self._lock:
             existing = self._document["final_chances"].get(lane_id)
             if self.admission_mode(lane_id) is not AdmissionMode.FINAL_CHANCE or (
-                existing is not None and existing["state"] == FinalChanceState.SPENT.value
+                existing is not None and existing["state"] != FinalChanceState.RESERVED.value
             ):
                 return None
             if not challenge_id:
                 raise ValueError("final chance requires a Challenge identity")
             now = self._observed_now()
             if existing is not None and existing["state"] == FinalChanceState.RESERVED.value:
-                if str(existing["challenge_id"]) != challenge_id:
-                    return None
-                return FinalChanceGrant(lane_id, str(existing["challenge_id"]), now, self.cutoff)
+                return FinalChanceGrant(lane_id, challenge_id, now, self.cutoff)
             grant = self._reserve(f"final-chance:{lane_id}")
             reservation_id = str(getattr(grant, "key", f"final-chance:{lane_id}"))
             self._record(
                 FinalIntervalRecord.ENTITLEMENT_RESERVED,
                 now,
                 lane_id=lane_id,
-                challenge_id=challenge_id,
+                challenge_id="",
                 reservation_id=reservation_id,
                 state=FinalChanceState.RESERVED.value,
             )
@@ -190,15 +181,31 @@ class FinalIntervalController:
     def spend_final_chance(self, grant: FinalChanceGrant) -> FinalChanceGrant:
         with self._lock:
             current = self._document["final_chances"].get(grant.lane_id)
-            if current is None or current["challenge_id"] != grant.challenge_id:
+            if current is None:
                 raise ValueError("final chance has no matching durable reservation")
             if current["state"] == FinalChanceState.SPENT.value:
+                if current["challenge_id"] != grant.challenge_id:
+                    raise ValueError("final chance was spent on another Challenge")
                 return grant
-            reservation = self._begin(
+            if current["state"] != FinalChanceState.RESERVED.value:
+                raise ValueError("final chance is already closed")
+            reservation = (
                 grant.transaction if grant.reservation_acquired else self._reserve(f"final-chance:{grant.lane_id}")
             )
             reservation_id = str(getattr(reservation, "key", f"final-chance:{grant.lane_id}"))
             now = self._observed_now()
+            if now >= self.cutoff:
+                self._record(
+                    FinalIntervalRecord.ENTITLEMENT_CLOSED,
+                    now,
+                    lane_id=grant.lane_id,
+                    challenge_id="",
+                    reservation_id=reservation_id,
+                    state=FinalChanceState.CLOSED.value,
+                )
+                self._settle_local(reservation, {"state": FinalChanceState.CLOSED.value})
+                self._chance_transactions.pop(grant.lane_id, None)
+                raise ValueError("final chance crossed the submission cutoff before admission")
             self._record(
                 FinalIntervalRecord.ENTITLEMENT_SPENT,
                 now,
@@ -207,9 +214,16 @@ class FinalIntervalController:
                 reservation_id=reservation_id,
                 state=FinalChanceState.SPENT.value,
             )
-            self._finish(reservation, {"state": FinalChanceState.SPENT.value})
+            self._settle_local(reservation, {"state": FinalChanceState.SPENT.value})
             self._chance_transactions.pop(grant.lane_id, None)
-            return grant
+            return FinalChanceGrant(
+                grant.lane_id,
+                grant.challenge_id,
+                now,
+                grant.deadline,
+                grant.transaction,
+                grant.reservation_acquired,
+            )
 
     def admit_final_chance(self, lane_id: str, challenge_id: str) -> FinalChanceGrant | None:
         grant = self.reserve_final_chance(lane_id, challenge_id)
@@ -229,6 +243,11 @@ class FinalIntervalController:
                     break
                 if candidate in submissions:
                     prior = submissions[candidate]["outcome"]
+                    if self._write_authority is not None:
+                        self._settle_local(
+                            self._reserve(f"submission:{candidate}"),
+                            {"outcome": prior},
+                        )
                     outcomes.append(
                         SubmissionDisposition.UNKNOWN_AND_SPENT.value
                         if prior == SubmissionDisposition.POSSIBLY_SENT.value
@@ -236,28 +255,56 @@ class FinalIntervalController:
                     )
                     continue
                 grant = self._reserve(f"submission:{candidate}")
-                grant = self._begin(grant)
+                self.admission_mode(self.enabled_lanes[0])
                 reservation_id = str(getattr(grant, "key", f"submission:{candidate}"))
-                self._record(
-                    FinalIntervalRecord.DRAIN_REQUESTED, now, candidate_id=candidate, reservation_id=reservation_id
-                )
+                drain_requests = self._document["drain_requests"]
+                assert isinstance(drain_requests, Mapping)
+                if candidate not in drain_requests:
+                    self._record(
+                        FinalIntervalRecord.DRAIN_REQUESTED,
+                        now,
+                        candidate_id=candidate,
+                        reservation_id=reservation_id,
+                    )
                 try:
                     outcome = SubmissionDisposition(submit(candidate))
                     self._hook("after_submission")
                 except SubmissionDeferred:
+                    self._abort(grant, "deferred-before-wire")
                     continue
                 except EffectIndeterminate:
                     outcome = SubmissionDisposition.POSSIBLY_SENT
+                result_at = self._observed_now()
                 self._record(
                     FinalIntervalRecord.DRAIN_RESULT,
-                    now,
+                    result_at,
                     candidate_id=candidate,
                     reservation_id=reservation_id,
                     outcome=outcome.value,
                 )
-                self._finish(grant, {"outcome": outcome.value})
+                self._settle_local(grant, {"outcome": outcome.value})
                 outcomes.append(outcome.value)
             return tuple(outcomes)
+
+    def reconcile_submission(self, candidate_id: str, outcome: str) -> None:
+        """Project a definitive ambiguity-fence result before terminal inventory is recorded."""
+
+        with self._lock:
+            submissions = self._document["submissions"]
+            assert isinstance(submissions, Mapping)
+            current = submissions.get(candidate_id)
+            resolved = SubmissionDisposition(outcome)
+            if current is None or current.get("outcome") != SubmissionDisposition.POSSIBLY_SENT.value:
+                raise ValueError("only a possibly-sent Candidate can be reconciled")
+            if resolved is SubmissionDisposition.POSSIBLY_SENT:
+                return
+            self._record(
+                FinalIntervalRecord.SUBMISSION_RECONCILED,
+                self._observed_now(),
+                candidate_id=candidate_id,
+                reservation_id=str(self._document["drain_requests"].get(candidate_id, "")),
+                outcome=resolved.value,
+            )
 
     def close(
         self,
@@ -271,9 +318,15 @@ class FinalIntervalController:
             if now < self.ends_at and not allow_early_terminal:
                 raise ValueError("cleanup cannot consume the official Run window")
             if terminal := self._document.get("terminal"):
+                self._write_receipt()
+                self._settle_local(
+                    self._reserve_terminal("run-close"),
+                    {"disposition": terminal["disposition"]},
+                )
                 return dict(terminal)
+            if AdmissionMode(str(self._document["mode"])) is not AdmissionMode.CLOSED:
+                self._record(FinalIntervalRecord.TRANSITION, now, state=AdmissionMode.CLOSED.value)
             grant = self._reserve_terminal("run-close")
-            grant = self._begin(grant)
             reservation_id = str(getattr(grant, "key", "run-close"))
             chances = self._document["final_chances"]
             for lane_id, chance in tuple(chances.items()):
@@ -283,30 +336,86 @@ class FinalIntervalController:
                         if lane_id in self._chance_transactions
                         else self._reserve(f"final-chance:{lane_id}")
                     )
-                    transaction = self._begin(transaction)
                     self._record(
                         FinalIntervalRecord.ENTITLEMENT_CLOSED,
                         now,
                         lane_id=lane_id,
                         challenge_id=str(chance["challenge_id"]),
-                        reservation_id=f"final-interval:final-chance:{lane_id}",
+                        reservation_id=str(getattr(transaction, "key", f"final-chance:{lane_id}")),
                         state=FinalChanceState.CLOSED.value,
                     )
-                    self._finish(transaction, {"state": FinalChanceState.CLOSED.value})
+                    self._settle_local(transaction, {"state": FinalChanceState.CLOSED.value})
                     self._chance_transactions.pop(lane_id, None)
-            self._record(FinalIntervalRecord.CLEANUP_REQUESTED, now, reservation_id=reservation_id)
+            before = inventory() if callable(inventory) else inventory
+            cleanup_targets = tuple(
+                dict.fromkeys(
+                    (
+                        "run-cleanup",
+                        *(f"attempt:{identity}" for identity in before.attempts),
+                        *(f"instance:{identity}" for identity in before.instances),
+                    )
+                )
+            )
+            if not self._document["cleanup_requested"]:
+                self._record(
+                    FinalIntervalRecord.CLEANUP_REQUESTED,
+                    now,
+                    reservation_id=reservation_id,
+                    inventory={"targets": list(cleanup_targets)},
+                )
+            else:
+                cleanup_targets = tuple(self._document["cleanup_targets"])
+                if self._document["cleanup_authority"] != reservation_id:
+                    raise ValueError("cleanup and terminal authority disagree")
             try:
-                cleanup_outcomes = dict(cleanup())
+                supplied_outcomes = dict(cleanup())
             except Exception:
-                cleanup_outcomes = {"cleanup": CleanupDisposition.UNSETTLED.value}
+                supplied_outcomes = {"run-cleanup": CleanupDisposition.UNSETTLED.value}
+            if not set(supplied_outcomes).issubset(cleanup_targets):
+                supplied_outcomes = {"run-cleanup": CleanupDisposition.UNSETTLED.value}
+            cleanup_outcomes = {
+                identity: (
+                    CleanupDisposition.RELEASED.value
+                    if supplied_outcomes.get(identity) == CleanupDisposition.RELEASED.value
+                    else CleanupDisposition.UNSETTLED.value
+                )
+                for identity in cleanup_targets
+            }
+            if "run-cleanup" not in supplied_outcomes:
+                cleanup_outcomes["run-cleanup"] = CleanupDisposition.RELEASED.value
             remaining = inventory() if callable(inventory) else inventory
+            for kind, identities in (("attempt", remaining.attempts), ("instance", remaining.instances)):
+                left = set(identities)
+                for target in cleanup_targets:
+                    prefix = f"{kind}:"
+                    if target.startswith(prefix):
+                        cleanup_outcomes[target] = (
+                            CleanupDisposition.UNSETTLED.value
+                            if target[len(prefix) :] in left
+                            else CleanupDisposition.RELEASED.value
+                        )
+                if any(f"{kind}:{identity}" not in cleanup_targets for identity in left):
+                    cleanup_outcomes["run-cleanup"] = CleanupDisposition.UNSETTLED.value
+            durable_cleanup = dict(self._document["cleanup"])
             for identity, value in cleanup_outcomes.items():
+                if durable_cleanup.get(identity) == value:
+                    continue
+                if durable_cleanup.get(identity) == CleanupDisposition.RELEASED.value:
+                    raise ValueError("released cleanup target reappeared")
                 outcome = (
                     CleanupDisposition.RELEASED
                     if value == CleanupDisposition.RELEASED.value
                     else CleanupDisposition.UNSETTLED
                 )
-                self._record(FinalIntervalRecord.CLEANUP_RESULT, now, reservation_id=identity, outcome=outcome.value)
+                self._record(
+                    FinalIntervalRecord.CLEANUP_RESULT,
+                    now,
+                    challenge_id=identity,
+                    reservation_id=reservation_id,
+                    outcome=outcome.value,
+                )
+                durable_cleanup[identity] = outcome.value
+            cleanup_outcomes = durable_cleanup
             disposition = (
                 RunDisposition.CLOSED_WITH_UNSETTLED_CLEANUP
                 if any(value != CleanupDisposition.RELEASED.value for value in cleanup_outcomes.values())
@@ -327,7 +436,7 @@ class FinalIntervalController:
                 inventory=terminal,
             )
             self._write_receipt()
-            self._finish(grant, {"disposition": disposition.value})
+            self._settle_local(grant, {"disposition": disposition.value})
             return terminal
 
     def receipt(self) -> dict[str, object]:
@@ -343,6 +452,9 @@ class FinalIntervalController:
                 "ends_at": self.ends_at.isoformat(),
                 "reserve_seconds": self.reserve_seconds,
                 "attempt_floor_seconds": self.floor_seconds,
+                "account_post_interval_seconds": self.post_interval_seconds,
+                "submission_request_deadline_seconds": self.request_deadline_seconds,
+                "submission_uncertainty_margin_seconds": self.uncertainty_margin_seconds,
             },
             "enabled_lanes": list(self.enabled_lanes),
             "final_chances": dict(self._document["final_chances"]),
@@ -374,188 +486,58 @@ class FinalIntervalController:
     def _write_receipt(self) -> None:
         atomic_write(self.receipt_path, canonical_bytes(self.receipt()) + b"\n")
 
-    def _begin(self, grant: object) -> object:
+    def _settle_local(self, grant: object, observation: Mapping[str, object]) -> None:
         if self._write_authority is not None and isinstance(grant, WriteReservation):
-            if grant.state is ReservationState.STARTED:
-                return grant
-            if grant.state is not ReservationState.RESERVED:
-                raise EffectIndeterminate(f"final interval transaction is already {grant.state.value}")
-            return self._write_authority.start(grant)
-        return grant
-
-    def _finish(self, grant: object, observation: Mapping[str, object]) -> None:
-        if self._write_authority is not None and isinstance(grant, WriteReservation):
-            committed = self._write_authority.commit(grant, observation)
+            current = self._write_authority.current(grant.key)
+            if current is None or current.state in {
+                ReservationState.COMMITTED,
+                ReservationState.TERMINAL,
+                ReservationState.RELEASED,
+            }:
+                return
+            if current.state is ReservationState.POSSIBLY_SENT:
+                committed = self._write_authority.refuse_indeterminate(
+                    current,
+                    "canonical final-interval event proves the local transaction",
+                )
+            else:
+                if current.state is not ReservationState.RESERVED:
+                    raise EffectIndeterminate(f"final interval transaction is already {current.state.value}")
+                committed = self._write_authority.commit(self._write_authority.start(current), observation)
             if committed.retention.requires_receipt:
                 self._write_authority.write_receipt(committed.key)
             if committed.retention.retains_object:
                 self._write_authority.release_retained(committed, "final-interval transaction durably closed")
 
+    def _abort(self, grant: object, reason: str) -> None:
+        if self._write_authority is not None and isinstance(grant, WriteReservation):
+            current = self._write_authority.current(grant.key)
+            if current is not None and current.state is ReservationState.RESERVED:
+                self._write_authority.abort(current, reason)
+
     def _observed_now(self) -> dt.datetime:
         now = self._now()
         if now.tzinfo is None or now.utcoffset() != dt.timedelta(0) or now < self.opened_at:
             raise ValueError("final-interval clock must be UTC and inside the declared Run")
-        return now
+        self._observed_floor = max(self._observed_floor, now)
+        return self._observed_floor
+
+    def _mode_at(self, now: dt.datetime) -> AdmissionMode:
+        if now >= self.ends_at:
+            return AdmissionMode.CLOSED
+        if now >= self.cutoff:
+            return AdmissionMode.SUBMISSION_RESERVE
+        if (self.cutoff - now).total_seconds() < self.floor_seconds:
+            return AdmissionMode.FINAL_CHANCE
+        return AdmissionMode.ORDINARY
+
+    @staticmethod
+    def _mode_rank(mode: AdmissionMode) -> int:
+        return tuple(AdmissionMode).index(mode)
 
     def _require_lane(self, lane_id: str) -> None:
         if lane_id not in self.enabled_lanes:
             raise ValueError("Lane is not enabled by the selected profile")
-
-
-def verify_receipt(receipt: Mapping[str, object]) -> None:
-    required = {
-        "schema_version",
-        "kind",
-        "producer",
-        "run_id",
-        "window",
-        "enabled_lanes",
-        "final_chances",
-        "submissions",
-        "terminal",
-        "trace",
-        "trace_digest",
-    }
-    if (
-        set(receipt) != required
-        or receipt.get("schema_version") != SCHEMA_VERSION
-        or receipt.get("kind") != RECEIPT_KIND
-    ):
-        raise ValueError("final-interval receipt shape is invalid")
-    window = receipt["window"]
-    if not isinstance(window, Mapping):
-        raise ValueError("final-interval window is invalid")
-    opened, cutoff, ends = (
-        dt.datetime.fromisoformat(str(window[key])) for key in ("opened_at", "final_submission_cutoff", "ends_at")
-    )
-    floor = window.get("attempt_floor_seconds")
-    if (
-        not opened < cutoff < ends
-        or (ends - cutoff).total_seconds() != window.get("reserve_seconds")
-        or type(floor) is not int
-        or floor <= 0
-    ):
-        raise ValueError("final-interval boundaries are invalid")
-    lanes, chances = receipt["enabled_lanes"], receipt["final_chances"]
-    if (
-        not isinstance(lanes, list)
-        or not lanes
-        or len(lanes) != len(set(lanes))
-        or not isinstance(chances, Mapping)
-        or not set(chances).issubset(lanes)
-    ):
-        raise ValueError("final-chance ledger is invalid")
-    submissions = receipt["submissions"]
-    trace = receipt["trace"]
-    if not isinstance(submissions, Mapping):
-        raise ValueError("final-interval submission projection is invalid")
-    if not isinstance(trace, list) or digest_bytes(canonical_bytes(trace)) != receipt["trace_digest"]:
-        raise ValueError("final-interval trace is invalid")
-    prior = opened
-    chance_trace: dict[str, list[Mapping[str, object]]] = {lane: [] for lane in lanes}
-    drains: dict[str, list[str]] = {}
-    projected_submissions: dict[str, dict[str, str]] = {}
-    projected_cleanup: dict[str, str] = {}
-    projected_terminals: list[Mapping[str, object]] = []
-    for event in trace:
-        if not isinstance(event, Mapping):
-            raise ValueError("final-interval trace is invalid")
-        observed = dt.datetime.fromisoformat(str(event.get("observed_at", "")))
-        if observed < prior:
-            raise ValueError("final-interval trace clock is invalid")
-        prior = observed
-        record = str(event.get("record", ""))
-        if record.startswith("entitlement-"):
-            lane = str(event.get("lane_id", ""))
-            if lane not in chance_trace:
-                raise ValueError("final-chance trace names a disabled Lane")
-            chance_trace[lane].append(event)
-            if record in {
-                FinalIntervalRecord.ENTITLEMENT_RESERVED.value,
-                FinalIntervalRecord.ENTITLEMENT_SPENT.value,
-            } and not (cutoff - dt.timedelta(seconds=floor) <= observed):
-                raise ValueError("final-chance clock is invalid")
-            if (
-                record
-                in {
-                    FinalIntervalRecord.ENTITLEMENT_RESERVED.value,
-                    FinalIntervalRecord.ENTITLEMENT_SPENT.value,
-                }
-                and observed >= cutoff
-            ):
-                raise ValueError("final-chance clock is invalid")
-        elif record in {FinalIntervalRecord.DRAIN_REQUESTED.value, FinalIntervalRecord.DRAIN_RESULT.value}:
-            candidate = str(event.get("candidate_id", ""))
-            if not candidate:
-                raise ValueError("Candidate drain trace is invalid")
-            drains.setdefault(candidate, []).append(record)
-            if record == FinalIntervalRecord.DRAIN_REQUESTED.value and not cutoff <= observed < ends:
-                raise ValueError("Candidate drain clock is invalid")
-            if record == FinalIntervalRecord.DRAIN_RESULT.value:
-                outcome = str(event.get("outcome", ""))
-                if outcome not in {item.value for item in SubmissionDisposition}:
-                    raise ValueError("Candidate submission projection is invalid")
-                projected_submissions[candidate] = {"outcome": outcome, "observed_at": observed.isoformat()}
-        elif record == FinalIntervalRecord.CLEANUP_RESULT.value:
-            projected_cleanup[str(event.get("reservation_id", ""))] = str(event.get("outcome", ""))
-        elif record == FinalIntervalRecord.TERMINAL_INVENTORY.value:
-            inventory = event.get("inventory")
-            if not isinstance(inventory, Mapping):
-                raise ValueError("final-interval terminal projection is invalid")
-            projected_terminals.append(inventory)
-    for lane, events in chance_trace.items():
-        records = [str(event["record"]) for event in events]
-        if records not in (
-            [],
-            ["entitlement-reserved", "entitlement-spent"],
-            ["entitlement-reserved", "entitlement-closed"],
-        ):
-            raise ValueError("final-chance trace is not zero-or-one")
-        if records:
-            projected = chances.get(lane)
-            expected = {
-                "challenge_id": str(events[-1].get("challenge_id", "")),
-                "state": str(events[-1].get("state", "")),
-            }
-            if projected != expected:
-                raise ValueError("final-chance trace contradicts its ledger")
-        elif lane in chances:
-            raise ValueError("final-chance ledger lacks its trace")
-    if any(records not in (["drain-requested"], ["drain-requested", "drain-result"]) for records in drains.values()):
-        raise ValueError("Candidate drain trace is not replay-monotone")
-    if dict(submissions) != projected_submissions:
-        raise ValueError("final-interval submission projection contradicts its trace")
-    terminal = receipt["terminal"]
-    if (
-        len(projected_terminals) != 1
-        or not isinstance(terminal, Mapping)
-        or dict(terminal) != dict(projected_terminals[0])
-    ):
-        raise ValueError("final-interval terminal projection contradicts its trace")
-    remaining, cleanup = terminal.get("remaining"), terminal.get("cleanup")
-    if (
-        set(terminal) != {"closed_at", "official_ends_at", "remaining", "cleanup", "disposition"}
-        or terminal.get("official_ends_at") != ends.isoformat()
-        or not opened <= dt.datetime.fromisoformat(str(terminal.get("closed_at", ""))) <= ends
-        or not isinstance(remaining, Mapping)
-        or set(remaining) != {"attempts", "instances", "submissions"}
-        or any(
-            not isinstance(remaining[name], list) or len(remaining[name]) != len(set(remaining[name]))
-            for name in remaining
-        )
-        or not isinstance(cleanup, Mapping)
-        or dict(cleanup) != projected_cleanup
-    ):
-        raise ValueError("final-interval terminal projection is invalid")
-    expected_disposition = (
-        RunDisposition.CLOSED_WITH_UNSETTLED_CLEANUP.value
-        if any(value != CleanupDisposition.RELEASED.value for value in cleanup.values())
-        else RunDisposition.CLOSED.value
-    )
-    if terminal.get("disposition") != expected_disposition or not {
-        candidate for candidate, row in submissions.items() if row.get("outcome") == "possibly-sent"
-    }.issubset(remaining["submissions"]):
-        raise ValueError("final-interval terminal projection is invalid")
 
 
 __all__ = [

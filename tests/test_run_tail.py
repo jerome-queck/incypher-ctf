@@ -291,6 +291,19 @@ def test_canonical_tail_drains_reconciles_once_and_closes_at_the_official_bounda
     assert ending.clean
 
 
+def test_excluded_lane_pick_is_released_back_to_order():
+    released = []
+    pick = SimpleNamespace(challenge=SimpleNamespace(challenge_id="challenge-1"))
+    run = SimpleNamespace(
+        _scheduler=SimpleNamespace(acquire=lambda *_args, **_kwargs: pick, release=released.append),
+        _leases={},
+        _solved=set(),
+    )
+
+    assert Run._acquire_lane_work(run, None, frozenset({"challenge-1"})) == ()
+    assert [(row.challenge_id, row.cause) for row in released] == [("challenge-1", "lane-cycle-excluded")]
+
+
 def test_production_lane_termination_shortens_owner_and_waits_for_exit(tmp_path):
     clock = Clock()
     wire = Wire(count=1, instanced=False)
@@ -330,6 +343,52 @@ def test_production_lane_termination_shortens_owner_and_waits_for_exit(tmp_path)
     assert termination.ended
     assert termination.remaining_processes == ()
     assert not worker.is_alive()
+
+
+def test_lane_owner_remains_active_through_post_attempt_sweep(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, _recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        canonical_tail=True,
+        lanes=2,
+    )
+    binding = SimpleNamespace(
+        lane_id="lane-1",
+        attempt_id="lane-attempt-000001",
+        generation=SimpleNamespace(generation_id="generation-000001"),
+    )
+    sweeping = threading.Event()
+    release_sweep = threading.Event()
+    termination = []
+
+    def owner():
+        run._enter_lane_owner(binding)
+        try:
+            run._enter_lane_owner(binding)
+            run._exit_lane_owner(binding)
+            sweeping.set()
+            release_sweep.wait(timeout=2)
+        finally:
+            run._exit_lane_owner(binding)
+
+    worker = threading.Thread(target=owner, daemon=True)
+    worker.start()
+    assert sweeping.wait(1)
+    terminator = threading.Thread(
+        target=lambda: termination.append(run.terminate_lane_owner(binding, cleanup_seconds=1)), daemon=True
+    )
+    terminator.start()
+    time.sleep(0.02)
+    assert terminator.is_alive()
+    release_sweep.set()
+    terminator.join(timeout=1)
+    worker.join(timeout=1)
+
+    assert termination[0].ended
 
 
 def test_canonical_tail_closes_every_active_generation_before_terminal_inventory(tmp_path):
@@ -417,9 +476,17 @@ def test_canonical_candidate_queue_replaces_the_legacy_pending_drain(tmp_path):
             return ()
 
         @staticmethod
-        def submit(candidate_id):
+        def submit(candidate_id, *, deadline=None):
             submitted.append(candidate_id)
             return "accepted"
+
+        @staticmethod
+        def quiesce():
+            pass
+
+        @staticmethod
+        def submission_dispositions():
+            return {}
 
     run._final_candidate_queue = FinalQueue()
     workdir = tmp_path / "work" / RULES.event / "1"
@@ -451,11 +518,19 @@ def test_terminal_inventory_retains_an_unsettled_canonical_submission(tmp_path):
 
         @staticmethod
         def pending_candidate_ids():
-            return ("canonical-candidate",)
+            return ()
 
         @staticmethod
-        def submit(_candidate_id):
+        def submit(_candidate_id, *, deadline=None):
             return "possibly-sent"
+
+        @staticmethod
+        def quiesce():
+            pass
+
+        @staticmethod
+        def submission_dispositions():
+            return {}
 
     run._final_candidate_queue = FinalQueue()
 
@@ -463,6 +538,193 @@ def test_terminal_inventory_retains_an_unsettled_canonical_submission(tmp_path):
 
     receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
     assert receipt["terminal"]["remaining"]["submissions"] == ["canonical-candidate"]
+
+
+def test_software_crash_never_authors_a_terminal_interval(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        canonical_tail=True,
+    )
+    run._leases[1] = SimpleNamespace()
+    run._loop = lambda: (_ for _ in ()).throw(RuntimeError("broken Boot"))
+
+    ending = run.work()
+
+    assert ending.cause == "crashed"
+    assert ending.left_held == ("1",)
+    assert not (recorder.run_dir / "final-interval.receipt.json").exists()
+
+
+def test_canonical_stop_during_tail_wait_leaves_the_boot_unclosed(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=3600,
+        canonical_tail=True,
+        active_lease_at_final=True,
+    )
+    run._loop = lambda: None
+    run._sleep = lambda _seconds: run.stop()
+
+    ending = run.work()
+
+    assert ending.cause == SIGNALLED
+    assert ending.left_held == ("1",)
+    assert wire.deployed
+    assert not (recorder.run_dir / "final-interval.receipt.json").exists()
+    assert records(recorder, "run-close") == []
+
+
+def test_canonical_stop_from_attempt_leaves_the_boot_unclosed(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=3600,
+        canonical_tail=True,
+    )
+    stopping = Agent(clock, wire=wire)
+
+    def once(argv, workdir, environment, prompt):
+        child = stopping(argv, workdir, environment, prompt)
+        run.stop()
+        return child
+
+    run._launch = once
+    ending = run.work()
+
+    assert ending.cause == SIGNALLED
+    assert not (recorder.run_dir / "final-interval.receipt.json").exists()
+    assert records(recorder, "run-close") == []
+
+
+def test_canonical_stop_after_official_end_still_closes_the_run(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=3600,
+        canonical_tail=True,
+    )
+    clock.tick(3600)
+    run.stop()
+
+    ending = run.work()
+
+    assert ending.cause == SIGNALLED
+    assert (recorder.run_dir / "final-interval.receipt.json").exists()
+    assert records(recorder, "run-close")[0]["cause"] == SIGNALLED
+
+
+def test_canonical_queue_at_official_end_retains_unsubmitted_candidate(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=3600,
+        reproduces=False,
+        canonical_tail=True,
+    )
+    submitted = []
+
+    class FinalQueue:
+        @staticmethod
+        def candidate_ids():
+            return ("canonical-candidate",)
+
+        @staticmethod
+        def pending_candidate_ids():
+            return ()
+
+        @staticmethod
+        def submit(candidate_id, *, deadline=None):
+            submitted.append(candidate_id)
+            return "accepted"
+
+        @staticmethod
+        def quiesce():
+            pass
+
+        @staticmethod
+        def submission_dispositions():
+            return {}
+
+    run._final_candidate_queue = FinalQueue()
+    clock.tick(3600)
+    run.stop()
+
+    ending = run.work()
+
+    receipt = json.loads((recorder.run_dir / "final-interval.receipt.json").read_text())
+    assert ending.cause == SIGNALLED
+    assert submitted == []
+    assert receipt["terminal"]["remaining"]["submissions"] == ["canonical-candidate"]
+
+
+def test_canonical_stop_in_submission_reserve_does_not_dispatch_queue(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1, instanced=False)
+    run, recorder = solver(
+        tmp_path,
+        wire,
+        Agent(clock, wire=wire),
+        clock,
+        lasting=3600,
+        reproduces=False,
+        canonical_tail=True,
+    )
+    submitted = []
+
+    class FinalQueue:
+        @staticmethod
+        def candidate_ids():
+            return ("canonical-candidate",)
+
+        @staticmethod
+        def pending_candidate_ids():
+            return ()
+
+        @staticmethod
+        def submit(candidate_id, *, deadline=None):
+            submitted.append(candidate_id)
+            return "accepted"
+
+        @staticmethod
+        def quiesce():
+            pass
+
+        @staticmethod
+        def submission_dispositions():
+            return {}
+
+    run._final_candidate_queue = FinalQueue()
+
+    clock.tick(3310)
+    run.stop()
+
+    ending = run.work()
+
+    assert ending.cause == SIGNALLED
+    assert submitted == []
+    assert not (recorder.run_dir / "final-interval.receipt.json").exists()
 
 
 def test_terminal_inventory_retains_a_candidate_the_window_closed_before_dispatch(tmp_path):
@@ -487,9 +749,17 @@ def test_terminal_inventory_retains_a_candidate_the_window_closed_before_dispatc
             return ()
 
         @staticmethod
-        def submit(_candidate_id):
+        def submit(_candidate_id, *, deadline=None):
             clock.tick(DIALS.tail_seconds)
             return "accepted"
+
+        @staticmethod
+        def quiesce():
+            pass
+
+        @staticmethod
+        def submission_dispositions():
+            return {}
 
     run._final_candidate_queue = FinalQueue()
 

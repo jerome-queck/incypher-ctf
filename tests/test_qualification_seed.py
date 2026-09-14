@@ -90,7 +90,10 @@ def test_final_queue_leaves_ambiguity_to_reconciler_without_resend():
     ready = SimpleNamespace(candidate=SimpleNamespace(identity="candidate-1", generation_id="generation-1"))
     queue = FinalCandidateQueue(
         SimpleNamespace(ready_admissions=lambda: (ready,)),
-        SimpleNamespace(dispatch=lambda *_args, **_kwargs: (_ for _ in ()).throw(EffectIndeterminate("pending"))),
+        SimpleNamespace(
+            dispatch=lambda *_args, **_kwargs: (_ for _ in ()).throw(EffectIndeterminate("pending")),
+            was_possibly_sent=lambda _candidate_id: True,
+        ),
         run_id="run-1",
         boot_id="boot-1",
     )
@@ -106,6 +109,7 @@ def test_final_queue_does_not_call_a_pre_wire_refusal_possibly_sent():
     submission = SimpleNamespace(
         dispatch=lambda *_args, **_kwargs: (_ for _ in ()).throw(EffectIndeterminate("barrier")),
         was_possibly_sent=lambda _candidate_id: False,
+        defer=lambda _candidate_id: None,
     )
     queue = FinalCandidateQueue(
         SimpleNamespace(ready_admissions=lambda: (ready,)),

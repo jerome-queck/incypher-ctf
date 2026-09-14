@@ -87,12 +87,14 @@ class ObservedCandidateSubmissionBridge:
         run_id: str,
         boot_id: str,
         context_for: Callable[[int], SubmissionContext],
+        lane_for_attempt: Callable[[str], str] | None = None,
     ) -> None:
         self._admission = admission
         self._submission = submission
         self._run_id = run_id
         self._boot_id = boot_id
         self._context_for = context_for
+        self._lane_for_attempt = lane_for_attempt or (lambda _attempt_id: "lane-1")
         self._prepared = {}
 
     def __call__(
@@ -109,7 +111,7 @@ class ObservedCandidateSubmissionBridge:
             self._run_id,
             self._boot_id,
             generation_id,
-            "lane-1",
+            self._lane_for_attempt(attempt_id),
             attempt_id,
             f"submission:{ready.candidate.identity}",
         )

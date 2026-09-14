@@ -82,6 +82,11 @@ from solver.submission.bridge import CandidateSubmissionBridge, ObservedCandidat
 from solver.submission.context import SubmissionContextResolver
 from solver.submission.epoch import SubmissionEpochAuthority
 from solver.submission.runtime import compose_submission_runtime
+from solver.submission.authority import (
+    ACCOUNT_POST_INTERVAL_SECONDS,
+    SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
+)
 from solver.submission.receipt import link_manifest as link_submission_manifest
 from solver.submission.receipt import write_receipt as write_submission_receipt
 from solver.write_reservation import Capacity, EffectIdentity
@@ -91,6 +96,10 @@ from solver.write_reservation_contracts import Pool, RetentionPolicy
 # and nothing it reads. Not `state` bare — that reads as the Solver's in-memory state, which is a
 # different thing and survives nothing (`CONTEXT.md`, *Run state*).
 RUN_STATE = Path("/state")
+
+
+def _active_initial_leases(coordinator) -> dict[object, object]:
+    return {grant.challenge_id: grant for grant in coordinator.leases() if grant.phase is not LeasePhase.CLOSED}
 
 
 def _submission_identity_composition(intake, ledger, board_identity, store, timestamp):
@@ -371,6 +380,24 @@ def _run_admitted(
     )
     if selected_final_profile is not None and int(selected_final_profile["window_seconds"]) != rules.window_seconds:
         raise Refusal(f"{boot.MARK} signed final-interval window disagrees with Board rules")
+    post_interval_seconds = max(
+        float(
+            selected_final_profile["account_post_interval_seconds"]
+            if selected_final_profile is not None
+            else ACCOUNT_POST_INTERVAL_SECONDS
+        ),
+        60.0 / max(1, discovered.submissions_per_minute),
+    )
+    request_deadline_seconds = float(
+        selected_final_profile["submission_request_deadline_seconds"]
+        if selected_final_profile is not None
+        else SUBMISSION_REQUEST_DEADLINE_SECONDS
+    )
+    uncertainty_margin_seconds = float(
+        selected_final_profile["submission_uncertainty_margin_seconds"]
+        if selected_final_profile is not None
+        else SUBMISSION_UNCERTAINTY_MARGIN_SECONDS
+    )
 
     maximum = (
         selected_candidate_profile["storage"]["maximum_authority_effect_reservation"]
@@ -407,6 +434,7 @@ def _run_admitted(
             final_need,
             pool=Pool.TERMINAL,
             retention=RetentionPolicy.RECEIPT,
+            retry_aborted=True,
         )
 
     final_interval = FinalIntervalController(
@@ -419,6 +447,9 @@ def _run_admitted(
         enabled_lanes=tuple(f"lane-{index}" for index in range(1, dials.concurrency + 1)),
         now=clock.now,
         reserve=reserve_final_authority,
+        account_post_interval_seconds=post_interval_seconds,
+        submission_request_deadline_seconds=request_deadline_seconds,
+        submission_uncertainty_margin_seconds=uncertainty_margin_seconds,
         reserve_terminal=reserve_terminal_authority,
         event_store=recorder.event_store,
         write_authority=recorder.write_authority,
@@ -667,6 +698,10 @@ def _run_admitted(
             board_identity=held.url,
             monotonic=clock.monotonic,
             wall_time=clock.wall_time,
+            sleep=clock.sleep,
+            post_interval_seconds=post_interval_seconds,
+            request_deadline_seconds=request_deadline_seconds,
+            uncertainty_margin_seconds=uncertainty_margin_seconds,
         )
         submission = submission_runtime.submission
         stack.callback(submission_runtime.close)
@@ -677,6 +712,7 @@ def _run_admitted(
             run_id=held.run_id,
             boot_id=boot_id,
             context_for=context_for,
+            lane_for_attempt=lane_controller.lane_for_attempt if lane_controller is not None else None,
         )
         final_interval_generation = recorder.generations.acquire("final-interval", f"final-interval:{boot_id}")
         final_candidate_queue = FinalCandidateQueue(
@@ -741,11 +777,7 @@ def _run_admitted(
         final_interval=final_interval,
         final_candidate_preparation=observed_candidate_sink,
         final_candidate_queue=final_candidate_queue,
-        initial_leases=(
-            {grant.challenge_id: grant for grant in lease_coordinator.leases()}
-            if lease_coordinator is not None
-            else None
-        ),
+        initial_leases=(_active_initial_leases(lease_coordinator) if lease_coordinator is not None else None),
         now=clock.now,
         sleep=clock.sleep,
     )

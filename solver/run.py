@@ -31,7 +31,8 @@ from pathlib import Path
 
 from solver import codex, prompt, recon
 from solver.attempt_progress import ProgressController
-from solver.final_interval import FinalIntervalController
+from solver.attempt_executor_contracts import EnvelopeSpec, NetworkPolicy
+from solver.final_interval import FinalIntervalController, RunInventory
 from solver.final_interval_runtime import FinalIntervalRuntime
 from solver.attempt_progress_contracts import (
     EvidenceArtifact,
@@ -326,14 +327,12 @@ class Run:
         self._stopping = ""
         self._crashed = ""
         self._lane_controller = lane_controller
-        self._ending_type = Ending
-        self._final_runtime = FinalIntervalRuntime(self) if final_interval is not None else None
         self._lane_picks: dict[str, Pick] = {}
         self._lane_owner_condition = threading.Condition()
-        self._lane_active: set[str] = set()
+        self._lane_active: dict[str, int] = {}
         self._lane_cancelled: set[str] = set()
-        self._lane_order = lane_order or (self._final_runtime.lane_order if lane_controller is not None else None)
-        self._lane_execute = lane_execute or (self._final_runtime.lane_execute if lane_controller is not None else None)
+        self._lane_order = lane_order or (self._acquire_lane_work if lane_controller is not None else None)
+        self._lane_execute = lane_execute or (self._execute_lane_work if lane_controller is not None else None)
         self._final_interval = final_interval
         self._final_candidate_preparation = final_candidate_preparation
         self._final_candidate_queue = final_candidate_queue
@@ -355,16 +354,23 @@ class Run:
     def work(self) -> Ending:
         """Take Attempts until the clock can no longer buy one, then run the reserved tail.
 
-        A crash is one of the two ways a Run ends, and it still owes the tail: an Instance held when
-        the process exits is capacity nobody reclaims, and a candidate the gate held back is a Flag
-        we found and never sent. So the loop is caught here rather than at the entry point, where
-        the tail would already have been skipped.
+        A software crash, or a stop before the official end of a canonical final-interval Run,
+        cannot author a terminal result for a Boot that no longer controls the world. Report its
+        durable inventory and let the supervisor's next Boot recover it. The legacy v1 path still
+        owns its bounded shutdown and reaches its tail on a deliberate stop.
         """
         try:
             self._loop()
         except Exception as broken:
             self._stopping = CRASHED
             self._crashed = f"{type(broken).__name__}: {broken}"
+            return Ending(
+                CRASHED,
+                attempts=self._attempts,
+                flags=tuple(self._won),
+                left_held=tuple(str(challenge_id) for challenge_id in self._leases),
+                detail=self._crashed,
+            )
         observations = self._route_controller.observations()
         if observations and self._stopping != CRASHED:
             write_route_receipt(
@@ -373,7 +379,10 @@ class Run:
                 self._route_controller.policy,
                 observations,
             )
-        return self._final_runtime.close() if self._final_runtime is not None else self._tail()
+        if self._final_interval is None:
+            return self._tail()
+        self._steps.restart()
+        return FinalIntervalRuntime(self._final_interval, self._final_candidate_queue, self, now=self._now).close()
 
     def _loop(self) -> None:
         if self._lane_controller is not None:
@@ -407,15 +416,23 @@ class Run:
                 self._sleep(self._idle_seconds)
                 continue
             final_grant = None
-            if (
-                self._final_interval is not None
-                and self._final_interval.admission_mode("lane-1").value == "final-chance"
-            ):
-                final_grant = self._final_interval.reserve_final_chance("lane-1", str(pick.challenge.challenge_id))
-                if final_grant is None:
+            if self._final_interval is not None:
+                mode = self._final_interval.admission_mode("lane-1").value
+                if mode in {"submission-reserve", "closed"}:
+                    self._scheduler.release(Ended(pick.challenge.challenge_id, "admission-window-closed", 0, 0))
+                    break
+                if mode == "final-chance":
+                    final_grant = self._final_interval.reserve_final_chance("lane-1", str(pick.challenge.challenge_id))
+                if mode == "final-chance" and final_grant is None:
                     self._scheduler.release(Ended(pick.challenge.challenge_id, "final-chance-spent", 0, 0))
                     continue
-            held = self._attempt(pick, final_grant=final_grant)
+                if final_grant is not None:
+                    try:
+                        self._final_interval.spend_final_chance(final_grant)
+                    except ValueError:
+                        self._scheduler.release(Ended(pick.challenge.challenge_id, "admission-window-closed", 0, 0))
+                        break
+            held = self._attempt(pick)
             try:
                 self._scheduler.release(
                     Ended(pick.challenge.challenge_id, held.cause, self._spent(held), held.checkpoints)
@@ -481,17 +498,28 @@ class Run:
     def _attempt(self, pick: Pick, *, lane_binding: LaneBinding | None = None, final_grant=None) -> _Held:
         if lane_binding is None:
             return self._attempt_owned(pick, final_grant=final_grant)
-        with self._lane_owner_condition:
-            if lane_binding.attempt_id in self._lane_cancelled:
-                raise RuntimeError("Lane owner was cancelled before execution")
-            self._lane_active.add(lane_binding.attempt_id)
+        self._enter_lane_owner(lane_binding)
         try:
             return self._attempt_owned(pick, lane_binding=lane_binding, final_grant=final_grant)
         finally:
-            with self._lane_owner_condition:
-                self._lane_active.discard(lane_binding.attempt_id)
+            self._exit_lane_owner(lane_binding)
+
+    def _enter_lane_owner(self, lane_binding: LaneBinding) -> None:
+        with self._lane_owner_condition:
+            depth = self._lane_active.get(lane_binding.attempt_id, 0)
+            if depth == 0 and lane_binding.attempt_id in self._lane_cancelled:
+                raise RuntimeError("Lane owner was cancelled before execution")
+            self._lane_active[lane_binding.attempt_id] = depth + 1
+
+    def _exit_lane_owner(self, lane_binding: LaneBinding) -> None:
+        with self._lane_owner_condition:
+            depth = self._lane_active.get(lane_binding.attempt_id, 0)
+            if depth <= 1:
+                self._lane_active.pop(lane_binding.attempt_id, None)
                 self._lane_cancelled.discard(lane_binding.attempt_id)
                 self._lane_owner_condition.notify_all()
+            else:
+                self._lane_active[lane_binding.attempt_id] = depth - 1
 
     def _attempt_owned(self, pick: Pick, *, lane_binding: LaneBinding | None = None, final_grant=None) -> _Held:
         """One Attempt: open it with recon, take turns until something ends it, close it.
@@ -1165,6 +1193,166 @@ class Run:
             (one for one in self._intake.snapshot.challenges if one.challenge_id == challenge.challenge_id), None
         )
         return current.solves if current else challenge.solves
+
+    def _acquire_lane_work(self, snapshot, excluded: frozenset[str]) -> tuple[WorkCandidate, ...]:
+        pick = self._scheduler.acquire(snapshot, leased=tuple(self._leases), solved=tuple(self._solved))
+        if pick is None:
+            return ()
+        if str(pick.challenge.challenge_id) in excluded:
+            self._scheduler.release(Ended(pick.challenge.challenge_id, "lane-cycle-excluded", 0, 0))
+            return ()
+        work_id = str(pick.challenge.challenge_id)
+        self._lane_picks[work_id] = pick
+        budget = max(0.001, (pick.deadline - self._now()).total_seconds())
+        profile = self._lane_controller.profile
+        envelope = EnvelopeSpec(
+            cpu_seconds=budget,
+            cpu_quota_us=max(1, profile.global_cpu_quota_us // profile.lanes),
+            memory_bytes=max(1, profile.global_memory_bytes // profile.lanes),
+            pids=max(1, profile.global_pids // profile.lanes),
+            filesystem_bytes=max(1, profile.global_filesystem_bytes // profile.lanes),
+            network=NetworkPolicy.DENY,
+            wall_seconds=budget,
+            cleanup_seconds=profile.global_cleanup_seconds,
+        )
+        return (
+            WorkCandidate(
+                work_id,
+                min(pick.order_ranks.values()),
+                budget,
+                1,
+                None,
+                envelope,
+                tier=pick.tier,
+            ),
+        )
+
+    def _execute_lane_work(self, _sighting, binding: LaneBinding) -> LaneOutcome:
+        pick = self._lane_picks.pop(binding.work_id)
+        self._enter_lane_owner(binding)
+        try:
+            try:
+                held = self._attempt(pick, lane_binding=binding)
+                self._sweep(attempt_id=held.attempt_id, keeping=None)
+            finally:
+                cause = held.cause if "held" in locals() else CRASHED
+                spent = self._spent(held) if "held" in locals() else 0.0
+                checkpoints = held.checkpoints if "held" in locals() else 0
+                self._scheduler.release(Ended(pick.challenge.challenge_id, cause, spent, checkpoints))
+        finally:
+            self._exit_lane_owner(binding)
+        if held.cause == CRASHED:
+            # The LaneController contains a final-chance worker failure; it must not cancel the
+            # submission reserve and cleanup authority owned by the Run.
+            return LaneOutcome.failed(binding, held.cause)
+        return LaneOutcome.complete(binding, seconds=self._spent(held))
+
+    def wait_until(self, deadline: dt.datetime) -> bool:
+        while not self._stopping and self._now() < deadline:
+            self._sleep(min(self._idle_seconds, (deadline - self._now()).total_seconds()))
+        return bool(self._stopping)
+
+    def interrupted_boot(self) -> Ending:
+        """Report a stopped canonical Boot without claiming terminal cleanup or close."""
+        return Ending(
+            cause=self._stopping or SIGNALLED,
+            attempts=self._attempts,
+            flags=tuple(self._won),
+            left_held=tuple(str(challenge_id) for challenge_id in self._leases),
+            detail=self._crashed,
+        )
+
+    def final_inventory(self) -> RunInventory:
+        if self._final_candidate_queue is None:
+            submissions = tuple(
+                hashlib.sha256(candidate.text.encode()).hexdigest()
+                for row in self._pending.values()
+                for candidate in row.candidates
+            )
+        else:
+            recorded = self._final_interval.receipt()["submissions"]
+            pending = set(self._final_candidate_queue.pending_candidate_ids())
+            unsettled = {
+                candidate_id for candidate_id, row in recorded.items() if row.get("outcome") == "possibly-sent"
+            }
+            unsubmitted = tuple(
+                candidate for candidate in self._final_candidate_queue.candidate_ids() if candidate not in recorded
+            )
+            submissions = tuple(dict.fromkeys((*unsubmitted, *sorted(pending | unsettled))))
+        return RunInventory(
+            attempts=tuple(
+                state.attempt_id for state in self._recorder.generations.projection().generations if state.active
+            ),
+            instances=tuple(str(key) for key in self._leases),
+            submissions=submissions,
+        )
+
+    def finish_final_interval(self, terminal, left_held: tuple[str, ...], unswept: str) -> Ending:
+        cause = self._stopping or WINDOW_CLOSED
+        self._recorder.run_close(cause=f"{cause} — {self._crashed}" if self._crashed else cause)
+        self._pending.clear()
+        return Ending(
+            cause=cause,
+            attempts=self._attempts,
+            flags=tuple(self._won),
+            left_held=tuple(dict.fromkeys((*left_held, *terminal["remaining"].get("instances", ())))),
+            unswept=unswept,
+            detail=self._crashed or str(terminal["disposition"]),
+        )
+
+    def drain_legacy_candidates(self) -> None:
+        for pending in list(self._pending.values()):
+            candidates = {
+                hashlib.sha256(candidate.text.encode()).hexdigest(): candidate for candidate in pending.candidates
+            }
+
+            def submit(candidate_id: str) -> str:
+                outcome = self._flags.submit(
+                    (candidates[candidate_id],),
+                    attempt_id=TAIL,
+                    challenge_id=pending.challenge_id,
+                    slots=self._slots_now(pending.challenge_id),
+                    workdir=pending.workdir,
+                    lease=self._leases.get(pending.challenge_id),
+                    last_call=True,
+                    generation_id=pending.generation_id,
+                )
+                if outcome.flag:
+                    self._won.append(outcome.flag)
+                if outcome.solved:
+                    return "accepted"
+                return "rejected" if outcome.graded else "refused-and-spent"
+
+            self._final_interval.drain(tuple(candidates), submit)
+        self._pending.clear()
+
+    def reclaim_final_resources(self) -> tuple[tuple[str, ...], str, dict[str, str]]:
+        outcomes = {}
+        for challenge_id in list(self._leases):
+            identity = f"instance:{challenge_id}"
+            try:
+                answer = self._instances.terminate(challenge_id, attempt_id=TAIL)
+            except Exception:
+                outcomes[identity] = "unsettled"
+            else:
+                outcomes[identity] = "released" if answer.released else "unsettled"
+                if answer.released:
+                    self._leases.pop(challenge_id, None)
+        try:
+            left_held, unswept = self._sweep(attempt_id=TAIL, keeping=None)
+        except Exception as error:
+            left_held, unswept = tuple(str(key) for key in self._leases), type(error).__name__
+        for state in self._recorder.generations.projection().generations:
+            if not state.active:
+                continue
+            identity = f"attempt:{state.attempt_id}"
+            try:
+                self._recorder.interrupt_generation(state.generation_id)
+            except Exception:
+                outcomes[identity] = "unsettled"
+            else:
+                outcomes[identity] = "released"
+        return left_held, unswept, outcomes
 
     def _tail(self) -> Ending:
         """The reserved tail, in the order its four jobs have to happen in.

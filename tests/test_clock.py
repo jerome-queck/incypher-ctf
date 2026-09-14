@@ -17,6 +17,7 @@ def _signed(tmp_path: Path):
     document = {
         "image_digest": "sha256:" + "a" * 64,
         "kind": "exact-image-qualification-clock",
+        "anchor_unix_seconds": 1_790_038_800.0,
         "opened_at": "2026-09-22T01:00:00+00:00",
         "rate": 60,
         "rules": {
@@ -100,3 +101,16 @@ def test_acceleration_uses_one_wall_and_monotonic_timeline():
     assert clock.now() == opened + dt.timedelta(seconds=30)
     assert clock.monotonic() == (opened + dt.timedelta(seconds=60)).timestamp()
     assert clock.wall_time() == (opened + dt.timedelta(seconds=90)).timestamp()
+
+
+def test_accelerated_clock_carries_signed_elapsed_time_across_boots():
+    ticks = iter((100.0, 101.0))
+    opened = dt.datetime(2026, 9, 22, 1, tzinfo=dt.UTC)
+    clock = SignedQualificationClock(
+        opened,
+        60,
+        monotonic=lambda: next(ticks),
+        initial_elapsed_seconds=10.0,
+    )
+
+    assert clock.now() == opened + dt.timedelta(seconds=660)

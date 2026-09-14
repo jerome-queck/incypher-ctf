@@ -326,6 +326,9 @@ class AmbiguousSubmissionFence:
     def pending(self) -> tuple[PendingSubmission, ...]:
         return tuple(state for state in self._states().values() if state.disposition is SubmissionDisposition.PENDING)
 
+    def dispositions(self) -> dict[str, str]:
+        return {candidate_id: state.disposition.value for candidate_id, state in self._states().items()}
+
     def effect_state(self, reservation_id: str):
         return self._authority.current(reservation_id)
 

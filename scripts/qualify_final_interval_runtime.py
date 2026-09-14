@@ -118,7 +118,7 @@ def launch_until_terminal(
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def launch_until_final_chance_then_crash(command: list[str], state: Path, *, timeout: float = 30):
+def launch_until_final_chance_then_crash(command: list[str], state: Path, *, timeout: float = 45):
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.monotonic() + timeout
     observed = []
@@ -175,8 +175,9 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
         configuration = {
             "image_digest": binding.image_manifest_digest,
             "kind": "exact-image-qualification-clock",
+            "anchor_unix_seconds": time.time(),
             "opened_at": "2026-09-22T01:00:00+00:00",
-            "rate": 10,
+            "rate": 3,
             "rules": {
                 "event": "controlled-final-interval",
                 "flag_wrappers": [r"qualification\{[^}]+\}"],
@@ -226,10 +227,9 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
                 ),
             )
         except RuntimeError:
-            diagnostic = ROOT / ".cache/final-interval-failure"
-            shutil.rmtree(diagnostic, ignore_errors=True)
+            diagnostic = Path(tempfile.mkdtemp(prefix="final-interval-failure-", dir=ROOT / ".cache"))
             if (state / "runs").is_dir():
-                shutil.copytree(state / "runs", diagnostic)
+                shutil.copytree(state / "runs", diagnostic / "runs")
             raise
         endpoint.shutdown()
         thread.join(timeout=5)
@@ -321,8 +321,7 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
         try:
             evaluator = evaluate(destination, manifest, private_key, destination / "final-interval.evaluator.json")
         except Exception:
-            diagnostic = ROOT / ".cache/final-interval-failure"
-            shutil.rmtree(diagnostic, ignore_errors=True)
+            diagnostic = Path(tempfile.mkdtemp(prefix="final-interval-failure-", dir=ROOT / ".cache"))
             shutil.copytree(run, diagnostic / run.name)
             atomic_write(diagnostic / "container.stdout", completed.stdout.encode())
             atomic_write(diagnostic / "container.stderr", completed.stderr.encode())
@@ -339,4 +338,3 @@ def qualify(binding, private_key: Path, source_manifest: Path, destination: Path
             check=False,
             capture_output=True,
         )
-        shutil.rmtree(state)

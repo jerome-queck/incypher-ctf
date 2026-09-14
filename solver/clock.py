@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import math
 import subprocess
 import time
 from collections.abc import Mapping
@@ -51,12 +52,20 @@ class SystemClock:
 class SignedQualificationClock:
     """Accelerated clock admitted only by a trusted exact-image control."""
 
-    def __init__(self, opened_at: dt.datetime, rate: int, *, monotonic=time.monotonic) -> None:
+    def __init__(
+        self,
+        opened_at: dt.datetime,
+        rate: int,
+        *,
+        monotonic=time.monotonic,
+        initial_elapsed_seconds: float = 0.0,
+    ) -> None:
         self._opened_at, self._rate, self._monotonic = opened_at, rate, monotonic
+        self._initial_elapsed_seconds = initial_elapsed_seconds
         self._origin = monotonic()
 
     def now(self) -> dt.datetime:
-        elapsed = (self._monotonic() - self._origin) * self._rate
+        elapsed = (self._initial_elapsed_seconds + self._monotonic() - self._origin) * self._rate
         return self._opened_at + dt.timedelta(seconds=elapsed)
 
     def monotonic(self) -> float:
@@ -110,7 +119,16 @@ def qualification_from_environment(environ: Mapping[str, str]) -> QualificationC
     document = json.loads(raw)
     if raw != canonical_bytes(document) + b"\n":
         raise ValueError("qualification clock is not canonical")
-    if set(document) != {"schema_version", "kind", "image_digest", "opened_at", "rate", "rules", "seed"}:
+    if set(document) != {
+        "schema_version",
+        "kind",
+        "image_digest",
+        "anchor_unix_seconds",
+        "opened_at",
+        "rate",
+        "rules",
+        "seed",
+    }:
         raise ValueError("qualification clock shape is invalid")
     if document["schema_version"] != 1 or document["kind"] != "exact-image-qualification-clock":
         raise ValueError("qualification clock contract is invalid")
@@ -121,7 +139,15 @@ def qualification_from_environment(environ: Mapping[str, str]) -> QualificationC
         opened_at = dt.datetime.fromisoformat(document["opened_at"])
     except (TypeError, ValueError):
         raise ValueError("qualification clock opening is invalid") from None
-    if opened_at.tzinfo is None or not isinstance(document["rate"], int) or not 1 <= document["rate"] <= 3600:
+    anchor = document["anchor_unix_seconds"]
+    if (
+        opened_at.tzinfo is None
+        or type(anchor) not in {int, float}
+        or not math.isfinite(float(anchor))
+        or anchor <= 0
+        or not isinstance(document["rate"], int)
+        or not 1 <= document["rate"] <= 3600
+    ):
         raise ValueError("qualification clock rate is invalid")
     rules = document["rules"]
     required = {"event", "url", "flag_wrappers", "window_seconds", "prohibitions", "requires", "web_search"}
@@ -148,7 +174,13 @@ def qualification_from_environment(environ: Mapping[str, str]) -> QualificationC
     if document["seed"] not in {"", "final-interval-v1"}:
         raise ValueError("qualification seed is unsupported")
     return QualificationConfiguration(
-        SignedQualificationClock(opened_at, document["rate"]), selected_rules, str(document["seed"])
+        SignedQualificationClock(
+            opened_at,
+            document["rate"],
+            initial_elapsed_seconds=max(0.0, time.time() - float(anchor)),
+        ),
+        selected_rules,
+        str(document["seed"]),
     )
 
 

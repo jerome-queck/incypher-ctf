@@ -1,6 +1,7 @@
 """Bind ambiguity fencing to the serial Board submission authority."""
 
 import hashlib
+from collections.abc import Callable
 
 from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.write_reservation import EffectIndeterminate
@@ -9,17 +10,33 @@ from solver.write_reservation import EffectIndeterminate
 class AmbiguityAwareSerialSubmission:
     """Adapter whose SerialSubmission reservation uses the complete ADR-0052 identity."""
 
-    def __init__(self, serial, fence, identity_for, *, epoch_authority=None, board_identity=None):
+    def __init__(
+        self,
+        serial,
+        fence,
+        identity_for,
+        *,
+        epoch_authority=None,
+        board_identity=None,
+        quiesce: Callable[[], None] = lambda: None,
+    ):
         self._serial, self._fence, self._identity_for = serial, fence, identity_for
         self._epochs, self._board_identity = epoch_authority, board_identity
         self._prepared = {}
         self._deferred = set()
+        self._quiesce = quiesce
+
+    def quiesce(self) -> None:
+        self._quiesce()
 
     def pending_count(self):
         return self._serial.pending_count()
 
     def pending_candidate_ids(self):
         return tuple(item.candidate_id for item in self._fence.pending())
+
+    def submission_dispositions(self):
+        return self._fence.dispositions()
 
     def was_dispatched(self, admission):
         complete = self._identity_for(admission.candidate)
@@ -46,7 +63,7 @@ class AmbiguityAwareSerialSubmission:
             self._prepared[candidate_id] = complete
         return complete
 
-    def dispatch(self, admission, *, binding):
+    def dispatch(self, admission, *, binding, deadline=None):
         def prepare():
             complete = self.prepare(admission)
             original_id = admission.candidate.identity
@@ -63,6 +80,7 @@ class AmbiguityAwareSerialSubmission:
                 admission,
                 binding=binding,
                 prepare=prepare,
+                deadline=deadline,
                 predecessor_dispatched=lambda candidate_id: (
                     candidate_id in self._deferred or self._fence.was_possibly_sent(candidate_id)
                 ),
