@@ -1,5 +1,9 @@
 # One hidden competition rig produces every local Gate receipt
 
+> **Release Gate superseded by [ADR-0059](0059-v2-is-the-final-competition-candidate.md).** The rig
+> remains useful controlled test infrastructure, but the final v2 rehearsal uses the official
+> practice Board and its live Targets.
+
 > **The selection matrix and its receipt are replaced by
 > [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Component calibration
 > no longer promotes: three fresh descriptive matched whole-profile pairs select the exact

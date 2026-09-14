@@ -32,27 +32,13 @@ tested against a fake transport; what is missing is a real one.
 is the verdict and its two rules: the first Board that can prove it discharges it, and it expires
 at the final gate.
 
-**Two versions remain.**
-[ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md),
-as amended by
-[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md), carries the
-live roadmap and historical mappings. **v2 is a finite mandatory fieldable Core plus three
-proof-earned Capability Packs**: model-assisted novel Recovery, the full host Observer and external
-practice candidate-image repair. Both native and CPA inference, productive topology, adaptive
-routing and the fieldable Tool surface remain Core; the exact proved profile selects what is
-enabled. The wholly external local competition rig supplies controlled proofs and one 5.5-hour Run
-without making the Solver depend on the rig or actual IN-CYPHER backend implementation. **v3 is
-only the evidence-backed official competition delta and freeze** from 14 September. Late v2 and v3
-work may proceed together; coordination targets do
-not block progress, and the hard deadline is a fieldable candidate before competition starts on 22
-September morning.
-
-The ADK, real PoW and unpublished competition facts are the parts that wait on somebody else. They
-are released from 14 September 2026, eight days before the scored run, and
-[ADR-0008](docs/adr/0008-one-image-for-every-board-and-two-seams-instead-of-one.md) puts it behind
-`Target` rather than `Board`. The Solver is built to *accept* it, never on top of it — one that
-could not ship without it would have bet the competition on an unseen release. `CONTEXT.md`'s **ADK**
-entry is the rest.
+**One version remains: the final competition v2.**
+[ADR-0059](docs/adr/0059-v2-is-the-final-competition-candidate.md) supersedes the planned v2/v3
+split. The official practice Board now exposes 15 Challenges across seven Categories, both
+`standard` and `dynamic_iac` delivery, and two Flag wrappers. Work is cut to the smallest released-
+surface-complete Solver: audit what already works, close only observed functional gaps, assemble one
+image, and run it unattended for 5.5 hours on the official practice Board. Optional Packs, unused
+tool breadth, six-arm policy selection and legacy cleanup no longer block fielding.
 
 ## Getting started
 

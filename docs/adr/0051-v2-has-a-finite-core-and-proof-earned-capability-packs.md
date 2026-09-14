@@ -1,5 +1,9 @@
 # v2 has a finite Core and proof-earned Capability Packs
 
+> **Final scope superseded by [ADR-0059](0059-v2-is-the-final-competition-candidate.md).** v2 is the
+> competition candidate. Optional Packs and unused breadth no longer block it; current-code audit
+> plus official practice evidence select the remaining work.
+
 > **The selected configuration is sharpened into one exact profile by
 > [ADR-0055](0055-one-score-basis-qualifies-one-release-candidate-profile.md).** Its manifest digest
 > binds routes and route-change policy, enabled topology, model, effort, prompts, Tools, decision

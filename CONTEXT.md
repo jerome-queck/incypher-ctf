@@ -29,9 +29,10 @@ _Avoid_: problem, task (a `task` is a repository issue label — a different thi
 **Category**:
 The Board's own label for what kind of problem a Challenge is — `web`, `pwn`, `crypto`, `rev`,
 `forensics`, `misc`, and whatever else an event decides to ship. **It is an open string read from
-the Board, never an enum in our code.** IN-CYPHER's practice Board namespaces its own as
-`(Practice) forensics` and `(Practice) misc`; the organisers describe the set as the classic
-categories *and more*. A Challenge's CTFd `type` is open in the same way — BrunnerCTF ships a
+the Board, never an enum in our code.** IN-CYPHER's released practice Board namespaces seven of
+its own, including `(Practice) network`, `(Practice) forensics` and `(Practice) misc`; the
+organisers describe the set as the classic categories *and more*. A Challenge's CTFd `type` is
+open in the same way — BrunnerCTF ships a
 `flightops` alongside the standard ones. Code that switches on a fixed list does not fail loudly
 when an event ships a category it has never met; it silently drops the Challenge.
 _Avoid_: kind, track, genre. Not `type` either — that is CTFd's separate field for how a
@@ -47,10 +48,11 @@ healthcare is a setting over the ordinary ones.
 
 **Flag**:
 The string that proves a Challenge is solved, submitted to the Board by the Solver. **The wrapper
-is a property of the Board, not of the domain** — IN-CYPHER's is `flag{…}`, BrunnerCTF's is
-`brunner{.*}` with any text as the body, and a practice Board we have not met yet will have its
-own. So will its rules, its scoring, and its categories: each Board is read at the start of the
-event, not assumed. A Solver that hardcodes one event's wrapper finds nothing at the next.
+is a property of the Board, not of the domain** — IN-CYPHER's guide now states `INCYPHER{…}` while
+several released Isolated Challenge descriptions still state `flag{…}`; its practice profile must
+therefore recognise both. BrunnerCTF's is `brunner{.*}` with any text as the body. So will each
+Board have its own rules, scoring and Categories: read them rather than assuming. A Solver that
+hardcodes one event's wrapper finds nothing at the next.
 
 **A Board states its wrappers as a list, and a list of one is the ordinary case.** Where it states
 more, every shape is matched **separately** over the same bytes and they are never joined into one
@@ -889,9 +891,11 @@ _Avoid_: provider, driver, backend, plugin. Not **seam** either: the seam is the
 Adapter is what sits behind it, so a sentence naming both is usually confusing one of them.
 
 **ADK**:
-The competition's Agent Development Kit, due for release 14 September 2026, including the
-`solver.connect(host, port, team_key)` helper that clears a PoW gate. The organisers also call it
-the **Hackathon Starter Pack**; the two names mean one thing, and `ADK` is the one used here.
+The competition's Agent Development Kit, including the promised
+`solver.connect(host, port, team_key)` helper that clears a PoW gate. The platform guide moved its
+release from 14 to 21 September 2026 while the Imperial agenda still states 14 September; no kit or
+runnable demo was linked with the 14 September practice release. The organisers also call it the
+**Hackathon Starter Pack**; the two names mean one thing, and `ADK` is the one used here.
 **The Solver is built to accept it, never on top of it** — it arrives eight days before the scored
 run, so it sits behind the same adapter seam a Board does, and a Solver that cannot ship without it
 has bet the competition on an unseen release (ADR-0006).
@@ -900,69 +904,49 @@ _Avoid_: SDK, framework
 These terms are about how this repository is governed rather than about the domain:
 
 **v2 Core**:
-The finite mandatory capability set which makes the pre-final Solver safe and fieldable. Every
-exact release candidate that claims a v2 pass implements and proves Core support, although its
-sealed profile may disable measured capacity such as a second Lane or Specialists. A missing Core
-row keeps v2 incomplete; neither a date nor fielding a partial release candidate creates a pass
-([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
+The functionality required by the final competition Solver: the released Board/Target path,
+unattended control, inference and the Category tools an audit shows it needs. It is selected by
+competition usefulness and live evidence, not by completing every historical proof row
+([ADR-0059](docs/adr/0059-v2-is-the-final-competition-candidate.md)).
 _Avoid_: minimum viable product, baseline, must-have list, enabled profile
 
 **Capability Pack**:
-One predeclared coherent optional bundle which supplies no Core safety invariant and can be disabled
-independently. A Pack joins an exact Candidate only after its own proof; otherwise it stays disabled
-or omitted with its source issue and reason. A Pack is not a Version and omission never silently
-makes it v3
-([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)).
+A historical v2 planning bundle for optional behavior. Packs remain useful vocabulary in retained
+evidence, but none blocks the final competition candidate and no later Version is reserved for them
+([ADR-0059](docs/adr/0059-v2-is-the-final-competition-candidate.md)).
 _Avoid_: stretch goal, plugin, feature flag, later Version
 
 **Release-candidate manifest**:
-The sealed declaration for one exact image and configuration which classifies every planned
-capability as Core or Pack and records its implementation, proof, evidence, enablement or omission,
-source issue and reason. It binds the selected Release-candidate profile and links the
-Policy-qualification receipt which selected it. The manifest reports a release candidate; it cannot
-waive a Core obligation, describe a Flag Candidate or manufacture evidence
-([ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md),
-[ADR-0055](docs/adr/0055-one-score-basis-qualifies-one-release-candidate-profile.md)).
+The sealed declaration for one exact image and configuration: enabled routes, topology, Tools,
+resource limits and Board profile. It identifies what is fielded and links its smoke/live evidence;
+it is not a second exhaustive roadmap or a way to manufacture proof (ADR-0059).
 _Avoid_: Candidate manifest, roadmap, feature list, Gate report, image manifest
 
 **Release-candidate profile**:
-The exact enabled behaviour qualified for one release-candidate image. Its digest binds primary and
-alternate Inference routes and route-change policy; enabled Lane/Specialist topology; effective
-models, effort, prompts and Tools; Triage, Order, Tier, Cut, submission and Resource dials; and every
-enabled in-image Pack which can change scored behaviour. Core support outside that enabled profile
-still needs its own safety proof (ADR-0055).
+The exact enabled behavior for one release-candidate image. Its digest binds inference routes,
+Lane/Specialist topology, models, prompts, Tools and the effective Triage, Order, submission and
+Resource dials. Bounded smoke and live rehearsal choose it; a separate six-arm campaign does not.
 _Avoid_: operating policy, configuration, selected topology, candidate settings
 
 **Policy-qualification receipt**:
-The immutable machine-readable evidence that binds one incumbent/challenger whole-profile
-comparison: image and profile digests, Score basis and provenance, all six arm and Scenario
-receipts, analysis and validity rules, raw metrics, paired deltas, decision and permanent
-Selection-holdout retirement. A Release-candidate manifest links the receipt that selected its
-profile (ADR-0055).
+The historical machine-readable evidence for an incumbent/challenger whole-profile comparison.
+ADR-0059 removed the six-arm Selection campaign from the final v2 Gate; old receipts remain valid
+records but are not release prerequisites.
 _Avoid_: Gate receipt, experiment notes, comparison report, benchmark result
 
 **Version**:
-A capability set and the **Gate** that closes it — never a date. A date and a venue are *bindings*
-to a version, re-bound whenever the world moves, and re-binding one is not a change to the roadmap
-(ADR-0006's thesis, restated by
-[ADR-0033](docs/adr/0033-v2-is-the-complete-pre-final-solver-and-v3-is-only-the-official-delta.md),
-which carries the live table, as amended by
-[ADR-0051](docs/adr/0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md)). A version
-number written before this record resolves through that mapping, because earlier ADRs deliberately
-remain records of their own moment. v2 is the finite Core plus admitted Capability Packs; v3 is
-only the evidence-backed official competition delta and freeze. Their work may overlap.
+A capability set and the **Gate** that closes it — never a date. The roadmap now has landed v1 and
+one remaining final competition v2; official integration and freeze are part of v2 and no v3 is
+planned ([ADR-0059](docs/adr/0059-v2-is-the-final-competition-candidate.md)). Older version numbers
+remain records of their own moment and resolve through their contemporary roadmap ADRs.
 _Avoid_: milestone, release, phase, sprint. Not **tag** either: `v1` is a git tag *because* the
 version closed, and the tag is the receipt rather than the thing.
 
 **Gate**:
-The scheduled review that closes a **Version**. It reopens the prior version's decisions feature by
-feature, and it reaches one of three verdicts: **pass**; **fail**, which leaves the Version open and
-records what remains; or **Pending**, for a clause no binding of that Version could produce
-evidence for
-([ADR-0026](docs/adr/0026-a-gate-clause-with-no-venue-is-pending-and-the-gate-closes-without-it.md)).
-**A Gate does not block the calendar or another Version's useful work**, but the calendar does not
-make a failed Version complete, relabel a missing Core row or manufacture proof. The final Gate is
-also a real go/no-go (ADR-0033, ADR-0051).
+The review that closes a **Version**. The final v2 Gate is an operational go/no-go over the exact
+image and an unattended 19,800-second official-practice Run; it passes or records the concrete
+reason the candidate is not ready ([ADR-0059](docs/adr/0059-v2-is-the-final-competition-candidate.md)).
+Historical Gates could record **Pending** when no venue could supply evidence (ADR-0026).
 _Avoid_: milestone, review, sign-off. Emphatically not **Checkpoint**, which is a Run-level record
 this glossary already defines — a Gate is a verdict on a Run, a Checkpoint is a thing inside one.
 

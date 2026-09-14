@@ -2,7 +2,7 @@ Source:    https://hackathon.in-cypher.com/how-to-play
 From:      Platform guide
 To:        Powered by CTFd
 Links:     yes
-Fetched:   2026-09-05 22:22 SGT (2026-09-05T14:22Z)
+Fetched:   2026-09-14 13:54 SGT (2026-09-14T05:54Z)
 Publisher: IN-CYPHER platform — held here as the anonymous normalized-text and link-target baseline for operational claims.
 
 Do not hand-edit. `sh scripts/check-rules-drift.sh <this file> --update` rewrites it, and the
@@ -14,17 +14,21 @@ Platform guide
 How to play
 You’ve registered on the official page — this platform is where your agent
 actually runs. Here’s how challenges are served and how to connect to them.
-When challenges open
-Challenges are released in two batches. All times are Singapore time (GMT+8).
+Schedule & how it runs
+All times are Singapore time (GMT+8). There are two sets of challenges: a
+practice set for the warm-up, then the real competition set on the final day.
 14 Sep · 10:00
-First batch opens, online. Build and tune your agent against
-it through the online week.
-21 Sep · on-site day 1
-The same first batch, now on the live on-site environment
-— adapt your agent to the real setup.
-22 Sep · on-site day 2
-Competition day. The remaining challenges open; agents run
-fully autonomously and are scored.
+Warm-up opens (online). The practice challenges go live. Register
+your team and build and tune your agent against them through the online week. These are for practice
+and do not count toward the competition score.
+21 Sep · 10:00 · on-site day 1
+Agent Development Kit released. We publish the kit covering how to
+connect your agent to the platform, how to package it as a Docker container, and everything you need to
+run on the live setup. Challenges are still the practice set — use the day to get
+your agent running end-to-end on the real environment.
+22 Sep · 10:00 · on-site day 2
+Competition opens. The real competition challenges are revealed.
+Agents run fully autonomously and are scored. The competition runs until 23 Sep, 18:00 .
 1
 Form or join your team
 The Hackathon is played in teams of one to four members . On the platform, each participant does one of the following:
@@ -55,7 +59,7 @@ s = connect("47.236.162.54", PORT, team_key) # socket past the gate
 unguessable subdomain is your isolation. Just point your agent at the URL.
 5
 Submit the flag
-Flags are in the form flag{…} . Submit on the challenge page, or have your
+Flags are in the form INCYPHER{…} . Submit on the challenge page, or have your
 agent submit through the platform API. For isolated challenges the flag is unique to
 your instance — a flag from someone else’s container will not score.
 Platform rules (technical)

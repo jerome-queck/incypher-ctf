@@ -21,32 +21,46 @@ on 21 August; the complete How-to-play baseline was captured on 5 September.
 | | |
 |---|---|
 | Platform | CTFd at `https://hackathon.in-cypher.com`, with `ctfer-io/ctfd-chall-manager` |
-| Practice window | Open since 1 Jul 2026, closing **22 Sep 00:00 SGT** — midnight before the run |
-| Online build week | 14–20 Sep 2026; first batch opens **14 Sep 10:00 SGT** with the ADK |
-| Scored run | **22 Sep 10:30–16:00 SGT — 5.5 hours**, on-site at CREATE Tower |
-| Flags | `flag{…}` |
+| Practice window | 15 practice Challenges released 14 Sep; Board now closes **23 Sep 18:00 SGT** |
+| Online build week | Practice set from **14 Sep 10:00 SGT**; platform guide now moves the ADK to 21 Sep |
+| Scored run | **Conflicting sources:** Imperial agenda says 22 Sep 10:30–16:00; platform guide/Board run to 23 Sep 18:00 |
+| Flags | Guide says `INCYPHER{…}`; three Isolated descriptions still say `flag{…}`; final profile must accept both |
 | Scoring | **Unannounced.** "Full scoring details will be announced closer to the event day." |
 | Teams | One to four; university students. Score is recorded against the team. |
 | Categories | Web, pwn, crypto, reversing, forensics "and more", several set in medical scenarios |
 | Stakes | SGD 1,500 / 1,000 / 500, and the first-place team presents at the conference |
 
+## Release observed on 14 September
+
+The [practice-release research](../research/2026-09-14-in-cypher-practice-release.md) supersedes the
+pre-release observations below where they conflict. The actual release is explicitly non-scoring:
+15 practice Challenges across web, pwn, network, crypto, rev, forensics and misc; nine
+`dynamic_iac` Isolated Challenges and six `standard` Static Challenges. The exact Solver transport
+enumerates all 15 with the held token. Every Isolated Challenge states a 3,600-second TTL, zero mana
+cost, `shared: false`, `destroy_on_flag: false` and no attempt cap; practice mana total remains zero.
+
+The set is useful live compatibility evidence, not a hidden competition corpus. One description
+publishes its exact Flag, others are stale or truncated, and the competition set remains hidden
+until 22 September. ADR-0059 therefore binds the final v2 rehearsal to this Board while preserving
+the claim boundary: it proves live operation, not hidden-set composition or official rank.
+
 ## How-to-play claims and provenance
 
-This is the complete low-resolution ledger of claims in the 5 September How-to-play capture.
+This is the complete low-resolution ledger of claims in the 14 September How-to-play capture.
 **Organiser-stated** means only that the platform page says it. **Observed** means a dated read of
 the live Board. **Inferred** means our conclusion from a stated or observed fact. The exact wording
 and order live in the [capture](incypher-2026-hackathon.how-to-play.txt), not in this summary.
 
 | Claim | Provenance | Boundary |
 | --- | --- | --- |
-| The platform is where the agent runs; Challenges open in two batches: first online at 14 Sep 10:00 SGT, the same batch on-site on 21 Sep, and the remaining Challenges on the autonomous scored day on 22 Sep. | **Organiser-stated.** | “Where the agent runs” does not say who owns the host or starts the container. That remains inferred below. |
+| The platform is where the agent runs; non-scoring practice opens on 14 Sep, the ADK follows on 21 Sep, and the hidden scored set opens on 22 Sep and runs to 23 Sep 18:00 SGT. | **Organiser-stated.** | “Where the agent runs” does not say who owns the host or starts the container; the end time conflicts with Imperial's agenda. |
 | Teams contain one to four participants; one participant creates a named/passworded team, the others join it, and score belongs to the team. | **Organiser-stated; `userMode: "teams"` separately observed.** | Team mode and team scoring do not prove who owns a deployed Instance. |
 | Every member can view the Team key under Settings → Access Tokens; it identifies the team, crosses the raw-TCP gate, and must remain inside the team. | **Organiser-stated.** | The page does not call the Team key an API token, and the two credentials are not interchangeable. |
-| Static Challenges provide downloads or one shared service and one Flag for everyone. | **Organiser-stated.** | No Static competition-batch Challenge is visible yet. |
-| An Isolated deployment is labelled “per-player” and gives the deployer a container, private address and unspecified time limit; an expired Instance is redeployed. | **Organiser-stated.** | This attributes the deployment wording only. Whether team mode makes the held Instance personal or team-owned is unresolved until a real deployment or organiser clarification. |
+| Static Challenges provide downloads or one shared service and one Flag for everyone. | **Organiser-stated; six practice Static Challenges observed.** | No Static competition-batch Challenge is visible yet. |
+| An Isolated deployment is labelled “per-player” and gives the deployer a container and private address; all nine practice Instances state a 3,600-second TTL. | **Organiser-stated; practice TTL observed.** | Whether team mode makes the held Instance personal or team-owned remains unresolved until a real deployment or organiser clarification. |
 | Raw-TCP Targets use `nc 47.236.162.54 <port>` and a provided Python `solver.connect` helper to cross a Team-key-bound PoW gate. | **Organiser-stated.** | The helper/ADK and PoW algorithm are not linked yet, so neither has been observed. |
 | Web Targets use `https://<token>.in-cypher.com/`; the unguessable subdomain provides isolation and no PoW gate is used. | **Organiser-stated.** | No live Web Instance has been observed. |
-| Flags match `flag{…}` and may be submitted on the Challenge page or through the platform API; an Isolated Flag is unique to the Instance, and another Instance's Flag does not score. | **Organiser-stated.** | This is per-Instance Flag attribution, not evidence about who owns the Instance. The exact submission API, limits and competition-batch behavior remain unobserved. |
+| Flags match `INCYPHER{…}` and may be submitted on the Challenge page or through the platform API; an Isolated Flag is unique to the Instance, and another Instance's Flag does not score. | **Organiser-stated.** | Three released Isolated descriptions still state `flag{…}`. The final profile must tolerate both while the competition wrapper remains untested. |
 | Agents are autonomous during the Run; only provided Challenge systems are in scope; defensive research only; do not attack the Board, other teams or shared infrastructure; do not share Flags or solutions. | **Organiser-stated**, with the page deferring canonical authority to the official hackathon page. | Drift in either source matters; both baselines are checked below. |
 | The published Discord is the organiser discussion channel. | **Organiser-stated link; observed stale.** | The invite API returned expired on the 5 September recheck; publication does not prove usability. |
 | The page says it is powered by CTFd. | **Organiser-stated page identity.** | This establishes platform family, not an exact CTFd or plugin version. |
@@ -75,15 +89,13 @@ the [live-surface recheck](../research/2026-09-05-in-cypher-live-surface-recheck
 and [How the Solver learns which Instances it holds](https://github.com/jerome-queck/incypher-ctf/issues/156).
 
 **The tracked profile is [`incypher-2026-hackathon.board.json`](incypher-2026-hackathon.board.json)**:
-5.5 hours, closing 22 Sep 16:00 SGT. It deliberately does not take the board's own `window.init`
-values — those are the *practice* window, 1 Jul to 22 Sep 00:00 SGT, which closes ten and a half
-hours before the scored Run begins. The Solver reads the board's window at startup and records it
-beside the configured one rather than instead of it, so a post-mortem can see both.
+5.5 hours, closing 22 Sep 16:00 SGT. That follows the Imperial agenda and the selected rehearsal
+duration; the Board now advertises 23 Sep 18:00 SGT instead. The Solver records both rather than
+silently replacing one authority with the other.
 
-**The competition-day batch is challenges we have never seen.** Challenges are released in two
-batches: the first opens 14 Sep online and is *the same batch* again on-site on day 1, and "the
-remaining challenges open" on day 2. Day-1 tuning therefore cannot be tuning against the
-challenges that will be scored — whatever the Solver learns on day 1 has to generalise.
+**The competition-day batch is Challenges we have never seen.** The 15 released Challenges are
+explicitly practice-only and remain available on site; the scored set is revealed on 22 September.
+Practice tuning must therefore generalise rather than become a claim about the hidden set.
 
 ## What the rules forbid the Solver
 
@@ -380,8 +392,8 @@ fresh invite is published, the questions below have nowhere to go.** Three fallb
   `igsingapore@imperial.ac.uk`. Neither is hackathon-specific and neither is offered as a support
   channel, so a reply is not owed — but a dead invite in the organisers' own footer is worth
   reporting whatever else is asked.
-- **The 14 Sep online build week**, which the agenda says runs "with online support" — whatever
-  channel that turns out to be is the one these questions belong in.
+- **The practice/build week**, which the agenda says runs "with online support" — whatever channel
+  that turns out to be is the one these questions belong in.
 - **The day-1 workshop**, 11:30–12:15 on 21 Sep, "a walkthrough of how the platform, team key,
   interface connection, and demo agent work". Questions 1, 2 and 5 are answerable there by
   observation alone, even if nobody answers them out loud.
@@ -420,9 +432,9 @@ sh scripts/check-rules-drift.sh docs/competitions/incypher-2026-hackathon.how-to
 `source unchanged: <url>` and exit 0 means that source's normalized span matches its committed
 baseline; drift prints a diff and exits 1. The script is never silent on success, so **silence
 means it did not run** — check each exit status rather than reading nothing as reassurance. Run
-both commands at each build-session start, before 14 September, again on the morning of 21
-September, and again before the Run on 22 September. Scoring is explicitly still to be announced,
-so at least one source should change and the change is one we must read.
+both commands at each build-session start, on the morning of 21 September, and again before the Run
+on 22 September. Scoring and duration now conflict across first-party sources, so at least one
+source should change and the change is one we must read.
 
 To accept a reviewed change, rerun the drifting source with `--update`, then inspect the exact
 baseline diff before committing it:
@@ -446,5 +458,5 @@ curl -s -o /dev/null -w '%{http_code}\n' https://discord.com/api/v10/invites/MKU
 `200` means it finally works; `404` means still expired (see [Ask the
 organisers](#ask-the-organisers)).
 
-The exact ADK/first-batch ingest after 14 September 10:00 SGT remains owned by its separate map
-ticket; these commands detect that boundary crossing but do not interpret or implement it.
+Any ADK, scoring, duration or Challenge delta now enters final v2 directly under ADR-0059. These
+commands detect the boundary crossing; the current-code audit decides whether it requires behavior.

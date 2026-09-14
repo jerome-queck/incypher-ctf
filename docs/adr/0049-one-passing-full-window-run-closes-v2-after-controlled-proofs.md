@@ -1,5 +1,9 @@
 # One passing full-window Run closes v2 after controlled proofs
 
+> **Gate binding superseded by [ADR-0059](0059-v2-is-the-final-competition-candidate.md).** The
+> 19,800-second final rehearsal now runs on the official practice Board; the hidden local rig is no
+> longer the release venue.
+
 > **ADR-0057 moves the runtime to the Working volume. ADR-0058 records a 700 GiB initial disk
 > request and advisory physical-capacity observations. The former 40 GiB Run-state cap and
 > 20 GiB rig/control/Recovery disk allocation are advisory; neither restricts admission.**
