@@ -20,7 +20,11 @@ from solver.event_store import EventStore
 from solver.final_interval_profile import selected_profile_document
 from solver.final_interval_evaluator import link_manifest
 from solver.manifest import generate_manifest, parse_manifest
-from solver.submission.authority import SUBMISSION_REQUEST_DEADLINE_SECONDS, SUBMISSION_UNCERTAINTY_MARGIN_SECONDS
+from solver.submission.authority import (
+    ACCOUNT_POST_INTERVAL_SECONDS,
+    SUBMISSION_REQUEST_DEADLINE_SECONDS,
+    SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
+)
 from scripts.eval_final_interval import evaluate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +35,7 @@ QUALIFICATION_CLOCK_RATE = 2
 QUALIFICATION_FINAL_SUBMISSION_RESERVE_SECONDS = 60
 QUALIFICATION_ATTEMPT_FLOOR_SECONDS = 60
 QUALIFICATION_RESTART_HOST_BUDGET_SECONDS = 35
+QUALIFICATION_SEEDED_CANDIDATE_COUNT = 2
 QUALIFICATION_FINAL_CHANCE_TIMEOUT_SECONDS = 60
 QUALIFICATION_TERMINAL_TIMEOUT_SECONDS = 90
 TRUST_RECEIPT = {
@@ -44,9 +49,10 @@ def final_interval_restart_headroom_seconds() -> float:
     """Return simulated seconds between the final-chance threshold and safe wire start.
 
     The qualification image's cold replacement took about 30 host seconds in the retained
-    diagnostic, so the 35-second bound includes measured startup variation.  The calculation is
-    deliberately tied to the sealed reserve and submission safety dials: changing the accelerated
-    clock cannot silently make a restart miss the only legal POST start.
+    diagnostic, so the 35-second bound includes measured startup variation. Both seeded Candidates
+    must also fit the account pacing interval. The calculation is deliberately tied to the sealed
+    reserve and submission safety dials: changing the accelerated clock cannot silently make a
+    restart miss the only legal POST start.
     """
 
     safe_start_window = (
@@ -54,6 +60,7 @@ def final_interval_restart_headroom_seconds() -> float:
         + QUALIFICATION_ATTEMPT_FLOOR_SECONDS
         - SUBMISSION_REQUEST_DEADLINE_SECONDS
         - SUBMISSION_UNCERTAINTY_MARGIN_SECONDS
+        - ACCOUNT_POST_INTERVAL_SECONDS * (QUALIFICATION_SEEDED_CANDIDATE_COUNT - 1)
     )
     return safe_start_window - QUALIFICATION_CLOCK_RATE * QUALIFICATION_RESTART_HOST_BUDGET_SECONDS
 
@@ -171,6 +178,8 @@ def launch_until_final_chance_then_crash(
 def qualify(binding, private_key: Path, source_manifest: Path, destination: Path) -> Path:
     if not AUTH.is_file():
         raise RuntimeError("documented local Codex authentication is absent")
+    if final_interval_restart_headroom_seconds() <= 0:
+        raise RuntimeError("qualification clock cannot leave safe restart headroom for final submissions")
     board = QualificationBoard()
     endpoint = server(board)
     thread = threading.Thread(target=endpoint.serve_forever, daemon=True)
