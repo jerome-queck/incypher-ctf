@@ -23,7 +23,7 @@ PINNED_VERSIONS = {"colima": runtime.PIN.colima, "docker": runtime.PIN.docker}
 
 
 def test_the_accepted_allocation_is_the_pin():
-    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 200)
+    assert (runtime.PIN.cpu, runtime.PIN.memory_gib, runtime.PIN.disk_gib) == (8, 24, 700)
 
 
 def test_a_machine_on_the_pin_has_drifted_on_nothing():
@@ -55,6 +55,18 @@ def test_memory_is_compared_in_gib_so_a_rounded_byte_count_is_not_drift():
     rounded = PINNED_VM | {"memory": runtime.PIN.memory_gib * runtime.GIB - 1}
 
     assert runtime.drift(PINNED_VERSIONS, rounded) == []
+
+
+def test_a_larger_disk_is_accepted_as_available_capacity():
+    larger = PINNED_VM | {"disk": (runtime.PIN.disk_gib + 100) * runtime.GIB}
+
+    assert runtime.drift(PINNED_VERSIONS, larger) == []
+
+
+def test_disk_size_is_not_a_strict_runtime_identity():
+    smaller = PINNED_VM | {"disk": (runtime.PIN.disk_gib - 1) * runtime.GIB}
+
+    assert runtime.drift(PINNED_VERSIONS, smaller) == []
 
 
 def test_a_tool_off_the_pin_is_named_with_the_version_that_is_installed():

@@ -215,13 +215,12 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         str(strict_runtime.REPO_ROOT / "scripts/check_host_storage.py"),
         "development",
     ]
-    assert runner.commands[3] == ["docker", "builder", "prune", "--all", "--force"]
-    assert runner.commands[4] == [
+    assert runner.commands[3] == [
         strict_runtime.sys.executable,
         str(strict_runtime.REPO_ROOT / "scripts/check_host_storage.py"),
         "competition",
     ]
-    assert runner.commands[5] == [
+    assert runner.commands[4] == [
         "docker",
         "run",
         "--rm",
@@ -231,15 +230,15 @@ def test_launch_builds_then_uses_the_immutable_image_id_and_cleans_its_parent(
         "/bin/true",
         IMAGE_ID,
     ]
-    assert runner.commands[6] == strict_runtime.container_command(
+    assert runner.commands[5] == strict_runtime.container_command(
         IMAGE_ID,
         env_file=env_file,
         state=state,
         preflight_only=False,
         binding=image_binding(),
     )
-    assert runner.commands[7] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
-    assert IMAGE_ID in runner.commands[6]
+    assert runner.commands[6] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+    assert IMAGE_ID in runner.commands[5]
 
 
 def test_preflight_requires_no_env_or_state_and_runs_the_same_image(
@@ -400,10 +399,10 @@ def test_solver_profile_and_host_launcher_share_one_runtime_pin() -> None:
     from solver.isolation import STRICT_RUNTIME_PIN
 
     pin = strict_runtime.runtime.PIN
-    assert STRICT_RUNTIME_PIN == {
+    assert set(STRICT_RUNTIME_PIN) == {"colima", "docker", "cpu", "memory_gib"}
+    assert {
         "colima": pin.colima,
         "docker": pin.docker,
         "cpu": pin.cpu,
         "memory_gib": pin.memory_gib,
-        "disk_gib": pin.disk_gib,
-    }
+    } == STRICT_RUNTIME_PIN

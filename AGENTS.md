@@ -56,8 +56,10 @@ seconds** — proven, not
 assumed: `python3 scripts/restart_probe.py arm` before a reboot and `check` after one reaches a
 verdict by clock. It cost turning FileVault off; ADR-0013 records what that exposes.
 
-Before a development build run `python3 scripts/check_host_storage.py development`; before a scored
-Run use `competition`. The latter requires zero BuildKit cache. ADR-0057 owns the limits.
+Before development build use `python3 scripts/check_host_storage.py development`; before scored Run use
+`competition`. Both report storage observations, refuse only unavailable/misplaced runtime, and never
+block on size. `runtime.py start` requests 700 GiB initially; `verify` holds CPU/RAM exact and reports
+disk. After in-flight work merges, inspect Docker material, then run `python3 scripts/reclaim_development_storage.py --pr <merged-pr>`; merged/open-PR/clean-worktree/no-container guards precede pruning disposable cache/dangling images. ADR-0057's host limits are superseded by ADR-0058.
 
 ## Conventions
 

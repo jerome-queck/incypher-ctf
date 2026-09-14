@@ -233,7 +233,7 @@ def _checked(command: list[str], runner: CommandRunner) -> Any:
 
 
 def enforce_host_storage(mode: str, runner: CommandRunner) -> None:
-    """Run the canonical host-storage refusal for a build lifecycle phase."""
+    """Run the canonical host-storage availability and observation check."""
 
     _checked([sys.executable, str(REPO_ROOT / "scripts/check_host_storage.py"), mode], runner)
 
@@ -329,7 +329,6 @@ def _launch(
     binding = build_image(runner)
 
     if not preflight_only:
-        _checked(["docker", "builder", "prune", "--all", "--force"], runner)
         enforce_host_storage("competition", runner)
 
     try:

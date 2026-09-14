@@ -3,6 +3,11 @@
 Issue [#371](https://github.com/jerome-queck/incypher-ctf/issues/371) moves the machine that builds
 and runs the Solver without turning a larger disk into permission to accumulate indefinitely.
 
+> **Host disk sizing and host storage admission are superseded by
+> [ADR-0058](0058-host-storage-follows-physical-capacity-and-post-merge-reclamation.md).** The
+> location, mount, CPU/RAM and execution-authority decisions here remain context; the image, cache,
+> state, single-image and Crypto profile-size caps are historical advisory benchmarks.
+
 ## Decision
 
 The canonical Solver checkout is `/Volumes/Working/001 Projects/incypher-ctf`; the practice rig is

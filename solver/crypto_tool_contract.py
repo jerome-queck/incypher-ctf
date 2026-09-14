@@ -7,7 +7,11 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
-PROFILE_SIZE_BUDGET = 4 * 1024**3
+# Kept for the historical receipt field and callers that still import its name. It is an
+# observation threshold now, not an admission limit; the signed Tool and per-worker Resource
+# contracts remain the authority for execution safety.
+PROFILE_SIZE_ADVISORY = 4 * 1024**3
+PROFILE_SIZE_BUDGET = PROFILE_SIZE_ADVISORY
 
 
 @dataclass(frozen=True)
@@ -108,8 +112,8 @@ class CryptoProfileSize:
             raise ValueError("Crypto profile size evidence names another candidate")
         if baseline < 0 or candidate < baseline or delta != candidate - baseline:
             raise ValueError("Crypto profile size evidence has invalid arithmetic")
-        if budget != PROFILE_SIZE_BUDGET or delta > budget:
-            raise ValueError("Crypto profile exceeds ADR-0057's 4 GiB delta budget")
+        if budget < 0:
+            raise ValueError("Crypto profile size evidence has a negative advisory threshold")
         if not re.fullmatch(r"[0-9a-f]{40,64}", str(measurement["baseline_source_commit"])):
             raise ValueError("Crypto profile baseline has no exact source commit")
         if not re.fullmatch(r"[0-9a-f]{40,64}", str(measurement["baseline_source_tree_digest"])):
@@ -135,4 +139,10 @@ class CryptoProfileSize:
         )
 
 
-__all__ = ["CryptoComponent", "CryptoProfileSize", "PROFILE_SIZE_BUDGET", "QualifiedCryptoSupply"]
+__all__ = [
+    "CryptoComponent",
+    "CryptoProfileSize",
+    "PROFILE_SIZE_ADVISORY",
+    "PROFILE_SIZE_BUDGET",
+    "QualifiedCryptoSupply",
+]

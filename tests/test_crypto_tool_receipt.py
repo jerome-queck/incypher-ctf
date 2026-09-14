@@ -86,8 +86,10 @@ def test_crypto_receipt_binds_supply_solve_isolation_and_tamper_matrix() -> None
     with pytest.raises(ValueError):
         verify_receipt(changed, inventory)
 
-    too_large = copy.deepcopy(size)
-    too_large["candidate_size_bytes"] = PROFILE_SIZE_BUDGET + 1_001
-    too_large["delta_bytes"] = PROFILE_SIZE_BUDGET + 1
-    with pytest.raises(ValueError, match="exceeds ADR-0057"):
-        create_receipt(source, inventory, too_large)
+    large_profile = copy.deepcopy(size)
+    large_profile["candidate_size_bytes"] = PROFILE_SIZE_BUDGET + 1_001
+    large_profile["delta_bytes"] = PROFILE_SIZE_BUDGET + 1
+    qualified = create_receipt(source, inventory, large_profile)
+    verify_receipt(qualified, inventory)
+    assert qualified["profile_size"]["delta_bytes"] > PROFILE_SIZE_BUDGET
+    assert qualified["outcomes"] == {"supply": "pass", "solve": "pass", "isolation": "pass"}

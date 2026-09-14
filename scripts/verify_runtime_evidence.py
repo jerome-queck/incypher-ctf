@@ -258,24 +258,25 @@ def _verify_external_runtime(capsule: Path, fixed: dict[str, object]) -> None:
         or observed.get("state_root") != f"{expected_root}/incypher-ctf/state"
         or observed.get("colima_home") != f"{expected_root}/incypher-colima"
         or observed.get("colima_data") != f"{expected_root}/incypher-colima"
-        or observed.get("data_disk_bytes") != 200 * 1024**3
         or not isinstance(vm, dict)
         or vm.get("status") != "Running"
         or vm.get("cpus") != 8
         or vm.get("memory_bytes") != 24 * 1024**3
-        or vm.get("disk_bytes") != 200 * 1024**3
+        or not isinstance(vm.get("disk_bytes"), int)
+        or vm.get("disk_bytes") <= 0
+        or observed.get("data_disk_bytes") != vm.get("disk_bytes")
         or observed.get("image_manifest_digest") != fixed["image_manifest_digest"]
         or observed.get("image_config_digest") != fixed["image_config_digest"]
         or observed.get("platform") != fixed["platform"]
         or preflight.get("profile_id") != "colima-namespace-cgroup-v1"
         or preflight.get("profile_digest") != fixed["runtime_profile_digest"]
         or preflight.get("image_id") != fixed["image_manifest_digest"]
-        or runtime_pin != {"colima": "0.10.3", "cpu": 8, "disk_gib": 200, "docker": "29.7.2", "memory_gib": 24}
+        or runtime_pin != {"colima": "0.10.3", "cpu": 8, "docker": "29.7.2", "memory_gib": 24}
         or set(checks.values()) != {"pass"}
         or preflight.get("owned_residue") != []
         or preflight.get("processes_after_kill") != 0
     ):
-        raise ValueError("qualification did not observe the pinned external 200 GiB runtime")
+        raise ValueError("qualification did not observe the required external runtime")
 
 
 def _verify_293(capsule: Path, document: dict[str, object], fixed: dict[str, object]) -> None:
@@ -362,7 +363,6 @@ def _verify_299(capsule: Path, _document: dict[str, object], fixed: dict[str, ob
         or receipt.get("catalogue_digest") != fixed["catalogue_digest"]
         or receipt.get("outcomes") != {"supply": "pass", "solve": "pass", "isolation": "pass"}
         or len(receipt.get("capability_ids", [])) != 9
-        or receipt.get("profile_size", {}).get("delta_bytes", 4 * 1024**3 + 1) > 4 * 1024**3
     ):
         raise ValueError("#299 Crypto profile proof is incomplete")
 

@@ -458,7 +458,6 @@ def _retain_evidence(
 
 
 def _finalize(serial: Path, incident: Path, crypto: Path) -> None:
-    subprocess.run(["docker", "builder", "prune", "--all", "--force"], check=True)
     strict_runtime.enforce_host_storage("competition", subprocess.run)
     subprocess.run(
         [

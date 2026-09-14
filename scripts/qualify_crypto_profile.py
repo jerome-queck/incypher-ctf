@@ -1,4 +1,4 @@
-"""Build the clean-main baseline and bind Crypto's ADR-0057 size delta."""
+"""Build the clean-main baseline and record Crypto's measured size delta."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from solver.crypto_tool_contract import PROFILE_SIZE_BUDGET  # noqa: E402
+from solver.crypto_tool_contract import PROFILE_SIZE_ADVISORY  # noqa: E402
 from solver.crypto_tool_receipt import write_receipt  # noqa: E402
 
 
@@ -92,7 +92,7 @@ def measurement(candidate: str, requested_baseline: str | None = None) -> dict[s
             "candidate_image_digest": image_identity(candidate),
             "candidate_size_bytes": candidate_size,
             "delta_bytes": candidate_size - baseline_size,
-            "budget_bytes": PROFILE_SIZE_BUDGET,
+            "budget_bytes": PROFILE_SIZE_ADVISORY,
             "method": "docker-build-git-merge-base-history-unpacked-layer-sum-v1",
         }
 
