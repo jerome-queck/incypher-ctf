@@ -7,7 +7,6 @@ import hashlib
 from dataclasses import dataclass, field
 
 from solver.event_store import InvalidEventError
-from solver.event_store_storage import canonical_bytes
 from solver.instance_lease import LeaseCoordinator
 from solver.instance_lease_contracts import LeaseGrant, LeaseIdentity, LeasePhase, LeaseVerdict
 from solver.work_generation import GenerationFence, GenerationIdentity
@@ -60,10 +59,6 @@ class LeaseTargetGrant:
     @property
     def connection_digest(self) -> str:
         return hashlib.sha256(self.exact_connection.encode()).hexdigest()
-
-    @property
-    def digest(self) -> str:
-        return hashlib.sha256(canonical_bytes(self.document())).hexdigest()
 
     def document(self) -> dict[str, object]:
         return {

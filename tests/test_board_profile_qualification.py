@@ -265,6 +265,127 @@ def test_synthetic_empty_authenticated_collection_never_means_empty_board() -> N
     assert "synthetic empty" in decision.reason
 
 
+def test_instance_ledger_login_redirect_refuses_even_when_current_challenges_are_static() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        cycles.append(
+            replace(
+                cycle,
+                ledger=document(
+                    prefix + "-ledger",
+                    "/plugins/ctfd-chall-manager/instances",
+                    b"<html>login required</html>",
+                    status=302,
+                    content_type="text/html",
+                ),
+            )
+        )
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "Instance ledger redirected" in decision.reason
+
+
+def test_authenticated_empty_collection_with_distinct_refusal_and_negative_control_qualifies() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        cycles.append(
+            replace(
+                cycle,
+                challenges=json_document(prefix + "-challenges", "/api/v1/challenges", []),
+                anonymous_challenges=document(
+                    prefix + "-anonymous",
+                    "/api/v1/challenges",
+                    b"authentication required",
+                    status=403,
+                    content_type="text/html",
+                ),
+                challenge_details=(),
+            )
+        )
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is True
+    assert decision.profile is not None
+    assert decision.profile.instanced_challenges == 0
+
+
+def test_team_mode_without_a_complete_positive_team_identity_refuses_authority() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        partial = b'<script>window.init = {"userId": 7, "teamId": null, "userMode": "teams"};</script>'
+        cycles.append(
+            replace(
+                cycle,
+                identity=json_document(prefix + "-identity", "/api/v1/users/me", {"id": 7, "team_id": None}),
+                landing=document(prefix + "-landing", "/", partial, content_type="text/html"),
+                ledger=document(
+                    prefix + "-ledger",
+                    "/plugins/ctfd-chall-manager/instances",
+                    partial + b"<table><thead><tr><th>Challenge</th></tr></thead><tbody></tbody></table>",
+                    content_type="text/html",
+                ),
+            )
+        )
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "team identity is partial" in decision.reason
+
+
+@pytest.mark.parametrize("user_id", (0, -1, True))
+def test_authenticated_identity_requires_a_positive_integer_user_id(user_id) -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        landing = (
+            f'<script>window.init = {{"userId": {json.dumps(user_id)}, "teamId": 3, "userMode": "teams"}};</script>'
+        ).encode()
+        cycles.append(
+            replace(
+                cycle,
+                identity=json_document(prefix + "-identity", "/api/v1/users/me", {"id": user_id, "team_id": 3}),
+                landing=document(prefix + "-landing", "/", landing, content_type="text/html"),
+                ledger=document(
+                    prefix + "-ledger",
+                    "/plugins/ctfd-chall-manager/instances",
+                    landing + b"<table><thead><tr><th>Challenge</th></tr></thead><tbody></tbody></table>",
+                    content_type="text/html",
+                ),
+            )
+        )
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "identity" in decision.reason
+
+
+def test_malformed_anonymous_collection_cannot_corroborate_an_authenticated_empty_board() -> None:
+    cycles = []
+    for prefix in ("first", "second"):
+        cycle = valid_cycle(prefix)
+        cycles.append(
+            replace(
+                cycle,
+                challenges=json_document(prefix + "-challenges", "/api/v1/challenges", []),
+                anonymous_challenges=json_document(prefix + "-anonymous", "/api/v1/challenges", [{}]),
+                challenge_details=(),
+            )
+        )
+
+    decision = qualify(probe(*cycles), RULES)
+
+    assert decision.authoritative is False
+    assert "anonymous Challenge list is malformed" in decision.reason
+
+
 def test_authenticated_collection_must_differ_from_anonymous_collection() -> None:
     cycles = []
     for prefix in ("first", "second"):

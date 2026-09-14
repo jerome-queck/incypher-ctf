@@ -67,6 +67,7 @@ from solver.event_store_contracts import GenerationAuthority, GenerationDisposit
 from solver.intake import Intake
 from solver.intake_qualification import NoCoherentSnapshot
 from solver.isolation import IMAGE_ID as STRICT_IMAGE_ENV
+from solver.isolation import STRICT_PROFILE_DIGEST
 from solver.isolation_receipt import RECEIPT_FILENAME as ISOLATION_RECEIPT_FILENAME
 from solver.record import Recorder
 from solver.redaction import Redactor
@@ -711,6 +712,7 @@ def _run_admitted(
     judge = asking(held.chain[0], recorder=recorder, workdir=run_state / JUDGE_WORKDIR, web_search=rules.web_search)
     attempt_executor = None
     tool_runtime = None
+    target_broker = None
     if POOL_ENV in environ:
         binding = RuntimeBinding(
             image_id=environ.get(STRICT_IMAGE_ENV, ""),
@@ -718,15 +720,36 @@ def _run_admitted(
             image_config_digest=environ.get("INCYPHER_IMAGE_CONFIG", ""),
             platform=environ.get("INCYPHER_IMAGE_PLATFORM", ""),
         )
+        if lease_target_authority is not None:
+            from solver.lease_target_broker import LeaseTargetBroker
+            from solver.target_broker_contracts import TargetCandidateBinding
+
+            target_broker = LeaseTargetBroker(
+                state=run_state,
+                run_id=held.run_id,
+                boot_id=boot_id,
+                candidate=TargetCandidateBinding(
+                    binding.image_id,
+                    binding.image_manifest_digest,
+                    binding.image_config_digest,
+                    binding.platform,
+                    STRICT_PROFILE_DIGEST,
+                ),
+                target_authority=lease_target_authority,
+                timestamp=lambda: clock.now().isoformat(),
+                recovery=deterministic_recovery,
+            )
         attempt_executor = AttemptExecutor(
             state=run_state,
             run_id=held.run_id,
             isolation_receipt=(run_state / "runs" / held.run_id / "canonical" / ISOLATION_RECEIPT_FILENAME),
             binding=binding,
             generation_fence=recorder.generations,
-            runtime=AttemptRuntime(attach_attempt_pool(environ)),
+            runtime=AttemptRuntime(attach_attempt_pool(environ), target_broker=target_broker),
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
+        if target_broker is not None:
+            target_broker.bind_attempt_executor(attempt_executor)
         tool_peer = PeerIdentity(
             pid=os.getpid(),
             uid=ATTEMPT_UID,
@@ -885,6 +908,7 @@ def _run_admitted(
         final_candidate_queue=final_candidate_queue,
         initial_leases=(_active_initial_leases(lease_coordinator) if lease_coordinator is not None else None),
         recovery=deterministic_recovery,
+        target_broker=target_broker,
         now=clock.now,
         sleep=clock.sleep,
     )

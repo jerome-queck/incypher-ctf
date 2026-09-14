@@ -1,3 +1,4 @@
+import hashlib
 import json
 import datetime as dt
 import threading
@@ -190,6 +191,72 @@ def test_production_identity_composition_replays_epoch_and_binds_canonical_conte
     )
     assert restarted_epochs.current("https://board.example") == 1
     assert restarted_identity_for(candidate).submission_epoch == 1
+
+
+@pytest.mark.parametrize(
+    ("challenge_id", "candidate_value", "revision", "provenance"),
+    (
+        (7, b"INCYPHER{static-answer}", "revision-from-intake", "static:https://board.example"),
+        (8, b"flag{dynamic-answer}", "isolated-revision", "ledger:row-8:response-digest"),
+    ),
+)
+def test_production_identity_composition_dispatches_static_and_isolated_candidates_once(
+    tmp_path, challenge_id, candidate_value, revision, provenance
+):
+    static = SimpleNamespace(
+        challenge_id=SimpleNamespace(value=7),
+        revision_digest="revision-from-intake",
+        challenge_type="static",
+    )
+    isolated = SimpleNamespace(
+        challenge_id=SimpleNamespace(value=8),
+        revision_digest="isolated-revision",
+        challenge_type="dynamic_iac",
+    )
+    intake = SimpleNamespace(
+        order_authority=lambda: SimpleNamespace(snapshot=SimpleNamespace(challenges=(static, isolated)))
+    )
+    ledger = LedgerResult(
+        POPULATED,
+        "teams",
+        1,
+        2,
+        "ledger-digest",
+        owned=(LedgerRow("row-8", 8, team_id=2, response_digest="response-digest"),),
+    )
+    store = EventStore(tmp_path, run_id="run-1", redactor=Redactor({}))
+    context_for, identity_for, _epochs = _submission_identity_composition(
+        intake, ledger, "https://board.example", store, Clock()
+    )
+    candidate_digest = hashlib.sha256(candidate_value).hexdigest()
+    candidate = replace(
+        ready(identity=f"candidate-{challenge_id}"),
+        challenge_id=challenge_id,
+        candidate=candidate_value,
+        candidate_digest=candidate_digest,
+        submission_context=context_for(challenge_id),
+    )
+    recorder = Recorder(tmp_path / "state", "run-1", Redactor({}))
+    wire = Wire()
+    authority = SerialSubmission(
+        recorder.run_dir / "canonical",
+        recorder.write_authority,
+        Clock(),
+        tmp_path / "board.sock",
+        open_client=lambda _path, _binding: wire,
+        identity_for=identity_for,
+        post_interval_seconds=0,
+    )
+
+    result = authority.dispatch(queued(candidate), binding=BINDING)
+
+    expected = CompleteSubmissionIdentity(
+        "https://board.example", challenge_id, revision, provenance, candidate_digest, 1
+    )
+    assert result.effect_id == expected.effect_id
+    assert wire.posts == 1
+    assert wire.candidates == [candidate_value.decode()]
+    assert wire.complete_identities == [(candidate.identity, expected.__dict__)]
 
 
 @pytest.mark.parametrize(

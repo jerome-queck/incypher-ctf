@@ -103,7 +103,7 @@ def main() -> int:
             isolation_receipt=isolation,
             binding=binding,
             generation_fence=fence,
-            runtime=AttemptRuntime(pool, target_broker=broker),  # type: ignore[arg-type]
+            runtime=AttemptRuntime(pool, target_broker=broker),
             timestamp=timestamp,
         )
         broker.bind_attempt_executor(executor)

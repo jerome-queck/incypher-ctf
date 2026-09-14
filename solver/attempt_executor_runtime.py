@@ -47,6 +47,8 @@ class TargetBroker(Protocol):
     boot_id: str
     candidate: TargetCandidateBinding
 
+    def available(self, generation_id: str) -> bool: ...
+
     def prepare_attempt(self, binding: CapabilityBinding) -> None: ...
 
     def revoke_generation(self, generation_id: str) -> None: ...
@@ -144,7 +146,10 @@ class AttemptRuntime:
     def prepare(self, envelope_id: str, incoming: RuntimeInput) -> RuntimeReservation:
         """Reserve and configure a childless envelope before canonical launch records."""
 
-        if self.target_broker is not None:
+        target_available = self.target_broker is not None and self.target_broker.available(
+            incoming.request.generation_id
+        )
+        if target_available:
             candidate = self.target_broker.candidate
             actual = incoming.binding
             if (
@@ -172,7 +177,7 @@ class AttemptRuntime:
             self.pool.release(slot)
             raise RuntimeUnavailable(f"Attempt envelope preparation failed: {error}") from error
         nonce = secrets.token_hex(16)
-        if self.target_broker is not None:
+        if target_available:
             binding = CapabilityBinding(
                 incoming.run_id,
                 self.target_broker.boot_id,

@@ -33,6 +33,15 @@ as CTFd's own answer is reasoning about a reply CTFd may never have seen.
 The decision: **a collection endpoint's empty reply is never taken as fact. It is corroborated by a
 request the Board must refuse, or it is treated as unknown.**
 
+> **Amended by [#301](https://github.com/jerome-queck/incypher-ctf/issues/301), 14 September 2026.**
+> The released practice Board made the invalid-field request a poor production control: its usable,
+> authenticated Challenge collection still answers that request through the platform's synthetic
+> collection behavior. Qualification now requires stable authenticated identity/window evidence,
+> a two-cycle collection, exact per-ID detail corroboration, an auth-versus-anonymous
+> distinction, and a distinct JSON 404 for impossible positive-domain ID 0. The evidence below
+> remains the historical reason empty collections are not trusted; the invalid-field request is no
+> longer an authority source.
+
 This record **corrects [ADR-0009](0009-store-what-was-observed-derive-every-judgement.md) and
 [ADR-0015](0015-there-is-no-queue-and-the-clock-chooses-a-working-set.md)** in one claim each, both
 written on 2026-08-24 hours before this was found.
@@ -55,7 +64,7 @@ the Board profile *discovered* rather than configured: **a discovered profile ca
 thing.** ADR-0008 had a transient `/mana` 403 in mind. This is the same failure with the error
 removed.
 
-## The control, and why it is this one
+## The historical control, and why it was replaced
 
 `GET /api/v1/challenges?field=<not-a-field>&q=a`. CTFd rejects it in `validate_args` before any
 handler runs, so a **non-200 is CTFd-shaped and a 200 is proof the reply came from somewhere else.**
@@ -79,6 +88,13 @@ Three properties earn it the job:
 **Any refusal counts.** A 400, a 403 and a 302 all pass it. The control is not certifying the stack;
 it is catching the reply that is too agreeable, and widening it into a health check would make it
 fail on Boards that are merely strict.
+
+That permissive refusal rule is exactly what the released platform invalidated. A status code is
+not a platform fingerprint, and the field probe no longer separates a usable official collection
+from its synthetic edge behavior. The replacement uses `GET /api/v1/challenges/0`: IDs are
+positive, and only a complete nonempty JSON 404 distinct from the landing page, authenticated and
+anonymous collections, and every real detail response is accepted. It is independent corroboration,
+not merely a different status-code heuristic.
 
 ### Alternatives rejected
 

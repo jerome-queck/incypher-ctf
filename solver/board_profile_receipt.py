@@ -9,20 +9,18 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from solver.board_profile import (
-    PROFILE_ENDPOINTS,
-    ProfileCycle,
     ProfileDecision,
     ProfileDocument,
     ProfileProbe,
     decision_document,
+    profile_cycle_from_documents,
     profile_cycle_documents,
-    profile_document_endpoint,
-    profile_document_sort_key,
     qualify,
     rules_document,
     rules_from_document,
 )
 from solver.board_profile_contracts import BOARD_PROFILE_OBSERVATION_RECORDED
+from solver.board_profile_documents import PROFILE_ENDPOINTS, profile_document_endpoint
 from solver.event_store import EventStore
 from solver.board_profile_phase import project_profile_phase
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
@@ -277,9 +275,7 @@ def _probe_from(document: Mapping[str, object], rules_source: str) -> ProfilePro
             ):
                 raise ValueError("Board-profile response identity or endpoint is invalid")
             request_ids.add(profile_document.request_id)
-        fixed = {name: parsed.pop(name) for name in PROFILE_ENDPOINTS}
-        details = tuple(parsed[name] for name in sorted(parsed, key=profile_document_sort_key))
-        cycles.append(ProfileCycle(**fixed, challenge_details=details))
+        cycles.append(profile_cycle_from_documents(parsed))
     return ProfileProbe(str(document["probe_id"]), rules_source, tuple(cycles), int(document["schema_version"]))
 
 
@@ -362,9 +358,7 @@ def _canonical_probe(
                 payload["original_bytes"],
                 payload["complete"],
             )
-        fixed = {name: documents.pop(name) for name in PROFILE_ENDPOINTS}
-        details = tuple(documents[name] for name in sorted(documents, key=profile_document_sort_key))
-        cycles.append(ProfileCycle(**fixed, challenge_details=details))
+        cycles.append(profile_cycle_from_documents(documents))
     descriptors = [
         {
             "event_id": event.payload["event_id"],

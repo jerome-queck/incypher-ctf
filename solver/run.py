@@ -265,6 +265,7 @@ class Run:
         final_candidate_queue=None,
         initial_leases: Mapping[int | str, Lease] | None = None,
         recovery=None,
+        target_broker=None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -285,6 +286,7 @@ class Run:
         self._sleep = sleep
         self._attempt_executor = attempt_executor
         self._tool_runtime = tool_runtime
+        self._target_broker = target_broker
         self._board_broker_path = board_broker_path
         self._board_broker_boot_id = board_broker_boot_id
         self._lead_adapter = lead_adapter
@@ -1131,6 +1133,19 @@ class Run:
             return
         held.lease = answer.lease
         self._leases[terms.challenge_id] = answer.lease
+        if self._target_broker is not None:
+            try:
+                self._publish_target(held, answer.lease)
+            except Exception:
+                released = self._instances.terminate(
+                    terms.challenge_id,
+                    attempt_id=held.attempt_id,
+                    generation_id=held.generation_id,
+                )
+                if released.released:
+                    self._leases.pop(terms.challenge_id, None)
+                    held.lease = None
+                raise
         held.deadline.instance = answer.lease.attempt_deadline(held.pick.deadline)
 
     def _renew(self, held: _Held) -> None:
@@ -1141,9 +1156,19 @@ class Run:
         answer = self._instances.renew(held.lease, attempt_id=held.attempt_id, generation_id=held.generation_id)
         if answer.lease is None:
             return
+        if self._target_broker is not None:
+            self._publish_target(held, answer.lease)
         held.lease = answer.lease
         self._leases[held.lease.challenge_id] = answer.lease
         held.deadline.instance = answer.lease.attempt_deadline(held.pick.deadline)
+
+    def _publish_target(self, held: _Held, lease: Lease) -> None:
+        grant = self._instances.issue_target(
+            lease,
+            attempt_id=held.attempt_id,
+            generation_id=held.generation_id,
+        )
+        self._target_broker.register(grant)
 
     def _end_lease(self, held: _Held) -> None:
         """Release the Instance the Attempt was worked on. A Flag already released it, so this is

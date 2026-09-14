@@ -116,11 +116,13 @@ def test_the_boards_own_facts_are_carried_rather_than_restated_in_the_header():
     assert "door.zip" in facts
 
 
-def test_an_instance_is_given_as_an_address_and_an_expiry():
+def test_an_instance_is_given_only_as_an_opaque_target_broker_and_an_expiry():
     until = dt.datetime(2026, 9, 22, 13, 0, tzinfo=dt.timezone.utc)
     text = prompt_for(lease=Lease(7, "nc target.example 31337", until, TERMS))
 
-    assert "nc target.example 31337" in text
+    assert "nc target.example 31337" not in text
+    assert "/target-client.py" in text
+    assert "generation-bound Target broker" in text
     assert until.isoformat() in text
 
 

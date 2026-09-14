@@ -94,6 +94,9 @@ class _QualificationTargets:
         self._generation_brokers: dict[str, TargetBrokerRuntime] = {}
         self._handle_brokers: dict[str, TargetBrokerRuntime] = {}
 
+    def available(self, generation_id: str) -> bool:
+        return any(broker.available(generation_id) for broker in self._brokers.values())
+
     def prepare_attempt(self, binding: CapabilityBinding) -> None:
         broker = self._brokers.get(binding.step_id, self._default)
         broker.prepare_attempt(binding)

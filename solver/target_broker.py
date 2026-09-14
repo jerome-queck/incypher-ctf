@@ -59,6 +59,8 @@ class TargetBrokerRuntime:
         denied_endpoints: Mapping[str, TargetEndpoint] | None = None,
         request_namespace: str = "",
         recovery=None,
+        capability_authority: CapabilityAuthority | None = None,
+        reconcile_authority: bool = True,
     ) -> None:
         if not challenge_id or not boot_id:
             raise ValueError("Target binding needs Challenge and Boot identity")
@@ -72,7 +74,7 @@ class TargetBrokerRuntime:
             self._address = socket.getaddrinfo(endpoint.host, endpoint.port, type=socket.SOCK_STREAM)[0][4][0]
         except OSError as error:
             raise ValueError("declared Target cannot be resolved at capability creation") from error
-        self.authority = CapabilityAuthority(
+        self.authority = capability_authority or CapabilityAuthority(
             state=state,
             run_id=run_id,
             boot_id=boot_id,
@@ -80,7 +82,8 @@ class TargetBrokerRuntime:
             peer_identity=local_peer_identity,
             timestamp=timestamp,
         )
-        self.authority.reconcile_restart(TARGET_SCOPE)
+        if reconcile_authority:
+            self.authority.reconcile_restart(TARGET_SCOPE)
         self._store = EventStore(state, run_id=run_id, redactor=Redactor({}))
         self._generations = GenerationFence(state, run_id, Redactor({}), timestamp)
         self._timestamp = timestamp
@@ -113,6 +116,14 @@ class TargetBrokerRuntime:
             from solver.recovery.safe_read import SafeReadRecovery
 
             SafeReadRecovery(recovery).replay()
+
+    def available(self, generation_id: str) -> bool:
+        """Answer whether this fixed Target belongs to one current Work generation."""
+
+        return any(
+            generation.generation_id == generation_id and generation.active and generation.work_id == self.challenge_id
+            for generation in self._generations.projection().generations
+        )
 
     def prepare_attempt(self, binding: CapabilityBinding) -> None:
         """Install the controller-selected identity claimed by the next hostile peer."""

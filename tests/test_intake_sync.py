@@ -29,7 +29,7 @@ COVER_REPLACED = "files/2b2b2b/cover.png?token=signed-at-10-05"
 # what the constant above means. The two shapes are one string apart and opposite in meaning.
 COVER_SECOND = "files/3c3c3c/cover.png?token=signed"
 
-CONTROL_REFUSED = (400, b'{"success": false, "errors": {"field": "value is not a valid enumeration member"}}')
+CONTROL_REFUSED = (404, b'{"success": false, "message": "Challenge not found"}')
 CONTROL_AGREEABLE = (200, b'{"success": true, "data": []}')
 
 # So that `mana=None` can mean "this Board has no chall-manager" rather than "say nothing about it".
@@ -58,8 +58,8 @@ class Wire:
         self.asked.append(path)
         if self.unreachable:
             raise OSError("the board is not answering")
-        if "field=" in path:
-            return (*self.control, "")
+        if path == "/api/v1/challenges/0":
+            return (*self.control, "", "application/json")
         if path.startswith("/api/v1/challenges/"):
             return self._answer(self.detail.get(path.rsplit("/", 1)[1], {}))
         if path == "/api/v1/challenges":
@@ -272,7 +272,7 @@ def test_an_empty_list_the_control_does_not_corroborate_is_a_failed_sync(recorde
 
 
 def test_an_empty_list_the_control_corroborates_is_believed(recorder):
-    """A Board that refuses the query CTFd refuses is a Board whose empty list is CTFd's own answer.
+    """A Board with a distinct negative ID answer corroborates its empty collection.
     What the Solver does about an empty Board is the Run's question, and Intake's job is only to
     say that this one was read."""
     intake = intake_over(Wire(listed=[], control=CONTROL_REFUSED), recorder)
@@ -289,7 +289,7 @@ def test_the_control_is_only_asked_where_the_list_came_back_empty(recorder):
 
     intake_over(wire, recorder).sync()
 
-    assert not [path for path in wire.asked if "field=" in path]
+    assert "/api/v1/challenges/0" not in wire.asked
 
 
 def test_a_board_that_stops_answering_is_a_failed_sync_and_not_an_emptied_board(recorder):
@@ -389,7 +389,7 @@ def test_a_control_that_failed_once_is_never_retried_into_a_pass(recorder):
     second = intake.sync()
 
     assert second.outcome == UNCORROBORATED
-    assert len([path for path in wire.asked if "field=" in path]) == 1
+    assert wire.asked.count("/api/v1/challenges/0") == 1
 
 
 def test_category_and_type_are_read_as_the_open_strings_they_are(recorder):

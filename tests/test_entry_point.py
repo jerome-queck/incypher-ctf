@@ -295,7 +295,7 @@ def test_a_board_that_fails_the_read_contract_control_refuses_the_run(capsys, mo
     code = main(env(), run_state=tmp_path / "state", boards=boards)
 
     assert code == REFUSED
-    assert "not a CTFd field refusal" in capsys.readouterr().err
+    assert "known-absent Challenge control" in capsys.readouterr().err
 
 
 def test_a_first_intake_that_cannot_be_believed_refuses_after_writing_what_it_read(

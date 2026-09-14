@@ -2,6 +2,8 @@
 
 import datetime as dt
 import json
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +15,8 @@ from solver.instance_lease_contracts import LeasePhase, LeaseVerdict, RowCorrobo
 from solver.lease_target import LeaseTargetAuthority, TargetAuthorityRefused
 from solver.record import Recorder
 from solver.redaction import Redactor
+from solver.work_generation import GenerationFence, GenerationIdentity
+from solver.write_reservation import WriteAuthority
 
 NOW = dt.datetime(2026, 9, 14, 8, tzinfo=dt.timezone.utc)
 
@@ -34,7 +38,18 @@ class BoardPort:
         return Reply(ANSWERED)
 
 
-def system(tmp_path, *, corroboration=None):
+@dataclass
+class LeaseTargetSystem:
+    board: BoardPort
+    write_authority: WriteAuthority
+    generation_fence: GenerationFence
+    generation: GenerationIdentity
+    leases: LeaseCoordinator
+    targets: LeaseTargetAuthority
+    instances: Instances
+
+
+def build_lease_target_system(tmp_path: Path, *, corroboration=None) -> LeaseTargetSystem:
     recorder = Recorder(tmp_path, "run-1", Redactor({}))
     fence = recorder.generations
     generation = fence.acquire("integer:42", "attempt-1")
@@ -68,69 +83,69 @@ def system(tmp_path, *, corroboration=None):
         coordinator=leases,
         target_authority=targets,
     )
-    return board, write, fence, generation, leases, targets, instances
+    return LeaseTargetSystem(board, write, fence, generation, leases, targets, instances)
 
 
 def test_owned_active_lease_issues_exact_opaque_target_authority_and_tracks_renewal(tmp_path):
-    board, write, _fence, generation, leases, targets, instances = system(tmp_path)
-    answer = instances.deploy(
+    fixture = build_lease_target_system(tmp_path)
+    answer = fixture.instances.deploy(
         Terms(42, "dynamic_iac", timeout=3600),
-        attempt_id=generation.attempt_id,
-        generation_id=generation.generation_id,
+        attempt_id=fixture.generation.attempt_id,
+        generation_id=fixture.generation.generation_id,
     )
-    held = leases.current(answer.lease.identity)
+    held = fixture.leases.current(answer.lease.identity)
 
-    target = instances.issue_target(
+    target = fixture.instances.issue_target(
         answer.lease,
-        attempt_id=generation.attempt_id,
-        generation_id=generation.generation_id,
+        attempt_id=fixture.generation.attempt_id,
+        generation_id=fixture.generation.generation_id,
     )
 
     assert target.exact_connection == "target.example:31337"
     assert target.challenge_id == 42
     assert target.row_id == "owned-row-42"
     assert target.work_id == "integer:42"
-    assert targets.reauthorize(target) is True
+    assert fixture.targets.reauthorize(target) is True
     assert "target.example:31337" not in json.dumps(target.document())
 
-    renewed = leases.renew(
+    renewed = fixture.leases.renew(
         held.identity,
         held.epoch,
-        generation=generation,
+        generation=fixture.generation,
         until=NOW + dt.timedelta(hours=2),
     )
     assert renewed.phase is LeasePhase.ATTEMPT_BOUND
-    assert targets.reauthorize(target) is True
+    assert fixture.targets.reauthorize(target) is True
 
-    leases.release(held.identity, held.epoch, generation=generation)
-    assert targets.reauthorize(target) is False
+    fixture.leases.release(held.identity, held.epoch, generation=fixture.generation)
+    assert fixture.targets.reauthorize(target) is False
     with pytest.raises(TargetAuthorityRefused):
-        targets.issue(held.identity, held.epoch, generation=generation)
-    assert board.calls == [("create", 42), ("renew", 42), ("release", 42)]
-    write.close()
+        fixture.targets.issue(held.identity, held.epoch, generation=fixture.generation)
+    assert fixture.board.calls == [("create", 42), ("renew", 42), ("release", 42)]
+    fixture.write_authority.close()
 
 
 def test_foreign_or_unsettled_instance_never_mints_target_authority(tmp_path):
-    _board, write, _fence, generation, leases, targets, _instances = system(
+    fixture = build_lease_target_system(
         tmp_path,
         corroboration=lambda _challenge_id: RowCorroboration(LeaseVerdict.FOREIGN_ROW),
     )
-    unsettled = leases.acquire(42, generation=generation)
+    unsettled = fixture.leases.acquire(42, generation=fixture.generation)
 
     assert unsettled.phase is LeasePhase.RECOVERABLE
     with pytest.raises(TargetAuthorityRefused):
-        targets.issue(unsettled.identity, unsettled.epoch, generation=generation)
-    write.close()
+        fixture.targets.issue(unsettled.identity, unsettled.epoch, generation=fixture.generation)
+    fixture.write_authority.close()
 
 
 def test_generation_restart_revokes_target_without_mutating_the_instance(tmp_path):
-    board, write, fence, generation, leases, targets, _instances = system(tmp_path)
-    held = leases.acquire(42, generation=generation)
-    target = targets.issue(held.identity, held.epoch, generation=generation)
+    fixture = build_lease_target_system(tmp_path)
+    held = fixture.leases.acquire(42, generation=fixture.generation)
+    target = fixture.targets.issue(held.identity, held.epoch, generation=fixture.generation)
 
-    assert fence.reconcile_restart() == (generation.generation_id,)
+    assert fixture.generation_fence.reconcile_restart() == (fixture.generation.generation_id,)
 
-    assert targets.reauthorize(target) is False
-    assert leases.current(held.identity).phase is LeasePhase.ATTEMPT_BOUND
-    assert board.calls == [("create", 42)]
-    write.close()
+    assert fixture.targets.reauthorize(target) is False
+    assert fixture.leases.current(held.identity).phase is LeasePhase.ATTEMPT_BOUND
+    assert fixture.board.calls == [("create", 42)]
+    fixture.write_authority.close()

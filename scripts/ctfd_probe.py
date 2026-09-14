@@ -116,9 +116,9 @@ def name_the_cause_of_an_empty_list(board: Board) -> NoReturn:
     # about a board that answered, and this is the question of whether the board answered at all.
     if not board.collection_endpoints_reach_ctfd():
         raise ProbeFailure(
-            "the empty list did not come from CTFd — this board also answers 200 to a query CTFd "
-            "rejects with a 400, so its collection endpoints are being composed by something else "
-            "and an empty one is evidence of nothing. Ask a known id directly "
+            "the empty list did not come from a corroborated CTFd read — this board did not return "
+            "a distinct JSON 404 for known-absent Challenge 0, so its collection endpoints may be "
+            "composed by something else and an empty one is evidence of nothing. Ask a known id directly "
             "(GET /api/v1/challenges/<id>/solves) before believing anything this board lists"
         )
 

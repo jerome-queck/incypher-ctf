@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import ssl
 import threading
 import time
 from dataclasses import dataclass
@@ -59,21 +60,29 @@ def exchange(
     timer.daemon = True
     timer.start()
     try:
-        with socket.create_connection((address, endpoint.port), limits.timeout_seconds) as target:
-            active_socket = target
-            target.sendall(wire)
-            if endpoint.protocol is TargetProtocol.HTTP:
-                outcome, body, status, response_bytes = _read_http(target, limits.max_response_bytes)
+        with socket.create_connection((address, endpoint.port), limits.timeout_seconds) as opened:
+            if endpoint.protocol is TargetProtocol.HTTPS:
+                with ssl.create_default_context().wrap_socket(opened, server_hostname=endpoint.host) as secured:
+                    active_socket = secured
+                    secured.sendall(wire)
+                    outcome, body, status, response_bytes = _read_http(secured, limits.max_response_bytes)
             else:
-                target.shutdown(socket.SHUT_WR)
-                body = _read_bounded(target, limits.max_response_bytes)
-                response_bytes = len(body)
-                status = 0
-                outcome = (
-                    TargetOutcome.TOO_LARGE if response_bytes > limits.max_response_bytes else TargetOutcome.ANSWERED
-                )
-                if outcome is TargetOutcome.TOO_LARGE:
-                    body = b""
+                active_socket = opened
+                opened.sendall(wire)
+                if endpoint.protocol is TargetProtocol.HTTP:
+                    outcome, body, status, response_bytes = _read_http(opened, limits.max_response_bytes)
+                else:
+                    opened.shutdown(socket.SHUT_WR)
+                    body = _read_bounded(opened, limits.max_response_bytes)
+                    response_bytes = len(body)
+                    status = 0
+                    outcome = (
+                        TargetOutcome.TOO_LARGE
+                        if response_bytes > limits.max_response_bytes
+                        else TargetOutcome.ANSWERED
+                    )
+                    if outcome is TargetOutcome.TOO_LARGE:
+                        body = b""
     except (TimeoutError, socket.timeout):
         outcome, body, status, response_bytes = TargetOutcome.TIMEOUT, b"", 0, 0
     except (OSError, ValueError):

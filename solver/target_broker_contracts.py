@@ -18,6 +18,7 @@ _HEX_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 class TargetProtocol(str, enum.Enum):
     HTTP = "http"
+    HTTPS = "https"
     TCP = "tcp"
 
 

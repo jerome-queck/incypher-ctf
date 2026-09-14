@@ -10,6 +10,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Mapping
 
+from solver.board import READ_CONTRACT_CONTROL
 from solver.event_store_storage import canonical_bytes
 
 MAX_PAGES = 1_000
@@ -789,7 +790,7 @@ def _live_controls(landing: IntakeDocument, read_control: IntakeDocument, contra
         or landing.endpoint != "/"
         or landing.raw_digest not in contract.landing_digests
         or read_control.kind != "read-control"
-        or read_control.endpoint != "/api/v1/challenges/0"
+        or read_control.endpoint != READ_CONTRACT_CONTROL
         or read_control.status != 404
         or read_control.raw_digest not in contract.read_control_digests
         or read_control.status not in contract.read_control_statuses
@@ -850,7 +851,7 @@ def _valid_endpoint(document: IntakeDocument, contract: IntakeContract) -> None:
     fixed = {
         "identity": "/api/v1/users/me",
         "landing": "/",
-        "read-control": "/api/v1/challenges/0",
+        "read-control": READ_CONTRACT_CONTROL,
         "mana": "/api/v1/plugins/ctfd-chall-manager/mana",
     }
     if document.kind in fixed:
