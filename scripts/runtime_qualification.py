@@ -56,6 +56,10 @@ class _Clock:
             self._last += dt.timedelta(microseconds=1)
             return self._last.isoformat().replace("+00:00", "Z")
 
+    def sleep(self, seconds: float) -> None:
+        with self._lock:
+            self._last += dt.timedelta(seconds=seconds)
+
 
 class _Wire:
     def __init__(self, *, fail_during: bool = False, block_first: bool = False) -> None:
@@ -68,7 +72,7 @@ class _Wire:
         self.entered = threading.Event()
         self.release = threading.Event()
 
-    def submit(self, _challenge_id: int, _candidate: str) -> BoardBrokerResult:
+    def submit(self, _challenge_id: int, _candidate: str, **_kwargs) -> BoardBrokerResult:
         with self._lock:
             self.posts += 1
             self.active += 1
@@ -131,6 +135,7 @@ def _submission(root: Path, wire: _Wire, clock: _Clock, *, hook=None):
         clock,
         root / "controlled-board.sock",
         open_client=lambda _path, _binding: wire,
+        sleep=clock.sleep,
     )
     try:
         yield authority, recorder

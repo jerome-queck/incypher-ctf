@@ -61,7 +61,7 @@ class OrderJournal:
     def resume_pending(self) -> PublishedOrder | None:
         """Finish an already-reserved publication from its bounded sanitized staging record."""
 
-        with self._locked():
+        with self._locked(), self.store.writer_batch():
             return self._resume_pending()
 
     def _resume_pending(self) -> PublishedOrder | None:
@@ -93,7 +93,7 @@ class OrderJournal:
         return PublishedOrder(boundary.publication_id, boundary.decision_digest, len(entries) - 1, tuple(committed))
 
     def publish(self, decision: OrderDecision) -> PublishedOrder:
-        with self._locked():
+        with self._locked(), self.store.writer_batch():
             return self._publish(decision)
 
     def _publish(self, decision: OrderDecision) -> PublishedOrder:

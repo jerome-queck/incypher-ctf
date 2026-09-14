@@ -38,7 +38,9 @@ class LaneJournal:
                 "work_id": candidate.work_id,
                 "attempt_id": attempt_id,
                 "generation_id": "",
-                "lease_id": f"{candidate.lease.run_id}:{candidate.lease.lease_seq}",
+                "lease_id": (
+                    f"{candidate.lease.run_id}:{candidate.lease.lease_seq}" if candidate.lease is not None else ""
+                ),
                 "envelope_id": envelope_id,
                 "envelope": candidate.envelope.document(),
                 "tier": candidate.tier,

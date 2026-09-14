@@ -191,8 +191,17 @@ class WriteAuthority:
     ) -> WriteReservation:
         return self._finish(reservation, ReservationState.COMMITTED, observation)
 
-    def possibly_sent(self, reservation: WriteReservation, reason: str) -> WriteReservation:
-        return self._finish(reservation, ReservationState.POSSIBLY_SENT, {"reason": reason})
+    def possibly_sent(
+        self,
+        reservation: WriteReservation,
+        reason: str,
+        observation: Mapping[str, Any] | None = None,
+    ) -> WriteReservation:
+        return self._finish(
+            reservation,
+            ReservationState.POSSIBLY_SENT,
+            {"reason": reason, **dict(observation or {})},
+        )
 
     def abort(self, reservation: WriteReservation, reason: str) -> WriteReservation:
         return self._finish(reservation, ReservationState.ABORTED, {"reason": reason})
@@ -407,6 +416,7 @@ class ReservedEffect:
         encode: Callable[[Result], Mapping[str, Any]],
         decode: Callable[[Mapping[str, Any]], Result],
         observe: Callable[[Result], None] | None = None,
+        indeterminate_observation: Callable[[BaseException], Mapping[str, Any]] | None = None,
         retention: RetentionPolicy = RetentionPolicy.RELEASE,
     ) -> Result:
         retention = RetentionPolicy(retention)
@@ -438,7 +448,11 @@ class ReservedEffect:
         except BaseException as error:
             current = self._authority.current(key)
             if current is not None and current.state is ReservationState.STARTED:
-                current = self._authority.possibly_sent(started, type(error).__name__)
+                current = self._authority.possibly_sent(
+                    started,
+                    type(error).__name__,
+                    indeterminate_observation(error) if indeterminate_observation is not None else None,
+                )
                 if current.retention.requires_receipt:
                     try:
                         self._authority.write_receipt(key)

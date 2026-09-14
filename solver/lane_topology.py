@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import RLock
 
 from solver.event_store_contracts import GenerationDisposition
+from solver.final_interval import FinalIntervalController
 from solver.lane_topology_contracts import (
     LaneBinding,
     LaneCycleResult,
@@ -40,6 +41,7 @@ class _CycleState:
     claimed: set[str] = field(default_factory=set)
     admitted: list[LaneBinding] = field(default_factory=list)
     outcomes: dict[str, LaneOutcome] = field(default_factory=dict)
+    abandoned_owner: bool = False
     free_lanes: list[str] = field(init=False)
     peak_resources: int = 0
     peak_envelope: dict[str, int] = field(
@@ -69,11 +71,12 @@ class _CycleState:
             total = sum(getattr(envelope, name) for envelope in envelopes)
             self.peak_envelope[name] = max(self.peak_envelope[name], total)
 
-    def close(self, future, outcome: LaneOutcome) -> None:
+    def close(self, future, outcome: LaneOutcome, *, release_lane: bool = True) -> None:
         binding = self.pending.pop(future)
         self.outcomes[binding.attempt_id] = outcome
-        self.free_lanes.append(binding.lane_id)
-        self.free_lanes.sort()
+        if release_lane:
+            self.free_lanes.append(binding.lane_id)
+            self.free_lanes.sort()
 
 
 class LaneController:
@@ -88,6 +91,7 @@ class LaneController:
         generations: GenerationFence,
         timestamp: Callable[[], str],
         terminate: Callable[[LaneBinding], OwnerTermination],
+        final_interval: FinalIntervalController | None = None,
         hook: Callable[[str], None] | None = None,
     ) -> None:
         if not run_id:
@@ -98,6 +102,7 @@ class LaneController:
         self.generations = generations
         self._timestamp = timestamp
         self._terminate = terminate
+        self._final_interval = final_interval
         self._hook = hook or (lambda point: None)
         self._lock = RLock()
         self._attempt_sequence = len(generations.projection().generations)
@@ -109,13 +114,17 @@ class LaneController:
 
         pool = ThreadPoolExecutor(max_workers=self.profile.lanes, thread_name_prefix="solver-lane")
         cycle = _CycleState(self.profile)
+        failed = False
         try:
             self._fill(cycle, pool, order, execute)
             while cycle.pending:
                 self._drain(cycle)
                 self._fill(cycle, pool, order, execute)
+        except BaseException:
+            failed = True
+            raise
         finally:
-            pool.shutdown(wait=True, cancel_futures=True)
+            pool.shutdown(wait=not failed and not cycle.abandoned_owner, cancel_futures=True)
         cycle_seconds = time.monotonic() - cycle.started
         if cycle_seconds > self.profile.global_wall_seconds + self.profile.global_cleanup_seconds:
             raise RuntimeError("Lane cycle exceeded its declared work and cleanup clock")
@@ -142,10 +151,13 @@ class LaneController:
 
     def _fill(self, cycle: _CycleState, pool, order: OrderPort, execute: ExecutePort) -> None:
         while cycle.free_lanes and cycle.remaining > 0:
+            lane_id = next((lane for lane in cycle.free_lanes if self._lane_accepts_work(lane)), None)
+            if lane_id is None:
+                return
             binding = self._admit_one(
                 order,
                 cycle.claimed,
-                cycle.free_lanes[0],
+                lane_id,
                 cycle.active_resources,
                 tuple(cycle.pending.values()),
                 cycle.remaining,
@@ -153,6 +165,19 @@ class LaneController:
             if binding is None:
                 return
             cycle.admit(binding, pool.submit(execute, binding))
+
+    def _lane_accepts_work(self, lane_id: str) -> bool:
+        if self._final_interval is None:
+            return True
+        mode = self._final_interval.admission_mode(lane_id)
+        return mode == "ordinary" or (mode == "final-chance" and self._final_interval.chance_available(lane_id))
+
+    def lane_for_attempt(self, attempt_id: str) -> str:
+        rows = self._journal.document()["admissions"]
+        match = next((row for row in reversed(rows) if row["attempt_id"] == attempt_id), None)
+        if match is None:
+            raise ValueError("Attempt has no Lane admission")
+        return str(match["lane_id"])
 
     def _drain(self, cycle: _CycleState) -> None:
         remaining = min(
@@ -182,12 +207,17 @@ class LaneController:
         ]
         for future in expired:
             binding = cycle.pending[future]
+            future.cancel()
             termination = self._terminate(binding)
             if not termination.ended or termination.remaining_processes:
                 raise RuntimeError("Lane owner survived bounded termination")
+            owner_finished = future.done()
+            cycle.abandoned_owner = cycle.abandoned_owner or not owner_finished
             outcome = LaneOutcome.stalled(binding, termination)
             self._close(binding, outcome)
-            cycle.close(future, outcome)
+            # A Python worker that outlives its terminated subprocess still owns its Lane bookkeeping.
+            # Consume that Lane for this cycle so no replacement can overlap the stale owner.
+            cycle.close(future, outcome, release_lane=owner_finished)
 
     def _admit_one(
         self,
@@ -202,9 +232,28 @@ class LaneController:
         candidate = next((item for item in ranked if item.work_id not in claimed), None)
         if candidate is None or not self._fits(candidate, active_bindings, active_resources):
             return None
+        final_budget = remaining_global_seconds
+        final_grant = None
+        if self._final_interval is not None:
+            mode = self._final_interval.admission_mode(lane_id)
+            if mode in {"submission-reserve", "closed"}:
+                return None
+            if mode == "final-chance":
+                final_grant = self._final_interval.reserve_final_chance(lane_id, candidate.work_id)
+                if final_grant is None:
+                    return None
+                final_budget = min(final_budget, self._final_interval.scoreable_seconds())
+            elif self._final_interval.admission_mode(lane_id) != "ordinary":
+                return None
         admitted_at = self._timestamp()
-        budget_seconds = min(candidate.budget_seconds, remaining_global_seconds)
-        hard_deadline = (dt.datetime.fromisoformat(admitted_at) + dt.timedelta(seconds=budget_seconds)).isoformat()
+        admitted_at_dt = dt.datetime.fromisoformat(admitted_at)
+        if self._final_interval is not None:
+            final_budget = min(
+                final_budget,
+                max(0.0, (self._final_interval.cutoff - admitted_at_dt).total_seconds()),
+            )
+        budget_seconds = min(candidate.budget_seconds, final_budget)
+        hard_deadline = (admitted_at_dt + dt.timedelta(seconds=budget_seconds)).isoformat()
         with self._lock:
             self._attempt_sequence += 1
             attempt_id = f"lane-attempt-{self._attempt_sequence:06d}"
@@ -230,6 +279,17 @@ class LaneController:
             hard_deadline=hard_deadline,
         )
         self._journal.bind(binding)
+        if final_grant is not None:
+            try:
+                self._final_interval.spend_final_chance(final_grant)
+            except ValueError:
+                self.generations.close(generation.generation_id, GenerationDisposition.INTERRUPT)
+                self._journal.interrupt_attempt(attempt_id)
+                return None
+        elif self._final_interval is not None and self._final_interval.admission_mode(lane_id) != "ordinary":
+            self.generations.close(generation.generation_id, GenerationDisposition.INTERRUPT)
+            self._journal.interrupt_attempt(attempt_id)
+            return None
         self._hook("after_admission")
         return binding
 
@@ -291,7 +351,7 @@ class LaneController:
             attempt_id=binding.attempt_id,
             generation_id=binding.generation.generation_id,
             envelope_id=binding.envelope_id,
-            lease_id=f"{binding.lease.run_id}:{binding.lease.lease_seq}",
+            lease_id=(f"{binding.lease.run_id}:{binding.lease.lease_seq}" if binding.lease is not None else ""),
             envelope=binding.envelope.document(),
             order_rank=binding.order_rank,
             budget_seconds=binding.budget_seconds,

@@ -349,9 +349,8 @@ def test_a_run_never_ends_because_the_board_looks_finished(tmp_path):
     assert clock.at > NOON
 
 
-def test_a_run_that_crashes_still_ends_and_still_says_so(tmp_path):
-    """A crash is one of the two endings, and it still owes the tail: an Instance held when the
-    process exits is capacity nobody reclaims."""
+def test_a_boot_crash_is_reported_without_closing_its_run(tmp_path):
+    """The successor Boot owns recovery; a failed Boot cannot declare its Run terminal."""
     clock = Clock()
     wire = Wire()
     run, recorder = solver(tmp_path, wire, Agent(clock, wire=wire), clock)
@@ -361,7 +360,7 @@ def test_a_run_that_crashes_still_ends_and_still_says_so(tmp_path):
 
     assert ending.cause == "crashed"
     assert "the ranking exploded" in ending.detail
-    assert "crashed" in records(recorder, "run-close")[0]["cause"]
+    assert records(recorder, "run-close") == []
 
 
 # ---------------------------------------------------------------- working Attempts

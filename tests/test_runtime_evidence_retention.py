@@ -97,9 +97,12 @@ def test_clean_checkout_verifier_rejects_artifact_input_signature_and_key_tamper
 
     input_copy = tmp_path / "input-copy"
     shutil.copytree(checkout, input_copy)
-    dockerfile = input_copy / "Dockerfile"
-    dockerfile.write_bytes(dockerfile.read_bytes() + b"changed")
-    assert verify(capsule, input_copy).returncode != 0
+    for name in ("Dockerfile", "solver/final_interval_runtime.py", "solver/submission/ambiguity.py"):
+        source = input_copy / name
+        original = source.read_bytes()
+        source.write_bytes(original + b"changed")
+        assert verify(capsule, input_copy).returncode != 0
+        source.write_bytes(original)
 
     signature_root = tmp_path / "signature-copy"
     shutil.copytree(SOURCE.parent, signature_root)
@@ -113,3 +116,8 @@ def test_clean_checkout_verifier_rejects_artifact_input_signature_and_key_tamper
     key_copy = key_root / SOURCE.name
     resign_with_substitute_key(key_copy, tmp_path)
     assert verify(key_copy, checkout).returncode != 0
+
+
+def test_capsule_binds_new_final_interval_and_nested_submission_sources():
+    inputs = json.loads((SOURCE / "capsule.json").read_bytes())["input_files"]
+    assert {"solver/final_interval_runtime.py", "solver/submission/ambiguity.py"} <= set(inputs)

@@ -87,16 +87,38 @@ class ObservedCandidateSubmissionBridge:
         run_id: str,
         boot_id: str,
         context_for: Callable[[int], SubmissionContext],
+        lane_for_attempt: Callable[[str], str] | None = None,
     ) -> None:
         self._admission = admission
         self._submission = submission
         self._run_id = run_id
         self._boot_id = boot_id
         self._context_for = context_for
+        self._lane_for_attempt = lane_for_attempt or (lambda _attempt_id: "lane-1")
+        self._prepared = {}
 
     def __call__(
         self, candidate: Candidate, *, attempt_id: str, challenge_id: int, generation_id: str
     ) -> SubmissionResult | None:
+        ready = self._prepared.get((challenge_id, candidate.text, generation_id))
+        if ready is None:
+            ready = self.prepare(
+                candidate, attempt_id=attempt_id, challenge_id=challenge_id, generation_id=generation_id
+            )
+        if ready is None:
+            return None
+        binding = CapabilityBinding(
+            self._run_id,
+            self._boot_id,
+            generation_id,
+            self._lane_for_attempt(attempt_id),
+            attempt_id,
+            f"submission:{ready.candidate.identity}",
+        )
+        return self._submission.dispatch(ready, binding=binding)
+
+    def prepare(self, candidate: Candidate, *, attempt_id: str, challenge_id: int, generation_id: str):
+        """Seal readiness while its Work generation is current, without causing the wire effect."""
         if not candidate.ref:
             return None
         source_digest = self._source(candidate, attempt_id)
@@ -111,17 +133,12 @@ class ObservedCandidateSubmissionBridge:
                 self._context_for(challenge_id),
             )
         )
-        if ready is None:
-            return None
-        binding = CapabilityBinding(
-            self._run_id,
-            self._boot_id,
-            generation_id,
-            "lane-1",
-            attempt_id,
-            f"submission:{ready.candidate.identity}",
-        )
-        return self._submission.dispatch(ready, binding=binding)
+        if ready is not None:
+            prepare = getattr(self._submission, "prepare", None)
+            if prepare is not None:
+                prepare(ready)
+            self._prepared[(challenge_id, candidate.text, generation_id)] = ready
+        return ready
 
     def _source(self, candidate: Candidate, attempt_id: str) -> str:
         expected = self._admission.store.run_dir / candidate.ref

@@ -160,6 +160,23 @@ class CandidateAdmission:
             if event.event_type == CANDIDATE_ADMISSION_RECORDED and event.payload["decision"] == "admitted"
         )
 
+    def ready_admissions(self) -> tuple[ReadyAdmission, ...]:
+        """Replay every admitted Candidate with its durable serial queue position."""
+        events = tuple(
+            event
+            for event in self.store.events()
+            if event.event_type == CANDIDATE_ADMISSION_RECORDED and event.payload["decision"] == "admitted"
+        )
+        return tuple(
+            ReadyAdmission(
+                project_candidate(event, self._cipher),
+                str(event.payload["ts"]),
+                event.sequence,
+                tuple(str(prior.payload["candidate_id"]) for prior in events if prior.sequence < event.sequence),
+            )
+            for event in events
+        )
+
     def admit_ready(self, proposal: CandidateProposal) -> ReadyAdmission | None:
         """Admit and return its canonical queue position without exposing EventStore queries."""
         outcome = self.admit(proposal)

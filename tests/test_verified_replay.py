@@ -61,6 +61,49 @@ def test_replaying_a_canonical_chain_twice_is_byte_identical_and_read_only(tmp_p
         first.projection.rows[0]["tool"] = "mutated"
 
 
+def test_non_recorder_event_ids_do_not_alias_the_next_legacy_step(tmp_path):
+    store = EventStore(tmp_path, run_id="run-1")
+    store.append(
+        ObservationRecorded(
+            attempt_id="codex-control",
+            step_index=1,
+            command_raw="record control state",
+            command_normalised="record control state",
+            tool="codex-control-state",
+            event_id="codex-control:000001",
+        ),
+        body=b"one",
+    )
+    store.append(
+        ObservationRecorded(
+            attempt_id="codex-control",
+            step_index=2,
+            command_raw="record control state",
+            command_normalised="record control state",
+            tool="codex-control-state",
+            event_id="codex-control:000002",
+        ),
+        body=b"two",
+    )
+    projection = verify_and_materialize_run_state(tmp_path, "run-1").projection
+    store.run_dir.joinpath("stream.jsonl").write_bytes(projection.serialized)
+    store.append(
+        ObservationRecorded(
+            attempt_id="codex-control",
+            step_index=3,
+            command_raw="record control state",
+            command_normalised="record control state",
+            tool="codex-control-state",
+            event_id="codex-control:000003",
+        ),
+        body=b"one",
+    )
+
+    replay = verify_and_materialize_run_state(tmp_path, "run-1")
+
+    assert [row["step_index"] for row in replay.projection.rows] == [1, 2, 3]
+
+
 def test_the_compatibility_view_is_derived_and_projection_edits_fail_closed(tmp_path):
     store = EventStore(tmp_path, run_id="run-1")
     store.append(_event(step_index=1), body=b"one")

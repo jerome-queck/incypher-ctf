@@ -95,14 +95,14 @@ class WorkCandidate:
     order_rank: int
     budget_seconds: float
     resource_units: int
-    lease: LeaseIdentity
+    lease: LeaseIdentity | None
     envelope: EnvelopeSpec
     tier: int = 2
     order_version: str = "order-v1"
 
     def __post_init__(self) -> None:
         if not self.work_id or min(self.order_rank, self.budget_seconds, self.resource_units) <= 0:
-            raise ValueError("Work candidate requires ranked Work, budget, Resource, and Lease identities")
+            raise ValueError("Work candidate requires ranked Work, budget, and Resource identities")
         if self.tier <= 0 or not self.order_version:
             raise ValueError("Work candidate requires acquired Tier and Order version")
         if self.budget_seconds > self.envelope.wall_seconds:
@@ -117,7 +117,7 @@ class LaneBinding:
     generation: GenerationIdentity
     envelope_id: str
     envelope: EnvelopeSpec
-    lease: LeaseIdentity
+    lease: LeaseIdentity | None
     order_rank: int
     budget_seconds: float
     resource_units: int

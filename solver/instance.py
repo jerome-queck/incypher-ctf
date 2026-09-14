@@ -473,7 +473,7 @@ class Instances:
         """
         if self._coordinator is not None:
             return Swept(
-                shown=self._record("sweep", "cleanup is owned by the admitted reconciliation plan", attempt_id)
+                shown=self._record("sweep", "cleanup is owned by the admitted reconciliation plan", attempt_id, ok=True)
             )
         if self._ledger_identity is not None and self._ledger_broker is not None:
             ledger = read_profiled_instance_ledger(self._ledger_identity, self._ledger_broker)

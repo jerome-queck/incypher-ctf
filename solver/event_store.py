@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -92,6 +94,12 @@ class EventStore:
     @property
     def sealed_dir(self) -> Path:
         return self._core.sealed_dir
+
+    @contextmanager
+    def writer_batch(self) -> Iterator[EventStore]:
+        """Hold the canonical writer across a bounded reserve/commit batch."""
+        with self._core.writer_batch():
+            yield self
 
     def append(self, event: CanonicalEvent, *, body: bytes) -> CommittedEvent:
         return self._core.append(event, body=body)

@@ -127,6 +127,8 @@ def _fixed_point(
 ) -> tuple[dict[str, str], dict[str, str]]:
     names = set(old_capsule["input_files"])
     names.discard("solver/runtime_qualification.py")
+    names.update(str(path.relative_to(ROOT)) for path in (ROOT / "solver").rglob("*.py"))
+    names.update(str(path.relative_to(ROOT)) for path in (ROOT / "solver").rglob("*.proof.json"))
     names.update(
         {
             "scripts/lock_apt_closure.py",
@@ -482,6 +484,14 @@ def qualify(private_key: Path) -> Path:
     observations, strict, strict_path, runtime_observation = _run_candidate(binding, work)
     serial, incident, crypto = _retain_evidence(
         private_key, public, binding, observations, strict, strict_path, runtime_observation
+    )
+    from scripts.qualify_final_interval_runtime import qualify as qualify_final_interval
+
+    qualify_final_interval(
+        binding,
+        private_key,
+        EVIDENCE / "candidate-manifest.json",
+        ROOT / "docs/evidence/final-interval-v2",
     )
     _finalize(serial[0], incident[0], crypto[0])
     return work

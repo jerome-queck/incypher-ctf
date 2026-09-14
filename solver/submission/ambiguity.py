@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from solver.capability import CapabilityBinding
 from solver.event_store_storage import atomic_write, canonical_bytes
 from solver.write_reservation import (
     Capacity,
@@ -75,6 +76,7 @@ class AmbiguousSubmissionFence:
             EffectIdentity(AMBIGUITY_PATH_OPERATION, identity.effect_id, identity.payload_identity),
             AMBIGUITY_PATH_NEED,
             retention=RetentionPolicy.RECORD,
+            retry_aborted=True,
         )
         starts = [
             row
@@ -84,7 +86,14 @@ class AmbiguousSubmissionFence:
         if record_wire and not starts:
             self.mark_wire(candidate_id, identity)
 
-    def mark_wire(self, candidate_id: str, identity: CompleteSubmissionIdentity) -> None:
+    def mark_wire(
+        self,
+        candidate_id: str,
+        identity: CompleteSubmissionIdentity,
+        binding: CapabilityBinding | None = None,
+        *,
+        supplied_value_digest: str = "",
+    ) -> None:
         reservation = self._authority.current(f"ambiguity-path:{identity.effect_id}")
         if reservation is None:
             raise ValueError("ambiguity path must be reserved before wire send")
@@ -107,6 +116,8 @@ class AmbiguousSubmissionFence:
                     "deadline": wire_started_at + FENCE_SECONDS,
                     "reservation_id": reservation.key,
                     "complete_identity": identity.document(),
+                    **({"supplied_value_digest": supplied_value_digest} if supplied_value_digest else {}),
+                    **({"generation_id": binding.generation_id} if binding is not None else {}),
                 }
             )
 
@@ -315,8 +326,33 @@ class AmbiguousSubmissionFence:
     def pending(self) -> tuple[PendingSubmission, ...]:
         return tuple(state for state in self._states().values() if state.disposition is SubmissionDisposition.PENDING)
 
+    def dispositions(self) -> dict[str, str]:
+        return {candidate_id: state.disposition.value for candidate_id, state in self._states().items()}
+
     def effect_state(self, reservation_id: str):
         return self._authority.current(reservation_id)
+
+    def was_possibly_sent(self, candidate_id: str) -> bool:
+        return candidate_id in self._states()
+
+    def reconciliation_binding(self, pending: PendingSubmission) -> CapabilityBinding:
+        starts = [
+            row
+            for row in self._events()
+            if row.get("event") == AmbiguityEvent.WIRE_STARTED
+            and row.get("candidate_id") == pending.candidate_id
+            and row.get("effect_id") == pending.effect_id
+        ]
+        if len(starts) != 1 or not starts[0].get("generation_id"):
+            raise ValueError("ambiguous submission lacks its Candidate generation")
+        return CapabilityBinding(
+            self._run_id,
+            self._boot_id,
+            str(starts[0]["generation_id"]),
+            "submission-reconciliation",
+            "submission-reconciliation",
+            f"submission-ledger:{pending.effect_id}",
+        )
 
     def release_unused_path(self, effect_id: str) -> None:
         budget = self._authority.current(f"ambiguity-path:{effect_id}")

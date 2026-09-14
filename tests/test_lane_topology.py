@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from solver.lane_topology import LaneController
+from solver.final_interval import FinalIntervalController
 from solver.lane_topology_contracts import LaneOutcome, LaneProfile, OwnerTermination, WorkCandidate
 from solver.lane_topology_receipt import link_manifest, verify_receipt
 from solver.lane_topology_proof import load_controlled_proof
@@ -73,6 +74,80 @@ def test_order_is_recomputed_for_each_free_lane_without_a_queue(tmp_path):
 
     assert calls == [(), ("challenge-1",), ("challenge-1", "challenge-2"), ("challenge-1", "challenge-2")]
     assert result.parked == ()
+
+
+def test_final_interval_skips_spent_lane_and_admits_available_peer(tmp_path):
+    state = tmp_path / "state"
+    ends = NOW + dt.timedelta(seconds=120)
+    final = FinalIntervalController(
+        state=state,
+        run_id="run-1",
+        opened_at=NOW - dt.timedelta(seconds=600),
+        ends_at=ends,
+        final_submission_reserve_seconds=60,
+        attempt_floor_seconds=300,
+        enabled_lanes=("lane-1", "lane-2"),
+        now=lambda: NOW,
+        reserve=lambda _identity: None,
+    )
+    assert final.admit_final_chance("lane-1", "already-spent") is not None
+    fence = GenerationFence(state, "run-1", Redactor({}), lambda: NOW.isoformat())
+    topology = LaneController(
+        state=state,
+        run_id="run-1",
+        profile=LaneProfile(lanes=2, global_resource_units=2),
+        generations=fence,
+        timestamp=lambda: NOW.isoformat(),
+        terminate=lambda binding: OwnerTermination(True, "a" * 64),
+        final_interval=final,
+    )
+
+    result = topology.run_cycle(
+        lambda excluded: candidates()[1:2] if not excluded else (),
+        lambda binding: LaneOutcome.complete(binding, seconds=1),
+    )
+
+    assert [line.lane_id for line in result.timelines] == ["lane-2"]
+
+
+def test_final_interval_budget_rebases_after_clock_advances_during_admission(tmp_path):
+    cutoff = NOW + dt.timedelta(seconds=360)
+    clock = [NOW + dt.timedelta(seconds=61)]
+    final = FinalIntervalController(
+        state=tmp_path / "state",
+        run_id="run-1",
+        opened_at=NOW,
+        ends_at=cutoff + dt.timedelta(seconds=60),
+        final_submission_reserve_seconds=60,
+        attempt_floor_seconds=300,
+        enabled_lanes=("lane-1",),
+        now=lambda: clock[0],
+        reserve=lambda _identity: None,
+    )
+    fence = GenerationFence(tmp_path / "state", "run-1", Redactor({}), lambda: NOW.isoformat())
+
+    def timestamp():
+        clock[0] = NOW + dt.timedelta(seconds=63)
+        return clock[0].isoformat()
+
+    topology = LaneController(
+        state=tmp_path / "state",
+        run_id="run-1",
+        profile=LaneProfile(lanes=1, global_resource_units=1),
+        generations=fence,
+        timestamp=timestamp,
+        terminate=lambda binding: OwnerTermination(True, "a" * 64),
+        final_interval=final,
+    )
+    candidate = candidates()[0]
+
+    result = topology.run_cycle(
+        lambda excluded: (candidate,) if not excluded else (),
+        lambda binding: LaneOutcome.complete(binding, seconds=1),
+    )
+
+    assert result.timelines[0].budget_seconds == 297
+    assert result.timelines[0].hard_deadline == cutoff.isoformat()
 
 
 def test_completed_lane_is_refilled_while_its_peer_remains_active(tmp_path):
@@ -251,6 +326,37 @@ def test_global_clock_refuses_cleanup_overrun(tmp_path):
             lambda excluded: candidates()[:1] if not excluded else (),
             lambda binding: stop.wait(timeout=1),
         )
+
+
+def test_stalled_owner_cannot_block_executor_shutdown(tmp_path):
+    release = threading.Event()
+    fence = GenerationFence(tmp_path / "state", "run-1", Redactor({}), lambda: NOW.isoformat())
+    topology = LaneController(
+        state=tmp_path / "state",
+        run_id="run-1",
+        profile=LaneProfile(lanes=1, global_resource_units=1, global_wall_seconds=0.01),
+        generations=fence,
+        timestamp=lambda: NOW.isoformat(),
+        terminate=lambda _binding: OwnerTermination(True, "e" * 64),
+    )
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            topology.run_cycle(
+                lambda excluded: tuple(candidate for candidate in candidates() if candidate.work_id not in excluded),
+                lambda _binding: release.wait(),
+            )
+        ),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=0.5)
+    release.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert len(result[0].timelines) == 1
+    assert result[0].timelines[0].outcome == "stalled"
 
 
 def test_receipt_rejects_duplicate_claims_or_unproved_generations_and_links_manifest(tmp_path):

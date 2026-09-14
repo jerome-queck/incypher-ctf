@@ -19,6 +19,27 @@ MANIFEST_ROW_ID = "core.submission-tail"
 MANIFEST_RECEIPT_REF = "receipt:serial-submission"
 
 
+def _valid_state_trace(states: object) -> bool:
+    """Allow any number of before-wire retries, then at most one wire lifecycle."""
+
+    if not isinstance(states, list) or not states:
+        return False
+    index = 0
+    while index < len(states):
+        if states[index] != "reserved" or index + 1 >= len(states):
+            return False
+        next_state = states[index + 1]
+        if next_state == "aborted":
+            index += 2
+            if index == len(states):
+                return True
+            continue
+        if next_state != "started" or index + 3 != len(states):
+            return False
+        return states[index + 2] in ("committed", "possibly-sent")
+    return False
+
+
 def receipt_document(run_id: str, authority: WriteAuthority) -> dict[str, object]:
     submissions = []
     timeline = []
@@ -93,14 +114,14 @@ def verify_receipt(path: Path, authority: WriteAuthority | None = None) -> Path:
             raise InvalidReceiptError("serial-submission effect identity does not verify")
         states = row.get("states")
         ordinals = row.get("ordinals")
-        allowed = (
-            ["reserved", "started", "committed"],
-            ["reserved", "started", "possibly-sent"],
-            ["reserved", "aborted"],
-        )
-        if states not in allowed:
+        if not _valid_state_trace(states):
             raise InvalidReceiptError("serial-submission state trace is not exactly once")
-        if schema_version == 2 and (not isinstance(ordinals, list) or len(ordinals) != len(states)):
+        if schema_version == 2 and (
+            not isinstance(ordinals, list)
+            or len(ordinals) != len(states)
+            or any(isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1 for ordinal in ordinals)
+            or ordinals != sorted(set(ordinals))
+        ):
             raise InvalidReceiptError("serial-submission trace ordinals are incomplete")
         result = row.get("result")
         if states[-1] == "committed":

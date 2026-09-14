@@ -235,6 +235,7 @@ class OrderRunFacts:
     admission: tuple[AdmissionFact, ...] = ()
     prior_order_fence: OrderFence = field(default_factory=OrderFence)
     boundary_fact_event_digest: str = ""
+    final_chance_available: bool = False
 
     def document(self) -> dict[str, object]:
         return {
@@ -257,6 +258,7 @@ class OrderRunFacts:
             "admission": [item.document() for item in self.admission],
             "prior_order_fence": self.prior_order_fence.document(),
             "boundary_fact_event_digest": self.boundary_fact_event_digest,
+            "final_chance_available": self.final_chance_available,
         }
 
     def boundary_source_document(self) -> dict[str, object]:
@@ -276,6 +278,7 @@ class OrderRunFacts:
             "leased": [item.document() for item in self.leased],
             "solved": [item.document() for item in self.solved],
             "prior_order_fence": self.prior_order_fence.document(),
+            "final_chance_available": self.final_chance_available,
         }
 
 
@@ -534,10 +537,15 @@ def decide_order(request: OrderInput) -> OrderDecision:
     interval = "closed" if remaining <= 0 else "final-interval" if remaining < dials.floor_seconds else "ordinary"
     grant = None
     grant_exploring = False
-    if interval == "ordinary" and len(run.active_grants) < dials.concurrency:
-        admissible = tuple(row for row in rows if row.committed)
+    if interval in {"ordinary", "final-interval"} and len(run.active_grants) < dials.concurrency:
+        final_chance = interval == "final-interval" and run.final_chance_available
+        admissible = tuple(row for row in rows if (row.committed or final_chance) and not row.deferred_reason)
         chosen = admissible[0] if admissible else None
-        if admissible and (run.next_generation - 1) % dials.explore_every == dials.explore_every - 1:
+        if (
+            interval == "ordinary"
+            and admissible
+            and (run.next_generation - 1) % dials.explore_every == dials.explore_every - 1
+        ):
             uncertain = tuple(row for row in admissible if row.crowd.state != "qualified")
             if uncertain:
                 chosen = min(
@@ -556,7 +564,7 @@ def decide_order(request: OrderInput) -> OrderDecision:
                 else remaining
             )
             budget = min(chosen.budget_s, remaining, safe)
-            if budget >= dials.floor_seconds:
+            if budget >= dials.floor_seconds or (final_chance and budget > 0):
                 sequence = 1 + sum(1 for item in run.attempts if item.challenge_id == chosen.challenge_id)
                 tag = "i" if chosen.challenge_id.kind == "integer" else "s"
                 attempt_id = f"{tag}:{chosen.challenge_id.value}-{sequence}"
@@ -637,6 +645,7 @@ def order_input_from_document(value: object, snapshots: Mapping[str, IntakeSnaps
         admission=tuple(_admission(item) for item in _list(run_value.get("admission"))),
         prior_order_fence=_order_fence(run_value.get("prior_order_fence")),
         boundary_fact_event_digest=str(run_value.get("boundary_fact_event_digest", "")),
+        final_chance_available=bool(run_value.get("final_chance_available", False)),
     )
     dials = PolicyDials(
         **{
