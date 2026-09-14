@@ -19,6 +19,8 @@ def write_receipt(path: Path, run_id: str, row) -> None:
         "incident_id": row["incident_id"],
         "fault_id": row["fault"]["fault_id"],
         "fault_identity": row["fault_identity"],
+        "fingerprint": row.get("fingerprint", ""),
+        "successor_of": row.get("successor_of", ""),
         "generation_id": row["fault"]["generation_id"],
         "scope": row["scope"],
         "reason": row["reason"],
@@ -142,7 +144,12 @@ def _verify_deterministic(value) -> None:
         raise ValueError("deterministic Recovery order is invalid")
     if consumed:
         completed = [*prefix, IncidentStep.CHANGED_REMEDY.value, IncidentStep.SEMANTIC_PROBATION.value]
-        if trace != completed:
+        stopped_before_probation = (
+            value.get("final_outcome") == IncidentDisposition.CONTAINED.value
+            and value.get("probation_outcome") != ProbationOutcome.PASSED.value
+            and trace in (prefix, completed[:-1])
+        )
+        if trace != completed and not stopped_before_probation:
             raise ValueError("deterministic Recovery probation order is invalid")
         if (
             changed.get("dimension") != entry.changed_dimension

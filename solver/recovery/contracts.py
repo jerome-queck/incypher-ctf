@@ -154,6 +154,8 @@ class IncidentRecorded:
     failed_action_value: str = ""
     adapter_id: str = ""
     adapter_config: str = "{}"
+    fingerprint: str = ""
+    successor_of: str = ""
 
     @property
     def event_type(self) -> str:
@@ -196,6 +198,8 @@ class IncidentRecorded:
         if any(not isinstance(payload.get(name), str) for name in strings):
             raise ValueError(f"Incident event {sequence} has an invalid string field")
         extension_strings = (
+            "fingerprint",
+            "successor_of",
             "catalogue_version",
             "probe_id",
             "probe_outcome",

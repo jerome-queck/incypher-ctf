@@ -14,8 +14,9 @@ from typing import Any, TypeVar
 
 from solver.event_store_storage import atomic_write, canonical_bytes, digest_bytes
 from solver.write_reservation import Capacity, EffectIdentity, ReservedEffect, WriteAuthority
+from solver.write_reservation_contracts import ReservationState
 from solver.recovery.contracts import FaultKind, ProbationOutcome
-from solver.recovery.runtime import AuthoritativeChange, DeterministicRecovery, DomainRecovery
+from solver.recovery.runtime import AuthoritativeChange, DeterministicRecovery, DomainRecovery, RecoveryRegistry
 
 SCHEMA_VERSION = 1
 RECEIPT_TYPE = "route-and-quota"
@@ -23,6 +24,7 @@ RECEIPT_FILENAME = "route-and-quota.receipt.json"
 MANIFEST_RECEIPT_REF = "receipt:route-and-quota"
 MANIFEST_ROW_ID = "core.adaptive-routing"
 MAX_RECEIPT_BYTES = 1024 * 1024
+ROUTE_RECOVERY_ADAPTER = "route-switch-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -205,6 +207,10 @@ class RouteAndQuotaController:
         self._effect = ReservedEffect(authority) if authority is not None else None
         self._recovery = recovery
         self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
+        if recovery is not None:
+            registry = RecoveryRegistry()
+            registry.register(ROUTE_RECOVERY_ADAPTER, self._route_recovery)
+            recovery.replay(registry)
 
     @property
     def policy(self) -> RouteAndQuotaPolicy:
@@ -260,6 +266,14 @@ class RouteAndQuotaController:
             raise failure
         if self._recovery is not None:
             recovered: list[Result] = []
+            config = {
+                "request_id": request_id,
+                "generation_id": generation_id,
+                "payload_digest": payload_digest,
+                "failed_route": route.value,
+                "alternate_route": alternate.value,
+                "evidence_digest": failure.evidence_digest,
+            }
 
             def apply() -> bool:
                 outcome = self._execute_route(
@@ -284,13 +298,7 @@ class RouteAndQuotaController:
                 evidence=failure.evidence_digest,
                 failed_action_value=route.value,
                 original_deadline=self._now() + dt.timedelta(seconds=180),
-                recovery=DomainRecovery(
-                    "inference-route",
-                    lambda: AuthoritativeChange(route.value, alternate.value, "canonical-route-policy"),
-                    apply,
-                    lambda: ProbationOutcome.PASSED if recovered else ProbationOutcome.FAILED,
-                    capture=lambda: failure.evidence_digest.encode(),
-                ),
+                recovery=self._route_recovery(config, apply=apply, recovered=recovered),
             )
             if recovered:
                 return recovered[0]
@@ -301,6 +309,37 @@ class RouteAndQuotaController:
         if isinstance(second, _FailedRoute):
             raise second.failure
         return second
+
+    def _route_recovery(self, config: dict[str, str], *, apply=None, recovered=None) -> DomainRecovery:
+        failed = InferenceRoute(config["failed_route"])
+        alternate = InferenceRoute(config["alternate_route"])
+        request_id = config["request_id"]
+        generation_id = config["generation_id"]
+        payload_digest = config["payload_digest"]
+
+        def probation() -> ProbationOutcome:
+            if recovered:
+                return ProbationOutcome.PASSED
+            if self._authority is not None:
+                for reservation in self._authority.reservations():
+                    if (
+                        reservation.key == f"model-request:{request_id}:switch"
+                        and reservation.identity.subject == f"{generation_id}:{request_id}:switch:{alternate.value}"
+                        and reservation.identity.payload_digest == payload_digest
+                        and reservation.state is ReservationState.COMMITTED
+                    ):
+                        return ProbationOutcome.PASSED
+            return ProbationOutcome.UNSETTLED
+
+        return DomainRecovery(
+            "inference-route",
+            lambda: AuthoritativeChange(failed.value, alternate.value, "canonical-route-policy"),
+            apply or (lambda: False),
+            probation,
+            capture=lambda: config.get("evidence_digest", "").encode(),
+            adapter_id=ROUTE_RECOVERY_ADAPTER,
+            adapter_config=config,
+        )
 
     def _record_quota_observations(self, observations: tuple[PolicyObservation, ...]) -> None:
         assert self._effect is not None

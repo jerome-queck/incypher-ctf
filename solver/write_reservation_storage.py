@@ -28,7 +28,8 @@ from solver.write_reservation_contracts import (
 )
 
 
-_WRITER_REGISTRY_LOCK = threading.Lock()
+# Path hashing can trigger GC, whose writer finalizers reenter this registry.
+_WRITER_REGISTRY_LOCK = threading.RLock()
 _HELD_WRITERS: set[Path] = set()
 
 

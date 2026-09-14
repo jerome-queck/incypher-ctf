@@ -141,6 +141,39 @@ class DeterministicRecovery:
             authority=self._authority,
         ).report(fault)
 
+    def validate_boot_adapters(self) -> None:
+        from solver.event_store import EventStore
+        from solver.final_interval_runtime import FINAL_INTERVAL_RECOVERY_ADAPTER
+        from solver.recovery.contracts import INCIDENT_RECORDED
+        from solver.recovery.instance import INSTANCE_ADAPTER
+        from solver.recovery.safe_read import SAFE_READ_ADAPTER
+        from solver.recovery.storage import STORAGE_ADAPTER
+        from solver.recovery.submission import SUBMISSION_ADAPTER
+        from solver.route_and_quota import ROUTE_RECOVERY_ADAPTER
+        from solver.supervisor import PROCESS_RECOVERY_ADAPTER
+
+        known = {
+            FINAL_INTERVAL_RECOVERY_ADAPTER,
+            INSTANCE_ADAPTER,
+            SAFE_READ_ADAPTER,
+            STORAGE_ADAPTER,
+            SUBMISSION_ADAPTER,
+            ROUTE_RECOVERY_ADAPTER,
+            PROCESS_RECOVERY_ADAPTER,
+        }
+        latest = {
+            event.payload["incident_id"]: event.payload
+            for event in EventStore(self._state, run_id=self._run_id, redactor=self._redactor).events()
+            if event.event_type == INCIDENT_RECORDED
+        }
+        for incident in latest.values():
+            if (
+                not incident["terminal"]
+                and incident.get("catalogue_version")
+                and incident.get("adapter_id") not in known
+            ):
+                raise ValueError(f"unavailable Recovery adapter: {incident.get('adapter_id')}")
+
     def replay(self, registry: RecoveryRegistry) -> tuple[IncidentResult, ...]:
         return IncidentEngine(
             self._state,

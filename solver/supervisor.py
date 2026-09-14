@@ -119,6 +119,7 @@ class _SupervisorContainment:
             redactor,
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
+        self._store = EventStore(state, run_id=run_id, redactor=redactor)
         self._outcome = outcome
         self._replace = replace
         self._failed_boot_id = failed_boot_id
@@ -158,16 +159,34 @@ class _SupervisorContainment:
         )
 
     def apply(self) -> bool:
-        self.replacement_outcome = self._replace()
         return True
 
+    def launch_authorized(self) -> None:
+        opened = any(
+            event.payload.get("record") == "boot-open" and event.payload.get("boot_id") == self._replacement_boot_id
+            for event in self._store.events()
+        )
+        if not opened:
+            self.replacement_outcome = self._replace()
+
     def probation(self) -> ProbationOutcome:
-        outcome = self.replacement_outcome
-        if outcome is None:
+        closed = next(
+            (
+                event.payload
+                for event in self._store.events()
+                if event.payload.get("record") == "boot-close"
+                and event.payload.get("boot_id") == self._replacement_boot_id
+            ),
+            None,
+        )
+        if closed is None:
             return ProbationOutcome.UNSETTLED
-        if outcome.exit_code == 0 and not outcome.signals and outcome.group_extinguished:
-            return ProbationOutcome.PASSED
-        return ProbationOutcome.FAILED
+        passed = closed["disposition"] == NORMAL
+        if self.replacement_outcome is None:
+            self.replacement_outcome = ProcessOutcome(
+                0 if passed else 1, (), 0, closed.get("detail", ""), group_extinguished=True
+            )
+        return ProbationOutcome.PASSED if passed else ProbationOutcome.FAILED
 
 
 class Supervisor:
@@ -286,14 +305,25 @@ class Supervisor:
             )
 
         registry.register(PROCESS_RECOVERY_ADAPTER, process_adapter)
-        DeterministicRecovery(self._state, self._run_id, self._redactor).replay(registry)
-        if replay_ports and replay_ports[-1].replacement_outcome is not None:
-            outcome = replay_ports[-1].replacement_outcome
-            boot_id = replay_ports[-1]._replacement_boot_id
-            disposition = self._disposition(outcome)
+        deterministic = DeterministicRecovery(self._state, self._run_id, self._redactor)
+        deterministic.validate_boot_adapters()
+        replayed = deterministic.replay(registry)
+        if replayed:
+            if not replay_ports:
+                process_adapter(json.loads(replayed[-1].receipt_path.read_bytes())["adapter"]["config"])
+            ports = replay_ports[-1]
+            if replayed[-1].disposition == "probation":
+                ports.launch_authorized()
+                deterministic.replay(registry)
+            outcome = ports.replacement_outcome
+            boot_id = ports._replacement_boot_id if outcome is not None else ports._failed_boot_id
+            disposition = self._disposition(outcome) if outcome is not None else REFUSED
             self._lifecycle.append(
                 "run:close",
-                RunClosed(disposition=TerminalDisposition(disposition), detail=outcome.detail),
+                RunClosed(
+                    disposition=TerminalDisposition(disposition),
+                    detail=outcome.detail if outcome else "recovery-contained",
+                ),
             )
             return self._finish(SupervisorResult(self._run_id, boot_id, disposition, self._lifecycle.write_receipt()))
 
@@ -302,25 +332,8 @@ class Supervisor:
         disposition = self._disposition(outcome)
         if disposition == CRASHED:
             replacement_boot_id = self._lifecycle.next_boot_id()
-            ports = _SupervisorContainment(
-                self._state,
-                self._run_id,
-                self._redactor,
-                outcome,
-                lambda: run_boot(replacement_boot_id, initial=False),
-                boot_id,
-                replacement_boot_id,
-            )
-            recovery = DomainRecovery(
-                "process-generation",
-                ports.project_change,
-                ports.apply,
-                ports.probation,
-                ports.fence,
-                ports.evidence,
-                ports.teardown,
-                adapter_id=PROCESS_RECOVERY_ADAPTER,
-                adapter_config={
+            recovery = process_adapter(
+                {
                     "failed_boot_id": boot_id,
                     "replacement_boot_id": replacement_boot_id,
                     "exit_code": "" if outcome.exit_code is None else str(outcome.exit_code),
@@ -329,9 +342,10 @@ class Supervisor:
                     "detail": outcome.detail,
                     "leader_pid": "" if outcome.leader_pid is None else str(outcome.leader_pid),
                     "group_extinguished": str(outcome.group_extinguished).lower(),
-                },
+                }
             )
-            DeterministicRecovery(self._state, self._run_id, self._redactor).handle(
+            ports = replay_ports[-1]
+            incident = deterministic.handle(
                 kind=FaultKind.WORKER_CRASH,
                 fault_id=f"{boot_id}:process-exit",
                 scope="owner-local:run-controller",
@@ -341,6 +355,9 @@ class Supervisor:
                 original_deadline=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=180),
                 recovery=recovery,
             )
+            if incident.disposition == "probation":
+                ports.launch_authorized()
+                deterministic.replay(registry)
             if ports.replacement_outcome is not None:
                 boot_id = replacement_boot_id
                 outcome = ports.replacement_outcome

@@ -12,6 +12,8 @@ def read(store, run_id, schema_version):
         incidents[value["incident_id"]] = {
             "incident_id": value["incident_id"],
             "fault_identity": value["fault_identity"],
+            "fingerprint": value.get("fingerprint", ""),
+            "successor_of": value.get("successor_of", ""),
             "fault": {"fault_id": value["fault_id"], "generation_id": value["generation_id"]},
             "scope": value["scope"],
             "kind": value["fault_kind"],
@@ -62,6 +64,8 @@ def write(store, document):
                 event_id=f"{row['incident_id']}:revision-{revision + offset:06d}",
                 incident_id=row["incident_id"],
                 fault_identity=row["fault_identity"],
+                fingerprint=row.get("fingerprint", ""),
+                successor_of=row.get("successor_of", ""),
                 fault_id=row["fault"]["fault_id"],
                 generation_id=row["fault"]["generation_id"],
                 scope=row["scope"],

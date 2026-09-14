@@ -39,9 +39,15 @@ class ReconciliationResult:
     verdict: AdmissionVerdict
     completion_key: str = ""
     ownership: BootOwnership = BootOwnership((), (), False)
+    cycle_id: str = ""
+
+    @property
+    def reconciliation_id(self) -> str:
+        """Stable authority identity for this reconciliation cycle."""
+        return self.cycle_id or self.boot_id
 
     def document(self) -> dict[str, object]:
-        return {
+        document = {
             "boot_id": self.boot_id,
             "snapshot_id": self.snapshot_id,
             "join_digest": self.join_digest,
@@ -51,6 +57,9 @@ class ReconciliationResult:
             "completion_key": self.completion_key,
             "ownership": self.ownership.document(),
         }
+        if self.cycle_id:
+            document["cycle_id"] = self.cycle_id
+        return document
 
 
 __all__ = ["AdmissionVerdict", "BootOwnership", "ReconciliationResult"]

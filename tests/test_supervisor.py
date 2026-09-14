@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -95,16 +96,19 @@ def test_replay_and_storage_admission_precede_the_effect_capable_boot(tmp_path):
 
 def test_supervisor_reconstructs_its_persisted_process_adapter_after_probe_crash(tmp_path, monkeypatch):
     boots = iter((ExitedBoot(1), ExitedBoot(0)))
-    original = supervisor_module._SupervisorContainment.project_change
+    original = os.fsync
     crashed = [False]
+    events = tmp_path / "runs/run-replay/canonical/events.jsonl"
 
-    def crash_once(self):
-        if not crashed[0]:
-            crashed[0] = True
-            raise RuntimeError("crash before refusal finishes")
-        return original(self)
+    def crash_once(descriptor):
+        original(descriptor)
+        if not crashed[0] and events.exists():
+            rows = events.read_bytes().splitlines()
+            if rows and "fixed-probe" in json.loads(rows[-1]).get("payload", {}).get("steps", ()):
+                crashed[0] = True
+                raise RuntimeError("crash before refusal finishes")
 
-    monkeypatch.setattr(supervisor_module._SupervisorContainment, "project_change", crash_once)
+    monkeypatch.setattr(os, "fsync", crash_once)
     with pytest.raises(RuntimeError, match="refusal finishes"):
         Supervisor(
             state=tmp_path,
@@ -112,7 +116,7 @@ def test_supervisor_reconstructs_its_persisted_process_adapter_after_probe_crash
             redactor=Redactor({}),
             services=services(launch=lambda _boot_id: next(boots)),
         ).run()
-    monkeypatch.setattr(supervisor_module._SupervisorContainment, "project_change", original)
+    monkeypatch.setattr(os, "fsync", original)
 
     result = Supervisor(
         state=tmp_path,
@@ -558,3 +562,26 @@ def test_lifecycle_receipt_attaches_to_the_provisional_supervisor_manifest_row(t
 def _lifecycle(event_id: str, record: str, *, boot_id: str = "") -> LifecycleRecorded:
     fact = RunOpened() if record == "run-open" else BootOpened(boot_id)
     return LifecycleRecorded(event_id=event_id, fact=fact, ts="2026-09-11T00:00:00+00:00")
+
+
+def test_replacement_controller_acquires_the_single_writer_after_recovery_releases_it(tmp_path):
+    from solver.record import Recorder
+
+    launches = []
+
+    def launch(boot_id):
+        recorder = Recorder(tmp_path, "run-writer", Redactor({}))
+        recorder.write_authority.close()
+        launches.append(boot_id)
+        return ExitedBoot(1 if len(launches) == 1 else 0)
+
+    result = Supervisor(
+        state=tmp_path,
+        run_id="run-writer",
+        redactor=Redactor({}),
+        services=services(launch=launch),
+    ).run()
+    assert result.disposition == NORMAL
+    assert launches == ["boot-000001", "boot-000002"]
+    receipt = json.loads((tmp_path / "runs/run-writer/canonical/incident-containment.receipt.json").read_text())
+    assert receipt["final_outcome"] == "resolved"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 from typing import Callable
 
@@ -69,20 +70,27 @@ class StorageGovernor:
         redactor: Redactor | None = None,
         event_store_hook: Callable[[str], None] | None = None,
         retirement_hook: Callable[[str], None] | None = None,
+        now: Callable[[], dt.datetime] | None = None,
     ) -> None:
         self.run_dir = Path(state) / "runs" / run_id
         self.run_id = run_id
         self.profile = profile
+        self._redactor = redactor or Redactor({})
+        self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self._store = EventStore(
             state,
             run_id=run_id,
-            redactor=redactor,
+            redactor=self._redactor,
             append_hook=event_store_hook,
         )
-        self._authority = WriteAuthority(self.run_dir, profile.write_profile(), redactor=redactor)
+        self._authority = WriteAuthority(self.run_dir, profile.write_profile(), redactor=self._redactor)
         persist_profile(self._store.canonical_dir, profile)
         self._retirement_hook = retirement_hook
         self.replay_pending_retirements()
+        self._recovery = self.recovery_composition(state, self._redactor, now=self._now)
+        from solver.recovery.storage import replay_storage_recovery
+
+        replay_storage_recovery(self, self._recovery)
 
     def recovery_composition(self, state: Path, redactor: Redactor, *, now):
         """Compose Incident Recovery with this governor's sole writer authority."""
@@ -261,6 +269,14 @@ class StorageGovernor:
                 self._authority.possibly_sent(current, "canonical-pressure-append-failed")
             raise
         self._authority.commit(started, {"event_digest": committed.event_digest})
+        if not admitted:
+            from solver.recovery.storage import contain_storage_pressure
+
+            try:
+                contain_storage_pressure(self._recovery, decision, now=self._now)
+            except ReservationUnavailable:
+                # The canonical pressure decision still refuses admission when Recovery cannot reserve.
+                pass
         return decision
 
     def _admission_payload(

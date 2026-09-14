@@ -119,13 +119,18 @@ def test_timeout_recovery_contains_an_identical_research_request(tmp_path: Path)
     try:
         binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
         runtime.prepare_attempt(binding)
-        result = runtime.fetch(left, runtime.claim(left, generation.generation_id), "https://research.example/fact")
+        handle = runtime.claim(left, generation.generation_id)
+        result = runtime.fetch(left, handle, "https://research.example/fact")
+        refused = runtime.fetch(left, handle, "https://research.example/fact")
+        unrelated = runtime.fetch(left, handle, "https://research.example/other")
     finally:
         left.close()
         right.close()
 
     assert result.outcome is ResearchOutcome.TIMEOUT
-    assert len(attempts) == 1
+    assert refused.outcome is ResearchOutcome.DENIED
+    assert unrelated.outcome is ResearchOutcome.ANSWERED
+    assert len(attempts) == 2
     receipt = json.loads((state / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
     assert receipt["changed_action"] == {}
     assert receipt["probe"]["outcome"] == "unsettled"

@@ -1,3 +1,3 @@
 """Reviewed digest of the controlled Lane-topology proof."""
 
-CONTROLLED_PROOF_DIGEST = "517e8f300920ca0be639d4fbe2ab9c8be73e9743e5fe91e501eaed32915e3471"
+CONTROLLED_PROOF_DIGEST = "0c36572e93f8ed2a01a08d82766d35ef66d70dad979bf310f1b575509e47e694"

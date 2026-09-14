@@ -17,6 +17,7 @@ class InstanceObservation:
     join_digest: str
     reconcile: Callable[[], ReconciliationResult]
     evidence: bytes
+    probation: Callable[[], ProbationOutcome] | None = None
 
 
 def instance_recovery(
@@ -44,15 +45,23 @@ def instance_recovery(
         results[:] = [pending[0].reconcile()]
         return True
 
+    def prove_probation():
+        if not pending:
+            pending[:] = [observe()]
+        current = pending[0]
+        if current is not None and current.probation is not None:
+            return current.probation()
+        return (
+            ProbationOutcome.PASSED
+            if results and results[0].verdict is AdmissionVerdict.OPEN
+            else ProbationOutcome.UNSETTLED
+        )
+
     return DomainRecovery(
         "instance-authority-join",
         project,
         apply,
-        lambda: (
-            ProbationOutcome.PASSED
-            if results and results[0].verdict is AdmissionVerdict.OPEN
-            else ProbationOutcome.UNSETTLED
-        ),
+        prove_probation,
         capture=lambda: pending[0].evidence if pending else b"",
         adapter_id=INSTANCE_ADAPTER,
         adapter_config={"failed_join_digest": failed_join_digest},

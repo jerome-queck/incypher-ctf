@@ -71,6 +71,7 @@ def verify_receipt(path: Path, authority: WriteAuthority, canonical_events, ledg
             bool(supplied["ownership"]["interrupted_attempts_closed"]),
             bool(supplied["ownership"]["predecessors_closed"]),
         ),
+        str(supplied.get("cycle_id", "")),
     )
     expected = receipt_document(result, authority)
     if supplied != expected:
@@ -111,7 +112,7 @@ def verify_receipt(path: Path, authority: WriteAuthority, canonical_events, ledg
     actual_decision = [
         reservation
         for reservation in authority.reservations()
-        if reservation.key.endswith(f":{result.boot_id}:decision")
+        if reservation.key.endswith(f":{result.reconciliation_id}:decision")
         and reservation.state is ReservationState.COMMITTED
         and reservation.observation == result.document()
     ]
@@ -124,11 +125,10 @@ def verify_receipt(path: Path, authority: WriteAuthority, canonical_events, ledg
         and reservation.identity.subject == result.snapshot_id
         and reservation.state is ReservationState.COMMITTED
     ]
-    if (
-        len(snapshots) != 1
-        or digest_bytes(canonical_bytes({"boot_id": result.boot_id, "ledger": snapshots[0].observation}))
-        != result.snapshot_id
-    ):
+    snapshot_material = {"boot_id": result.boot_id, "ledger": snapshots[0].observation} if snapshots else {}
+    if result.cycle_id:
+        snapshot_material["cycle_id"] = result.cycle_id
+    if len(snapshots) != 1 or digest_bytes(canonical_bytes(snapshot_material)) != result.snapshot_id:
         raise ValueError("Instance-reconciliation snapshot lacks canonical authenticated-ledger evidence")
     from solver.instance_ledger import verify_receipt as verify_ledger_receipt
 

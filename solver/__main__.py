@@ -345,7 +345,7 @@ def _run_admitted(
             Redactor.for_declared_secrets(environ),
             **({"write_profile": write_profile} if write_profile is not None else {}),
         )
-        from solver.recovery.contracts import FaultKind, ProbationOutcome
+        from solver.recovery.contracts import FaultKind
         from solver.recovery.runtime import DeterministicRecovery, RecoveryRegistry
 
         deterministic_recovery = DeterministicRecovery(
@@ -355,6 +355,7 @@ def _run_admitted(
             now=clock.now,
             authority=recorder.write_authority,
         )
+        deterministic_recovery.validate_boot_adapters()
         window = Window.opened(
             recorder.run_dir,
             lasting=boot.lasting(rules.closes_at, rules.window_seconds, held.run_seconds, now),
@@ -592,50 +593,76 @@ def _run_admitted(
             recorder.write_authority,
             run_state / "runs" / held.run_id / "canonical" / "instance-reconciliation.receipt.json",
         )
-        if reconciliation.verdict is not AdmissionVerdict.OPEN:
-            from solver.recovery.instance import INSTANCE_ADAPTER, InstanceObservation, instance_recovery
+        from solver.recovery.instance import INSTANCE_ADAPTER, InstanceObservation, instance_recovery
 
-            recovery_cycle = [0]
+        recovery_cycle = [0]
 
-            def observe_instance_authority():
-                recovery_cycle[0] += 1
-                current_ledger = read_profiled_instance_ledger(ledger_identity, ledger_broker)
-                current_generations = recorder.generations.projection().generations
-                current_ownership = _boot_ownership(recorder.event_store.events(), boot_id, current_generations)
-                current_leases = replay_leases_across_runs(run_state, held.url)
-                join_digest = instance_reconciler.project_join(
-                    current_ledger, current_leases, current_generations, current_ownership
-                )
-
-                def reconcile_observation():
-                    return instance_reconciler.reconcile(
-                        boot_id=f"{boot_id}:recovery-{recovery_cycle[0]}",
-                        ledger=current_ledger,
-                        leases=current_leases,
-                        generations=current_generations,
-                        ownership=current_ownership,
-                    )
-
-                return InstanceObservation(
-                    join_digest,
-                    reconcile_observation,
-                    str(
-                        {
-                            "ledger": current_ledger.identity_digest,
-                            "leases": len(current_leases),
-                            "generations": len(current_generations),
-                            "ownership": current_ownership.document(),
-                        }
-                    ).encode(),
-                )
-
-            registry = RecoveryRegistry()
-            registry.register(
-                INSTANCE_ADAPTER,
-                lambda config: instance_recovery(config["failed_join_digest"], observe_instance_authority),
+        def observe_instance_authority():
+            recovery_cycle[0] += 1
+            current_ledger = read_profiled_instance_ledger(ledger_identity, ledger_broker)
+            current_generations = recorder.generations.projection().generations
+            current_ownership = _boot_ownership(recorder.event_store.events(), boot_id, current_generations)
+            current_leases = replay_leases_across_runs(run_state, held.url)
+            join_digest = instance_reconciler.project_join(
+                current_ledger, current_leases, current_generations, current_ownership
             )
-            deterministic_recovery.replay(registry)
-            recovery_deadline = clock.now() + dt.timedelta(seconds=180)
+
+            def reconcile_observation():
+                nonlocal reconciliation, reconciliation_receipt, ledger_receipt
+                reconciliation = instance_reconciler.reconcile(
+                    boot_id=boot_id,
+                    cycle_id=f"{boot_id}:recovery-{recovery_cycle[0]}",
+                    ledger=current_ledger,
+                    leases=current_leases,
+                    generations=current_generations,
+                    ownership=current_ownership,
+                )
+                ledger_receipt = write_instance_ledger_receipt(run_state, held.run_id, current_ledger)
+                reconciliation_receipt = write_reconciliation_receipt(
+                    reconciliation,
+                    recorder.write_authority,
+                    run_state / "runs" / held.run_id / "canonical" / "instance-reconciliation.receipt.json",
+                )
+                return reconciliation
+
+            return InstanceObservation(
+                join_digest,
+                reconcile_observation,
+                str(
+                    {
+                        "ledger": current_ledger.identity_digest,
+                        "leases": len(current_leases),
+                        "generations": len(current_generations),
+                        "ownership": current_ownership.document(),
+                    }
+                ).encode(),
+                probation=lambda: instance_reconciler.probation(join_digest, boot_id=boot_id),
+            )
+
+        registry = RecoveryRegistry()
+        registry.register(
+            INSTANCE_ADAPTER,
+            lambda config: instance_recovery(config["failed_join_digest"], observe_instance_authority),
+        )
+
+        def complete_instance_recovery(result):
+            receipt = json.loads(result.receipt_path.read_text())
+            deadline = dt.datetime.fromisoformat(receipt["original_deadline"])
+            while not receipt["final_outcome"] and window.left(clock.now()) > 0:
+                remaining = min((deadline - clock.now()).total_seconds(), window.left(clock.now()))
+                if remaining > 0:
+                    clock.sleep(min(15.0, remaining))
+                replayed = deterministic_recovery.replay(registry)
+                if not replayed:
+                    break
+                receipt = json.loads(replayed[-1].receipt_path.read_text())
+            return receipt
+
+        for replayed_incident in deterministic_recovery.replay(registry):
+            complete_instance_recovery(replayed_incident)
+
+        if reconciliation.verdict is not AdmissionVerdict.OPEN:
+            recovery_deadline = min(clock.now() + dt.timedelta(seconds=180), window.ends_at)
             result = deterministic_recovery.handle(
                 kind=FaultKind.INSTANCE,
                 fault_id=f"{boot_id}:instance-reconciliation",
@@ -646,13 +673,10 @@ def _run_admitted(
                 original_deadline=recovery_deadline,
                 recovery=instance_recovery(reconciliation.join_digest, observe_instance_authority),
             )
-            receipt = json.loads(result.receipt_path.read_text())
-            while receipt["probation_outcome"] != ProbationOutcome.PASSED.value and window.left(clock.now()) > 0:
-                clock.sleep(min(15.0, max(0.0, window.left(clock.now()))))
-                if not receipt["final_outcome"]:
-                    replayed = deterministic_recovery.replay(registry)
-                    if replayed:
-                        receipt = json.loads(replayed[-1].receipt_path.read_text())
+            complete_instance_recovery(result)
+        if reconciliation.verdict is not AdmissionVerdict.OPEN:
+            recorder.write_authority.close()
+            raise Refusal(f"{boot.MARK} Instance authority remains contained; Work admission is closed")
     instances = Instances(
         board,
         recorder,

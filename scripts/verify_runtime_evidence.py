@@ -377,9 +377,10 @@ def _verify_297(capsule: Path, document: dict[str, object], fixed: dict[str, obj
     unsettled = trace.get("no_inference", [])
     replayed = trace.get("cross_boot", [])
     expired = trace.get("expired_bound", {})
+    expired_probation = trace.get("expired_probation", {})
     receipt_names = {
         row.get("receipt")
-        for rows in (changed, unsettled, replayed, [expired])
+        for rows in (changed, unsettled, replayed, [expired, expired_probation])
         for row in rows
         if isinstance(row, dict)
     }
@@ -405,6 +406,7 @@ def _verify_297(capsule: Path, document: dict[str, object], fixed: dict[str, obj
         )
         or {(row.get("probation_outcome"), row.get("final_outcome")) for row in replayed}
         != {("passed", "resolved"), ("failed", "contained")}
+        or not any(row.get("kind") == "route-local-inference" for row in replayed)
         or any(
             row.get("replay_count", 0) < 1
             or row.get("effect_count") != 1
@@ -413,6 +415,11 @@ def _verify_297(capsule: Path, document: dict[str, object], fixed: dict[str, obj
             or not row.get("original_deadline")
             for row in replayed
         )
+        or expired_probation.get("replay_count", 0) < 1
+        or expired_probation.get("effect_count") != 1
+        or expired_probation.get("consumed_allowance") != 1
+        or expired_probation.get("final_outcome") != "contained"
+        or expired_probation.get("original_deadline") != "2026-09-14T00:03:00+00:00"
         or expired.get("replay_count", 0) < 1
         or expired.get("effect_count") != 0
         or expired.get("consumed_allowance") != 0

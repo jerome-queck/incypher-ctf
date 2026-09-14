@@ -4,6 +4,7 @@ import errno
 import json
 import copy
 import datetime as dt
+import os
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -65,6 +66,26 @@ PROFILE = StorageGovernorProfile(
     shared_authority_pool=capacity(13),
     terminal_floor=capacity(2),
     recovery_floor=capacity(3),
+)
+
+RECOVERY_PROFILE = StorageGovernorProfile(
+    writable_envelope=capacity(10_000),
+    warning_remaining=capacity(9_000),
+    stop_admission_remaining=capacity(8_000),
+    authority_only_remaining=capacity(7_000),
+    shared_authority_pool=capacity(6_000),
+    terminal_floor=capacity(500),
+    recovery_floor=capacity(500),
+)
+
+PRESSURE_RECOVERY_PROFILE = StorageGovernorProfile(
+    writable_envelope=capacity(8_000),
+    warning_remaining=capacity(8_000),
+    stop_admission_remaining=capacity(8_000),
+    authority_only_remaining=capacity(7_000),
+    shared_authority_pool=capacity(6_000),
+    terminal_floor=capacity(500),
+    recovery_floor=capacity(500),
 )
 
 
@@ -417,16 +438,7 @@ def test_pressure_recovery_runs_actual_governed_retirement_under_incident_author
         length=disposable.blob_bytes,
         event_sequences=(disposable.sequence,),
     )
-    recovery_profile = StorageGovernorProfile(
-        writable_envelope=capacity(10_000),
-        warning_remaining=capacity(9_000),
-        stop_admission_remaining=capacity(8_000),
-        authority_only_remaining=capacity(7_000),
-        shared_authority_pool=capacity(6_000),
-        terminal_floor=capacity(500),
-        recovery_floor=capacity(500),
-    )
-    governor = StorageGovernor(tmp_path, "run-1", recovery_profile)
+    governor = StorageGovernor(tmp_path, "run-1", RECOVERY_PROFILE)
     governor.classify(candidate)
 
     result = recover_storage_pressure(
@@ -449,6 +461,166 @@ def test_pressure_recovery_runs_actual_governed_retirement_under_incident_author
     assert receipt["changed_action"]["dimension"] == "storage-revision"
     assert receipt["changed_action"]["source"] == "canonical-storage-classification"
     assert receipt["probation_outcome"] == "passed"
+
+
+def test_pressure_recovery_contains_a_protected_retirement_without_claiming_success(tmp_path):
+    store = EventStore(tmp_path, run_id="run-1")
+    protected = store.append(observation("protected"), body=b"keep")
+    candidate = RetirementCandidate(
+        path=f"sealed/sha256/{protected.blob_digest}",
+        storage_class="selected-evidence",
+        digest=protected.blob_digest,
+        length=protected.blob_bytes,
+        event_sequences=(protected.sequence,),
+    )
+    governor = StorageGovernor(tmp_path, "run-1", RECOVERY_PROFILE)
+    governor.classify(candidate)
+
+    result = recover_storage_pressure(
+        governor,
+        governor.recovery_composition(
+            tmp_path,
+            Redactor({}),
+            now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+        ),
+        (candidate,),
+        ReachabilityRoots(
+            event_sequences=frozenset({protected.sequence}),
+            blob_digests=frozenset({protected.blob_digest}),
+        ),
+        failed_revision="protected-pressure-1",
+        reason="controlled-pressure",
+        now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+    )
+
+    assert result.disposition == "contained"
+    assert (store.sealed_dir / protected.blob_digest).read_bytes() == b"keep"
+    events = EventStore(tmp_path, run_id="run-1").events()
+    assert [
+        event.payload["record"] for event in events if event.payload.get("record", "").startswith("retirement-")
+    ] == []
+    receipt = json.loads((tmp_path / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["probation_outcome"] == ""
+    assert receipt["final_outcome"] == "contained"
+
+
+def test_pressure_recovery_replays_durable_retirement_proof_without_repeating_delete(tmp_path, monkeypatch):
+    store = EventStore(tmp_path, run_id="run-1")
+    disposable = store.append(observation("disposable"), body=b"retire")
+    candidate = RetirementCandidate(
+        path=f"sealed/sha256/{disposable.blob_digest}",
+        storage_class="raw-observation",
+        digest=disposable.blob_digest,
+        length=disposable.blob_bytes,
+        event_sequences=(disposable.sequence,),
+    )
+    governor = StorageGovernor(tmp_path, "run-1", RECOVERY_PROFILE)
+    governor.classify(candidate)
+
+    original_fsync = os.fsync
+    crash = [True]
+    events_path = tmp_path / "runs" / "run-1" / "canonical" / "events.jsonl"
+
+    def interrupted(descriptor):
+        original_fsync(descriptor)
+        if crash[0] and events_path.exists():
+            rows = events_path.read_bytes().splitlines()
+            if rows:
+                payload = json.loads(rows[-1]).get("payload", {})
+                if "changed-remedy" in payload.get("completed_steps", ()) and not payload.get("terminal"):
+                    crash[0] = False
+                    raise RuntimeError("boot between remedy and probation")
+
+    monkeypatch.setattr(os, "fsync", interrupted)
+    with pytest.raises(RuntimeError, match="boot between remedy and probation"):
+        recover_storage_pressure(
+            governor,
+            governor.recovery_composition(
+                tmp_path,
+                Redactor({}),
+                now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+            ),
+            (candidate,),
+            ReachabilityRoots(),
+            failed_revision="replay-pressure-1",
+            reason="controlled-pressure",
+            now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+        )
+
+    governor.close()
+    restarted = StorageGovernor(
+        tmp_path, "run-1", RECOVERY_PROFILE, now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc)
+    )
+    result = recover_storage_pressure(
+        restarted,
+        restarted.recovery_composition(
+            tmp_path,
+            Redactor({}),
+            now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+        ),
+        (candidate,),
+        ReachabilityRoots(),
+        failed_revision="replay-pressure-1",
+        reason="controlled-pressure",
+        now=lambda: dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc),
+    )
+
+    assert result.disposition == "resolved"
+    assert not (store.sealed_dir / disposable.blob_digest).exists()
+    events = EventStore(tmp_path, run_id="run-1").events()
+    assert [
+        event.payload["record"] for event in events if event.payload.get("record", "").startswith("retirement-")
+    ] == [
+        "retirement-tombstone",
+        "retirement-complete",
+    ]
+    receipt = json.loads((tmp_path / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["probation_outcome"] == "passed"
+    assert receipt["final_outcome"] == "resolved"
+    restarted.close()
+
+
+def test_denied_admission_opens_storage_incident_and_replays_without_cleanup(tmp_path):
+    now = dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc)
+    governor = StorageGovernor(tmp_path, "run-1", PRESSURE_RECOVERY_PROFILE, now=lambda: now)
+
+    decision = governor.admit(
+        request_id="pressure:incident",
+        admission_class=AdmissionClass.ORDINARY,
+        need=capacity(1),
+    )
+
+    assert decision.admitted is False
+    incidents = [
+        event.payload
+        for event in EventStore(tmp_path, run_id="run-1").events()
+        if event.event_type == "incident.recorded"
+    ]
+    assert incidents[-1]["fault_kind"] == "storage"
+    assert incidents[-1]["disposition"] == "probation"
+    assert incidents[-1]["probe_outcome"] == "unsettled"
+    assert [
+        event.payload["record"]
+        for event in EventStore(tmp_path, run_id="run-1").events()
+        if event.payload.get("record", "").startswith("retirement-")
+    ] == []
+
+    governor.close()
+    restarted = StorageGovernor(tmp_path, "run-1", PRESSURE_RECOVERY_PROFILE, now=lambda: now)
+
+    incidents = [
+        event.payload
+        for event in EventStore(tmp_path, run_id="run-1").events()
+        if event.event_type == "incident.recorded"
+    ]
+    assert incidents[-1]["fault_kind"] == "storage"
+    assert incidents[-1]["replay_count"] == 1
+    assert [
+        event.payload["record"]
+        for event in EventStore(tmp_path, run_id="run-1").events()
+        if event.payload.get("record", "").startswith("retirement-")
+    ] == []
+    restarted.close()
 
 
 @pytest.mark.parametrize(

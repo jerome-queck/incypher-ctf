@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,6 +34,7 @@ from solver.recovery.submission import SUBMISSION_ADAPTER, submission_recovery
 from solver.redaction import Redactor
 from solver.submission.epoch import SubmissionEpochAuthority
 from solver.supervisor import Supervisor
+from solver.supervisor_process import SpawnedBoot
 from solver.supervisor_services import SupervisorServices
 from solver.storage_governor import StorageGovernor
 from solver.storage_governor_contracts import (
@@ -86,29 +90,6 @@ def _changed(root: Path, destination: Path) -> list[dict[str, object]]:
             result, effects = _changed_submission(root)
         elif kind is FaultKind.STORAGE:
             result, effects = _changed_storage(root)
-        else:
-            effects = []
-            runtime = DeterministicRecovery(
-                root, f"runtime-qualification-297-changed-{kind.value}", Redactor({}), now=lambda: NOW
-            )
-            result = runtime.handle(
-                kind=kind,
-                fault_id=f"{kind.value}:changed",
-                scope=scope,
-                generation_id="generation-7",
-                evidence="sanitized controlled fault",
-                failed_action_value=before,
-                original_deadline=DEADLINE,
-                recovery=DomainRecovery(
-                    dimension,
-                    lambda before=before, after=after, kind=kind: AuthoritativeChange(
-                        before, after, f"canonical-{kind.value}-authority"
-                    ),
-                    lambda after=after: effects.append(after) is None,
-                    lambda: ProbationOutcome.PASSED,
-                    capture=lambda: b"sanitized authoritative observation",
-                ),
-            )
         receipt_name = f"changed.{kind.value}.receipt.json"
         receipt = _receipt(result, destination, receipt_name)
         rows.append(
@@ -328,89 +309,29 @@ def _no_inference(root: Path, destination: Path) -> list[dict[str, object]]:
     return rows
 
 
-def _cross_boot(
-    root: Path,
-    destination: Path,
-    *,
-    label: str,
-    kind: FaultKind,
-    scope: str,
-    dimension: str,
-    before: str,
-    after: str,
-    probation: ProbationOutcome,
-) -> dict[str, object]:
-    run_id = f"runtime-qualification-297-replay-{label}"
-    first = DeterministicRecovery(root, run_id, Redactor({}), now=lambda: NOW)
-    try:
-        first.handle(
-            kind=kind,
-            fault_id=f"{kind.value}:replay-{label}",
-            scope=scope,
-            generation_id="generation-7",
-            evidence="sanitized controlled fault",
-            failed_action_value=before,
-            original_deadline=DEADLINE,
-            recovery=DomainRecovery(
-                dimension,
-                lambda: (_ for _ in ()).throw(RuntimeError("controlled probe loss")),
-                lambda: True,
-                lambda: probation,
-            ),
-        )
-    except RuntimeError as error:
-        if str(error) != "controlled probe loss":
-            raise
-    effects = []
-    second = DeterministicRecovery(root, run_id, Redactor({}), now=lambda: NOW)
-    registry = RecoveryRegistry()
-    registry.register(
-        f"{kind.value}:{scope}:v1",
-        lambda _config: DomainRecovery(
-            dimension,
-            lambda: AuthoritativeChange(before, after, f"canonical-{kind.value}-authority"),
-            lambda: effects.append(after) is None,
-            lambda: probation,
-        ),
-    )
-    result = second.replay(registry)[0]
-    receipt_name = f"replay.{label}.receipt.json"
-    receipt = _receipt(result, destination, receipt_name)
-    return {
-        "allowance": receipt["allowance"],
-        "consumed_allowance": receipt["consumed_allowance"],
-        "effect_count": len(effects),
-        "final_outcome": receipt["final_outcome"],
-        "kind": kind.value,
-        "original_deadline": receipt["original_deadline"],
-        "probation_outcome": receipt["probation_outcome"],
-        "receipt": receipt_name,
-        "replay_count": receipt["replay_count"],
-    }
-
-
 def _supervisor_cross_boot(root: Path, destination: Path, *, label: str, replacement_exit: int):
-    from solver import supervisor as supervisor_module
-
     run_id = f"runtime-qualification-297-supervisor-{label}"
     exits = iter((1, replacement_exit))
     launches = []
 
-    class Boot:
-        def __init__(self, exit_code):
-            self.exit_code = exit_code
-
-        def wait(self, _timeout=None):
-            return self.exit_code
-
-        def forward(self, _signal):
-            return None
-
-        def kill(self):
-            return None
-
-        def group_alive(self):
-            return False
+    def launch(boot_id):
+        launches.append(boot_id)
+        return SpawnedBoot(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import sys; from solver.record import Recorder; "
+                    "from solver.redaction import Redactor; "
+                    "recorder = Recorder(Path(sys.argv[1]), sys.argv[2], Redactor({})); "
+                    "recorder.write_authority.close(); sys.exit(int(sys.argv[3]))",
+                    str(root),
+                    run_id,
+                    str(next(exits)),
+                ],
+                start_new_session=True,
+            )
+        )
 
     class Custody:
         def close(self):
@@ -422,23 +343,29 @@ def _supervisor_cross_boot(root: Path, destination: Path, *, label: str, replace
             admit_storage=lambda: None,
             preflight_isolation=lambda: None,
             bootstrap_custody=lambda _boot: Custody(),
-            launch_controller=lambda boot: launches.append(boot) or Boot(next(exits)),
+            launch_controller=launch,
             reap_children=lambda: 0,
         )
 
-    original = supervisor_module._SupervisorContainment.project_change
-    with patch.object(
-        supervisor_module._SupervisorContainment,
-        "project_change",
-        lambda _self: (_ for _ in ()).throw(RuntimeError("controlled probe loss")),
-    ):
+    original = os.fsync
+    interrupted = [False]
+    events = root / "runs" / run_id / "canonical" / "events.jsonl"
+
+    def crash(descriptor):
+        original(descriptor)
+        if not interrupted[0] and events.exists():
+            rows = events.read_bytes().splitlines()
+            if rows and "fixed-probe" in json.loads(rows[-1]).get("payload", {}).get("steps", ()):
+                interrupted[0] = True
+                raise RuntimeError("controlled probe loss")
+
+    with patch.object(os, "fsync", crash):
         try:
             Supervisor(state=root, run_id=run_id, redactor=Redactor({}), services=services()).run()
         except RuntimeError as error:
             if str(error) != "controlled probe loss":
                 raise
-    with patch.object(supervisor_module._SupervisorContainment, "project_change", original):
-        Supervisor(state=root, run_id=run_id, redactor=Redactor({}), services=services()).run()
+    Supervisor(state=root, run_id=run_id, redactor=Redactor({}), services=services()).run()
     source = root / "runs" / run_id / "canonical" / "incident-containment.receipt.json"
     receipt_name = f"replay.{label}.receipt.json"
     receipt = _receipt(type("Result", (), {"receipt_path": source})(), destination, receipt_name)
@@ -446,6 +373,77 @@ def _supervisor_cross_boot(root: Path, destination: Path, *, label: str, replace
         "allowance": receipt["allowance"],
         "consumed_allowance": receipt["consumed_allowance"],
         "effect_count": len(launches) - 1,
+        "final_outcome": receipt["final_outcome"],
+        "kind": receipt["fault_kind"],
+        "original_deadline": receipt["original_deadline"],
+        "probation_outcome": receipt["probation_outcome"],
+        "receipt": receipt_name,
+        "replay_count": receipt["replay_count"],
+    }
+
+
+def _route_cross_boot(root: Path, destination: Path):
+    run_id = "runtime-qualification-297-route-boot"
+    recorder = Recorder(root, run_id, Redactor({}))
+    recovery = DeterministicRecovery(root, run_id, Redactor({}), now=lambda: NOW, authority=recorder.write_authority)
+    calls = []
+
+    def native():
+        calls.append("native")
+        raise RouteTransportFailure.classified("timeout", InferenceRoute.NATIVE, "a" * 64)
+
+    def cpa():
+        calls.append("cpa")
+        return {"text": "sanitized answer"}
+
+    original = os.fsync
+    interrupted = [True]
+    events = root / "runs" / run_id / "canonical" / "events.jsonl"
+
+    def crash(descriptor):
+        original(descriptor)
+        if interrupted[0] and events.exists():
+            rows = events.read_bytes().splitlines()
+            if rows:
+                row = json.loads(rows[-1]).get("payload", {})
+                if "changed-remedy" in row.get("completed_steps", ()) and not row.get("terminal"):
+                    interrupted[0] = False
+                    raise RuntimeError("controlled route probation loss")
+
+    with patch.object(os, "fsync", crash):
+        controller = RouteAndQuotaController(
+            RouteAndQuotaPolicy(primary=InferenceRoute.NATIVE),
+            authority=recorder.write_authority,
+            recovery=recovery,
+            now=lambda: NOW,
+        )
+        try:
+            controller.execute(
+                request_id="request-boot",
+                generation_id="generation-boot",
+                payload_digest="b" * 64,
+                observations=(),
+                transports={InferenceRoute.NATIVE: native, InferenceRoute.CPA: cpa},
+                encode=lambda value: value,
+                decode=dict,
+            )
+        except RuntimeError as error:
+            if str(error) != "controlled route probation loss":
+                raise
+        RouteAndQuotaController(
+            RouteAndQuotaPolicy(primary=InferenceRoute.NATIVE),
+            authority=recorder.write_authority,
+            recovery=recovery,
+            now=lambda: NOW,
+        )
+    source = root / "runs" / run_id / "canonical" / "incident-containment.receipt.json"
+    receipt_name = "replay.route.receipt.json"
+    receipt = _receipt(type("Result", (), {"receipt_path": source})(), destination, receipt_name)
+    recorder.write_authority.close()
+    return {
+        "allowance": receipt["allowance"],
+        "consumed_allowance": receipt["consumed_allowance"],
+        "effect_count": calls.count("cpa"),
         "final_outcome": receipt["final_outcome"],
         "kind": receipt["fault_kind"],
         "original_deadline": receipt["original_deadline"],
@@ -502,6 +500,44 @@ def _expired(root: Path, destination: Path) -> dict[str, object]:
     }
 
 
+def _expired_probation(root: Path, destination: Path):
+    run_id = "runtime-qualification-297-expired-probation"
+    clock = [NOW]
+    effects = []
+    recovery = DeterministicRecovery(root, run_id, Redactor({}), now=lambda: clock[0])
+    domain = DomainRecovery(
+        "process-generation",
+        lambda: AuthoritativeChange("boot-1", "boot-2", "supervisor-lifecycle"),
+        lambda: effects.append("boot-2") is None,
+        lambda: ProbationOutcome.UNSETTLED,
+        adapter_id="bounded-probation-fixture",
+    )
+    recovery.handle(
+        kind=FaultKind.WORKER_CRASH,
+        fault_id="process:unsettled-probation",
+        scope="owner-local:worker",
+        generation_id="generation-7",
+        evidence="controlled unresolved probation",
+        failed_action_value="boot-1",
+        original_deadline=DEADLINE,
+        recovery=domain,
+    )
+    clock[0] = DEADLINE
+    registry = RecoveryRegistry()
+    registry.register(domain.adapter_id, lambda _config: domain)
+    result = recovery.replay(registry)[0]
+    receipt_name = "replay.expired-probation.receipt.json"
+    receipt = _receipt(result, destination, receipt_name)
+    return {
+        "effect_count": len(effects),
+        "consumed_allowance": receipt["consumed_allowance"],
+        "final_outcome": receipt["final_outcome"],
+        "original_deadline": receipt["original_deadline"],
+        "receipt": receipt_name,
+        "replay_count": receipt["replay_count"],
+    }
+
+
 def qualify(root: Path, destination: Path) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
     success = _supervisor_cross_boot(root, destination, label="success", replacement_exit=0)
@@ -513,8 +549,9 @@ def qualify(root: Path, destination: Path) -> Path:
             {
                 "catalogue_version": CATALOGUE_VERSION,
                 "changed_actions": _changed(root, destination),
-                "cross_boot": [success, failure],
+                "cross_boot": [success, failure, _route_cross_boot(root, destination)],
                 "expired_bound": _expired(root, destination),
+                "expired_probation": _expired_probation(root, destination),
                 "no_inference": _no_inference(root, destination),
                 "schema_version": 1,
             }

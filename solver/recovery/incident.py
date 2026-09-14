@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import datetime as dt
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from solver.write_reservation_contracts import (
     EffectIdentity,
     ReservationState,
     RetentionPolicy,
+    profile_from,
 )
 
 SCHEMA_VERSION = 1
@@ -57,6 +59,19 @@ class Fault:
     @property
     def identity(self) -> str:
         return digest_bytes(canonical_bytes({"fault_id": self.fault_id, "scope": self.scope}))
+
+    @property
+    def fingerprint(self) -> str:
+        return digest_bytes(
+            canonical_bytes(
+                {
+                    "scope": self.scope,
+                    "kind": self.kind.value,
+                    "adapter": self.recovery.adapter_id if self.recovery else "legacy",
+                    "failed_action": self.recovery.failed_action_value if self.recovery else "",
+                }
+            )
+        )
 
 
 class ContainmentPorts(Protocol):
@@ -114,7 +129,11 @@ class IncidentEngine:
                 self._write_receipt(match)
                 return self._result(match)
             active = next(
-                (row for row in document["incidents"] if row["scope"] == fault.scope and not row["terminal"]),
+                (
+                    row
+                    for row in document["incidents"]
+                    if row.get("fingerprint") == fault.fingerprint and not row["terminal"]
+                ),
                 None,
             )
             if active is not None:
@@ -122,16 +141,10 @@ class IncidentEngine:
                 self._write(document)
                 self._write_receipt(active)
                 return self._result(active)
-            authority = self._authority or WriteAuthority(
-                self._root.parent, DEFAULT_WRITE_PROFILE, redactor=self._redactor
-            )
+            authority = self._authority or self._open_authority()
             try:
                 row, reservation = self._open(document, fault, authority)
-                if fault.recovery is not None:
-                    return self._recover(document, row, fault, authority, reservation)
-                if fault.kind is not FaultKind.WORKER_CRASH:
-                    return self._refuse(document, row, fault, authority, reservation)
-                return self._contain(document, row, fault, authority, reservation)
+                return self._advance(document, row, fault, authority, reservation)
             finally:
                 if self._authority is None:
                     authority.close()
@@ -164,9 +177,7 @@ class IncidentEngine:
                     recovery,
                 )
                 self._write(document)
-                authority = self._authority or WriteAuthority(
-                    self._root.parent, DEFAULT_WRITE_PROFILE, redactor=self._redactor
-                )
+                authority = self._authority or self._open_authority()
                 try:
                     reservation = authority.current(self._reservation_key(row["fault_identity"]))
                     if reservation is None:
@@ -188,22 +199,42 @@ class IncidentEngine:
                         continue
                     if reservation.state is ReservationState.ABORTED:
                         reservation = self._reserve(authority, row["fault_identity"], retry_aborted=True)
-                    if fault.recovery is not None:
-                        results.append(self._recover(document, row, fault, authority, reservation))
-                    elif fault.kind is not FaultKind.WORKER_CRASH:
-                        results.append(self._refuse(document, row, fault, authority, reservation))
-                    else:
-                        results.append(self._contain(document, row, fault, authority, reservation))
+                    results.append(self._advance(document, row, fault, authority, reservation))
                 finally:
                     if self._authority is None:
                         authority.close()
             return tuple(results)
+
+    def _advance(self, document, row, fault, authority, reservation):
+        if fault.recovery is not None:
+            return self._recover(document, row, fault, authority, reservation)
+        if fault.kind is not FaultKind.WORKER_CRASH:
+            return self._refuse(document, row, fault, authority, reservation)
+        return self._contain(document, row, fault, authority, reservation)
+
+    def _open_authority(self):
+        directory = self._root.parent / "write-authority"
+        profile = (
+            profile_from(json.loads((directory / "profile.json").read_bytes()))
+            if directory.exists()
+            else DEFAULT_WRITE_PROFILE
+        )
+        return WriteAuthority(self._root.parent, profile, redactor=self._redactor)
 
     def _open(self, document, fault, authority):
         reservation = self._reserve(authority, fault.identity)
         row = {
             "incident_id": f"incident-{len(document['incidents']) + 1:06d}",
             "fault_identity": fault.identity,
+            "fingerprint": fault.fingerprint,
+            "successor_of": next(
+                (
+                    previous["incident_id"]
+                    for previous in reversed(document["incidents"])
+                    if previous["scope"] == fault.scope
+                ),
+                "",
+            ),
             "fault": {"fault_id": fault.fault_id, "generation_id": fault.generation_id},
             "scope": fault.scope,
             "kind": fault.kind.value,
@@ -237,7 +268,7 @@ class IncidentEngine:
     def _recover(self, document, row, fault, authority, reservation):
         from solver.recovery.deterministic_lifecycle import recover
 
-        return recover(self, document, row, fault, authority, reservation)
+        return recover(_LifecyclePort(self), document, row, fault, authority, reservation)
 
     def _contain(self, document, row, fault, authority, reservation):
         self._step(document, row, IncidentStep.GENERATION_FENCE, lambda: self._ports.fence(fault))
@@ -361,3 +392,48 @@ class IncidentEngine:
                 inner.file.close()
 
         return Lock()
+
+
+class _LifecyclePort:
+    """Typed adapter between Incident storage and deterministic lifecycle policy."""
+
+    def __init__(self, engine: IncidentEngine) -> None:
+        self._engine = engine
+
+    def redact_evidence(self, evidence):
+        return self._engine._redactor.redact(evidence)
+
+    def write(self, document):
+        self._engine._write(document)
+
+    def step(self, document, row, step, action):
+        self._engine._step(document, row, step, action)
+
+    def step_result(self, document, row, step, action):
+        return self._engine._step_result(document, row, step, action)
+
+    def fence(self, fault):
+        self._engine._ports.fence(fault)
+
+    def capture(self, row, fault):
+        self._engine._capture(row, fault)
+
+    def teardown(self, fault):
+        self._engine._ports.teardown(fault)
+
+    def probe(self, fault, probe_id):
+        return self._engine._ports.probe(fault, probe_id)
+
+    def apply_remedy(self, fault, remedy_id, action):
+        return self._engine._ports.apply_remedy(fault, remedy_id, action)
+
+    def probation(self, fault, remedy_id):
+        return self._engine._ports.probation(fault, remedy_id)
+
+    def now(self):
+        return self._engine._now()
+
+    def finish(self, document, row):
+        self._engine._write(document)
+        self._engine._write_receipt(row)
+        return self._engine._result(row)

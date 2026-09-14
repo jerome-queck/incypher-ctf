@@ -75,7 +75,6 @@ class ResearchBrokerRuntime:
         self._lock = threading.Lock()
         self._cache: dict[str, ResearchResult] = {}
         self._recovery = recovery
-        self._recovering = False
         if recovery is not None:
             from solver.recovery.safe_read import SafeReadRecovery
 
@@ -140,6 +139,14 @@ class ResearchBrokerRuntime:
             return ResearchResult(outcome)
         if grant.scope != RESEARCH_SCOPE:
             return ResearchResult(ResearchOutcome.CAPABILITY_REFUSED)
+        url_digest = hashlib.sha256(url.encode()).hexdigest()
+        if self._recovery is not None and any(
+            event.event_type == RESEARCH_BROKER_RECORDED
+            and event.payload.get("url_digest") == url_digest
+            and event.payload.get("outcome") in {ResearchOutcome.TIMEOUT.value, ResearchOutcome.UNREACHABLE.value}
+            for event in self._store.events()
+        ):
+            return ResearchResult(ResearchOutcome.DENIED)
         with self._lock:
             self._serial += 1
             request_id = f"research-broker:{self._serial:06d}"
@@ -207,11 +214,7 @@ class ResearchBrokerRuntime:
         if outcome is ResearchOutcome.ANSWERED:
             self._cache[url] = result
         self._append(grant.binding, url, result)
-        if (
-            self._recovery is not None
-            and not self._recovering
-            and outcome in {ResearchOutcome.TIMEOUT, ResearchOutcome.UNREACHABLE}
-        ):
+        if self._recovery is not None and outcome in {ResearchOutcome.TIMEOUT, ResearchOutcome.UNREACHABLE}:
             from solver.recovery.safe_read import SafeReadFault, SafeReadRecovery
 
             now = datetime.fromisoformat(self._timestamp())

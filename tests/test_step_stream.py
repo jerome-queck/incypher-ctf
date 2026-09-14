@@ -9,6 +9,9 @@ into the log, and that a Step which hung is visible rather than absent.
 
 import json
 import shutil
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -94,6 +97,49 @@ def test_a_crash_costs_one_line_and_not_two(tmp_path):
     lines = first.stream_path.read_text().splitlines()
     assert lines[1] == '{"seq": 2, "record": "step-be', "the crash keeps its own line"
     assert json.loads(lines[2])["record"] == "run-close", "and the record after it is readable"
+
+
+def test_writer_cleanup_completes_when_gc_reenters_the_close_path(tmp_path):
+    script = textwrap.dedent(
+        """
+        import gc
+        import pathlib
+        import sys
+
+        from solver.record import Recorder
+        from solver.redaction import Redactor
+
+        root = pathlib.Path(sys.argv[1])
+        gc.disable()
+        live = Recorder(root, "run-live", Redactor({}))
+        stale = Recorder(root, "run-stale", Redactor({}))
+        del stale
+        original_hash = pathlib.PurePath.__hash__
+        armed = [True]
+
+        def collect_then_hash(self):
+            if armed[0]:
+                armed[0] = False
+                gc.collect()
+            return original_hash(self)
+
+        pathlib.PurePath.__hash__ = collect_then_hash
+        live.write_authority.close()
+        print("closed", flush=True)
+        """
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        pytest.fail(f"writer cleanup deadlocked during GC reentry: {error}")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "closed"
 
 
 def test_the_field_set_of_every_record_is_pinned(recorder):

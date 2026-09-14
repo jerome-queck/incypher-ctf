@@ -91,17 +91,22 @@ def test_safe_read_timeout_is_contained_without_an_identical_target_retry(tmp_pa
     try:
         binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
         runtime.prepare_attempt(binding)
+        handle = runtime.claim(left, generation.generation_id)
         result = runtime.exchange(
             left,
-            runtime.claim(left, generation.generation_id),
+            handle,
             {"method": "GET", "path": "/", "body": ""},
         )
+        refused = runtime.exchange(left, handle, {"method": "GET", "path": "/", "body": ""})
+        unrelated = runtime.exchange(left, handle, {"method": "GET", "path": "/other", "body": ""})
     finally:
         left.close()
         right.close()
 
     assert result.outcome is TargetOutcome.TIMEOUT
-    assert len(attempts) == 1
+    assert refused.outcome is TargetOutcome.DENIED
+    assert unrelated.outcome is TargetOutcome.ANSWERED
+    assert len(attempts) == 2
     receipt = json.loads((state / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
     assert receipt["changed_action"] == {}
     assert receipt["probe"]["outcome"] == "unsettled"

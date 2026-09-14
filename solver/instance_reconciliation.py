@@ -17,6 +17,7 @@ from solver.instance_ledger import (
     receipt_document as ledger_receipt_document,
 )
 from solver.instance_reconciliation_contracts import AdmissionVerdict, BootOwnership, ReconciliationResult
+from solver.recovery.contracts import ProbationOutcome
 from solver.work_generation import GenerationState
 from solver.write_reservation import (
     Capacity,
@@ -25,6 +26,7 @@ from solver.write_reservation import (
     RetentionPolicy,
     WriteAuthority,
 )
+from solver.write_reservation_contracts import ReservationState
 
 RECONCILIATION_CAPACITY = Capacity(4096, 1, 8)
 
@@ -52,13 +54,15 @@ class InstanceReconciler:
         self,
         *,
         boot_id: str,
+        cycle_id: str | None = None,
         ledger: LedgerResult,
         leases: Sequence[LeaseGrant],
         generations: Sequence[GenerationState],
         ownership: BootOwnership,
     ) -> ReconciliationResult:
         ledger_document = ledger_receipt_document(self._run_id, ledger)
-        snapshot_id = self._record_snapshot(boot_id, ledger_document)
+        snapshot_id = self._record_snapshot(boot_id, cycle_id, ledger_document)
+        reconciliation_id = cycle_id or boot_id
         join = self._join_document(ledger, leases, generations, ownership)
         join_digest = digest_bytes(canonical_bytes(join))
         unsettled: list[str] = []
@@ -109,10 +113,11 @@ class InstanceReconciler:
                 tuple(sorted(unsettled)),
                 AdmissionVerdict.CLOSED,
                 ownership=ownership,
+                cycle_id=cycle_id or "",
             )
             self._commit_decision(result)
             return result
-        completion_key = f"instance-reconciliation:{self._run_id}:{boot_id}:complete"
+        completion_key = f"instance-reconciliation:{self._run_id}:{reconciliation_id}:complete"
         result = ReconciliationResult(
             boot_id,
             snapshot_id,
@@ -122,6 +127,7 @@ class InstanceReconciler:
             AdmissionVerdict.OPEN,
             completion_key,
             ownership,
+            cycle_id or "",
         )
         try:
             self._commit_completion(completion_key, snapshot_id, join_digest, actions, ownership)
@@ -134,6 +140,7 @@ class InstanceReconciler:
                 ("reconciliation-complete:outcome-ambiguous",),
                 AdmissionVerdict.CLOSED,
                 ownership=ownership,
+                cycle_id=cycle_id or "",
             )
         self._commit_decision(result)
         return result
@@ -142,8 +149,60 @@ class InstanceReconciler:
         """Digest the authoritative inputs without admitting a reconciliation effect."""
         return digest_bytes(canonical_bytes(self._join_document(ledger, leases, generations, ownership)))
 
-    def _record_snapshot(self, boot_id, ledger_document) -> str:
-        snapshot_id = digest_bytes(canonical_bytes({"boot_id": boot_id, "ledger": ledger_document}))
+    def probation(
+        self, join_digest: str, *, boot_id: str | None = None, cycle_id: str | None = None
+    ) -> ProbationOutcome:
+        """Read a committed open reconciliation without running its effects again."""
+        decisions = {
+            reservation.key: reservation
+            for reservation in self._authority.reservations()
+            if reservation.identity.operation == "instance-reconciliation.decision"
+            and reservation.state is ReservationState.COMMITTED
+        }
+        if cycle_id is not None:
+            decisions = {
+                key: reservation
+                for key, reservation in decisions.items()
+                if key == f"instance-reconciliation:{self._run_id}:{cycle_id}:decision"
+            }
+        reservations = {reservation.key: reservation for reservation in self._authority.reservations()}
+        for decision in decisions.values():
+            document = decision.observation
+            if not isinstance(document, dict) or document.get("join_digest") != join_digest:
+                continue
+            if boot_id is not None and document.get("boot_id") != boot_id:
+                continue
+            if document.get("admission") != AdmissionVerdict.OPEN.value:
+                continue
+            completion_key = document.get("completion_key")
+            if not isinstance(completion_key, str) or not completion_key:
+                continue
+            completion = reservations.get(completion_key)
+            if completion is None or completion.state is not ReservationState.COMMITTED:
+                continue
+            if completion.identity.operation != "instance-reconciliation.complete":
+                continue
+            try:
+                subject = json.loads(completion.identity.subject)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(subject, dict):
+                continue
+            if subject.get("snapshot_id") != document.get("snapshot_id") or subject.get("join_digest") != join_digest:
+                continue
+            if completion.observation != {
+                "admission": AdmissionVerdict.OPEN.value,
+                "actions": document.get("actions", []),
+            }:
+                continue
+            return ProbationOutcome.PASSED
+        return ProbationOutcome.UNSETTLED
+
+    def _record_snapshot(self, boot_id, cycle_id, ledger_document) -> str:
+        material = {"boot_id": boot_id, "ledger": ledger_document}
+        if cycle_id:
+            material["cycle_id"] = cycle_id
+        snapshot_id = digest_bytes(canonical_bytes(material))
         key = f"instance-reconciliation:{self._run_id}:snapshot:{snapshot_id}"
         self._effects.execute(
             key,
@@ -242,7 +301,7 @@ class InstanceReconciler:
         )
 
     def _commit_decision(self, result: ReconciliationResult) -> None:
-        key = f"instance-reconciliation:{self._run_id}:{result.boot_id}:decision"
+        key = f"instance-reconciliation:{self._run_id}:{result.reconciliation_id}:decision"
         subject = json.dumps(
             {"snapshot_id": result.snapshot_id, "join_digest": result.join_digest},
             sort_keys=True,

@@ -109,7 +109,6 @@ class TargetBrokerRuntime:
             if event.event_type == TARGET_EXCHANGE_RECORDED and event.payload.get("observation_digest")
         }
         self._recovery = recovery
-        self._recovering = False
         if recovery is not None:
             from solver.recovery.safe_read import SafeReadRecovery
 
@@ -171,6 +170,18 @@ class TargetBrokerRuntime:
         if grant.scope != TARGET_SCOPE:
             return TargetResult(TargetOutcome.CAPABILITY_REFUSED)
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
+        if self._recovery is not None and any(
+            event.event_type == TARGET_EXCHANGE_RECORDED
+            and event.payload.get("record") == TargetRecord.CLASSIFIED.value
+            and event.payload.get("challenge_id") == self.challenge_id
+            and event.payload.get("endpoint") == f"{self.endpoint.host}:{self.endpoint.port}"
+            and event.payload.get("resolved_address") == self._address
+            and event.payload.get("protocol") == self.endpoint.protocol.value
+            and event.payload.get("request_digest") == request_digest
+            and event.payload.get("outcome") in {TargetOutcome.TIMEOUT.value, TargetOutcome.UNREACHABLE.value}
+            for event in self._store.events()
+        ):
+            return TargetResult(TargetOutcome.DENIED)
         with self._lock:
             self._serial += 1
             request_id = f"{self._request_prefix}{self._serial:06d}"
@@ -247,11 +258,7 @@ class TargetBrokerRuntime:
             result=result,
             body=body,
         )
-        if (
-            self._recovery is not None
-            and not self._recovering
-            and outcome in {TargetOutcome.TIMEOUT, TargetOutcome.UNREACHABLE}
-        ):
+        if self._recovery is not None and outcome in {TargetOutcome.TIMEOUT, TargetOutcome.UNREACHABLE}:
             safe_read = self.endpoint.protocol is TargetProtocol.HTTP and typed_request.get("method") == "GET"
             from solver.recovery.safe_read import SafeReadFault, SafeReadRecovery
 

@@ -136,6 +136,7 @@ def test_replay_does_not_repeat_a_remedy_that_may_have_launched(tmp_path):
     receipt = json.loads(result.receipt_path.read_text())
     assert replay.effects == []
     assert receipt["final_outcome"] == "contained"
+    assert verify_receipt(result.receipt_path) == result.receipt_path
     assert receipt["original_deadline"] == "2099-09-14T04:03:00Z"
     assert receipt["consumed_allowance"] == 1
 

@@ -1,5 +1,7 @@
 """Boot admission is fenced by deterministic Instance reconciliation."""
 
+import json
+
 import pytest
 from types import SimpleNamespace
 
@@ -27,6 +29,7 @@ from solver.event_store import GenerationDisposition
 from solver.recovery.instance import InstanceObservation, instance_recovery
 from solver.recovery.runtime import DeterministicRecovery, RecoveryRegistry
 from solver.recovery.contracts import FaultKind
+from solver.recovery.contracts import ProbationOutcome
 from solver.redaction import Redactor
 
 
@@ -133,6 +136,181 @@ def test_instance_adapter_reconciles_only_after_authoritative_join_changes_and_r
 
     assert result.disposition == "resolved"
     assert reconciled == ["join-2"]
+
+
+def test_instance_replay_expires_at_original_bound_without_effect(tmp_path):
+    import datetime as dt
+
+    clock = [dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc)]
+    deadline = clock[0] + dt.timedelta(seconds=180)
+    effects = []
+
+    def observe():
+        return InstanceObservation(
+            "join-1",
+            lambda: (
+                effects.append("forbidden")
+                or ReconciliationResult("boot-2", "snapshot-2", "join-1", (), (), AdmissionVerdict.OPEN)
+            ),
+            b"same join",
+        )
+
+    runtime = DeterministicRecovery(tmp_path, "run-bound", Redactor({}), now=lambda: clock[0])
+    runtime.handle(
+        kind=FaultKind.INSTANCE,
+        fault_id="instance:bound",
+        scope="external:instance",
+        generation_id="all-active",
+        evidence="unsettled",
+        failed_action_value="join-1",
+        original_deadline=deadline,
+        recovery=instance_recovery("join-1", observe),
+    )
+    clock[0] = deadline
+    registry = RecoveryRegistry()
+    registry.register(
+        "instance-reconciliation-v1", lambda config: instance_recovery(config["failed_join_digest"], observe)
+    )
+    result = runtime.replay(registry)[0]
+    receipt = json.loads(result.receipt_path.read_text())
+
+    assert result.disposition == "contained"
+    assert receipt["original_deadline"] == deadline.isoformat()
+    assert receipt["consumed_allowance"] == 0
+    assert effects == []
+
+
+def test_repeated_reconciliation_cycles_retain_boot_identity_and_verify_receipt(tmp_path):
+    authority = WriteAuthority(tmp_path / "runs" / "run-1", PROFILE)
+    authenticated = identify_ledger(
+        mode="teams",
+        user_id=9,
+        team_id=7,
+        pages=(LedgerPage(200, page=1, total_pages=1, total_rows=0, response_digest="b" * 64),),
+    )
+    owner = BootOwnership((), (), True, True)
+    reconciler = InstanceReconciler(
+        authority, run_id="run-1", board_id="board-1", cleanup=lambda _lease, _snapshot: None
+    )
+
+    first = reconciler.reconcile(
+        boot_id="boot-1",
+        cycle_id="initial",
+        ledger=authenticated,
+        leases=(),
+        generations=(),
+        ownership=owner,
+    )
+    second = reconciler.reconcile(
+        boot_id="boot-1",
+        cycle_id="recovery-1",
+        ledger=authenticated,
+        leases=(),
+        generations=(),
+        ownership=owner,
+    )
+
+    assert first.boot_id == second.boot_id == "boot-1"
+    assert first.snapshot_id != second.snapshot_id
+    assert first.cycle_id == "initial"
+    assert second.cycle_id == "recovery-1"
+    assert second.completion_key == "instance-reconciliation:run-1:recovery-1:complete"
+
+    receipt = write_receipt(second, authority, tmp_path / "instance-reconciliation.receipt.json")
+    ledger_receipt = write_ledger_receipt(tmp_path, "run-1", authenticated)
+    events = [SimpleNamespace(payload={"event_id": "boot-open", "record": "boot-open", "boot_id": "boot-1"})]
+    assert verify_receipt(receipt, authority, events, ledger_receipt) == receipt
+    authority.close()
+
+
+def test_instance_replay_reads_durable_probation_without_reconciling_again(tmp_path):
+    authority = WriteAuthority(tmp_path / "runs" / "run-1", PROFILE)
+    authenticated = identify_ledger(
+        mode="teams",
+        user_id=9,
+        team_id=7,
+        pages=(LedgerPage(200, page=1, total_pages=1, total_rows=0, response_digest="b" * 64),),
+    )
+    owner = BootOwnership((), (), True, True)
+    reconciler = InstanceReconciler(
+        authority, run_id="run-1", board_id="board-1", cleanup=lambda _lease, _snapshot: None
+    )
+    committed = reconciler.reconcile(
+        boot_id="boot-1",
+        cycle_id="recovery-1",
+        ledger=authenticated,
+        leases=(),
+        generations=(),
+        ownership=owner,
+    )
+    calls = []
+    probation_calls = [0]
+
+    def observe():
+        def reconcile_again():
+            calls.append("reconcile")
+            return committed
+
+        def probation():
+            probation_calls[0] += 1
+            if probation_calls[0] == 1:
+                raise RuntimeError("probation crash")
+            return reconciler.probation(committed.join_digest)
+
+        return InstanceObservation(committed.join_digest, reconcile_again, b"", probation)
+
+    runtime = DeterministicRecovery(
+        tmp_path, "run-1", Redactor({}), authority=authority, now=lambda: __import__("datetime").datetime.now()
+    )
+    with pytest.raises(RuntimeError, match="probation crash"):
+        runtime.handle(
+            kind=FaultKind.INSTANCE,
+            fault_id="instance:probation",
+            scope="external:instance",
+            generation_id="all-active",
+            evidence="unsettled",
+            failed_action_value="prior-join",
+            original_deadline=__import__("datetime").datetime(2099, 1, 1),
+            recovery=instance_recovery("prior-join", observe),
+        )
+
+    registry = RecoveryRegistry()
+    registry.register(
+        "instance-reconciliation-v1", lambda config: instance_recovery(config["failed_join_digest"], observe)
+    )
+    replayed = runtime.replay(registry)
+
+    assert replayed[0].disposition == "resolved"
+    assert calls == ["reconcile"]
+    authority.close()
+
+
+def test_instance_probation_can_fence_result_to_the_current_boot(tmp_path):
+    authority = WriteAuthority(tmp_path / "runs" / "run-1", PROFILE)
+    authenticated = identify_ledger(
+        mode="teams",
+        user_id=9,
+        team_id=7,
+        pages=(LedgerPage(200, page=1, total_pages=1, total_rows=0, response_digest="b" * 64),),
+    )
+    result = InstanceReconciler(
+        authority, run_id="run-1", board_id="board-1", cleanup=lambda _lease, _snapshot: None
+    ).reconcile(
+        boot_id="boot-1",
+        ledger=authenticated,
+        leases=(),
+        generations=(),
+        ownership=BootOwnership((), (), True, True),
+    )
+
+    assert result.verdict is AdmissionVerdict.OPEN
+    assert (
+        InstanceReconciler(authority, run_id="run-1", board_id="board-1", cleanup=lambda *_: None).probation(
+            result.join_digest, boot_id="boot-2"
+        )
+        is ProbationOutcome.UNSETTLED
+    )
+    authority.close()
 
 
 def test_owned_row_with_dead_generation_gets_one_fixed_cleanup_then_admits(tmp_path):
@@ -417,6 +595,7 @@ def test_authenticated_empty_snapshot_with_no_leases_records_complete_admission(
         ownership=ownership(),
     )
     assert result.verdict is AdmissionVerdict.OPEN
+    assert "cycle_id" not in result.document()
     assert result.completion_key == "instance-reconciliation:run-1:boot-1:complete"
     receipt = write_receipt(result, authority, tmp_path / "instance-reconciliation.receipt.json")
     ledger_receipt = write_ledger_receipt(tmp_path, "run-1", authenticated)
