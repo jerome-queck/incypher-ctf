@@ -1,3 +1,3 @@
 """Reviewed Order-policy aggregate digest, separated to avoid a digest cycle."""
 
-CONTROLLED_PROOF_DIGEST = "65f74b8f8a3cd8a0a3bb897b7f9c96aa3ed8de558a690b42795dc22771827b14"
+CONTROLLED_PROOF_DIGEST = "b5428f2a08bdc4bea01c6645772fad07dcc9d37b4359a0ad5dfac31f074229e1"
