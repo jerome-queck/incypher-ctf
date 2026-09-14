@@ -112,6 +112,9 @@ def discover_container_cgroup(mount: Path = CGROUP_MOUNT) -> Path:
     if not mount.is_dir():
         raise OSError(f"cgroup mount is absent: {mount}")
     domains = sorted(path for path in mount.iterdir() if path.is_dir() and not path.is_symlink())
+    markers = tuple(mount / name for name in ("cgroup.controllers", "cgroup.procs", "cgroup.subtree_control"))
+    if all(path.is_file() for path in markers) and (not domains or (mount / "control").is_dir()):
+        return mount.resolve()
     if len(domains) != 1:
         raise OSError(f"expected one container cgroup, found {len(domains)}")
     return domains[0].resolve()
