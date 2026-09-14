@@ -10,11 +10,15 @@ import datetime as dt
 import json
 import re
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from solver.board import Board, Reply
 from solver.board_broker_contracts import BoardBrokerResult, BoardOperation, BoardOutcome
 from solver.codex import Credential, Child
+from solver.attempt_tool_client import AttemptToolClient, TOOL_HANDLE_ENV, TOOL_SOCKET_ENV
 from solver.flag import Flags, Pace, ReplayLimits
 from solver.instance import Instances
 from solver.intake import Intake, Limits
@@ -260,6 +264,7 @@ def solver(
     board_broker_path=None,
     board_broker_boot_id="",
     lead_adapter=None,
+    tool_runtime=None,
 ):
     """Everything `solver/__main__.py` composes, with the clock and the child under the test's hand.
 
@@ -306,6 +311,7 @@ def solver(
         board_broker_path=board_broker_path,
         board_broker_boot_id=board_broker_boot_id,
         lead_adapter=lead_adapter,
+        tool_runtime=tool_runtime,
     )
     return run, recorder
 
@@ -367,6 +373,49 @@ def test_a_boot_crash_is_reported_without_closing_its_run(tmp_path):
 
 
 # ---------------------------------------------------------------- working Attempts
+
+
+def test_an_ordinary_attempt_can_invoke_the_governed_tool_port(tmp_path):
+    clock = Clock()
+    wire = Wire(count=1)
+
+    class ToolRuntime:
+        capability_ids = ("crypto.encoding",)
+
+        def __init__(self):
+            self.calls = []
+
+        def invoke_capability(self, **request):
+            self.calls.append(request)
+            return SimpleNamespace(exit_code=0, output=b"x" * 1024**2)
+
+    runtime = ToolRuntime()
+
+    class ToolUsingAgent(Agent):
+        def __init__(self):
+            super().__init__(clock, wire=wire, seconds=600.0)
+            self.socket_path = None
+
+        def __call__(self, argv, workdir, environment, prompt):
+            self.socket_path = Path(environment[TOOL_SOCKET_ENV])
+            request = workdir / "request.json"
+            request.write_text('{"base64":"YQ==","hex":"61"}')
+            with pytest.raises(PermissionError, match="refused"):
+                AttemptToolClient(self.socket_path, "another-attempt-handle").list()
+            client = AttemptToolClient(self.socket_path, environment[TOOL_HANDLE_ENV])
+            assert client.list() == ("crypto.encoding",)
+            assert client.run("crypto.encoding", request.name) == (0, b"x" * 1024**2)
+            return super().__call__(argv, workdir, environment, prompt)
+
+    agent = ToolUsingAgent()
+    run, _recorder = solver(tmp_path, wire, agent, clock, lasting=1000.0, tool_runtime=runtime)
+
+    run.work()
+
+    assert runtime.calls
+    assert runtime.calls[0]["lane_id"] == "lane-1"
+    assert runtime.calls[0]["input_path"] == tmp_path / "work" / RULES.event / "1" / "request.json"
+    assert agent.socket_path is not None and not agent.socket_path.exists()
 
 
 def test_instance_recovery_opens_the_production_broker_client_with_full_binding(tmp_path, monkeypatch):

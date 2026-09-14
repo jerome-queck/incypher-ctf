@@ -148,6 +148,7 @@ class BuiltAssembly:
     inventory: bytes
     package_input: bytes
     rootfs_digest: str
+    capabilities: bytes | None = None
 
 
 def digest_bytes(content: bytes) -> str:
@@ -189,7 +190,7 @@ def parse_package(value: object, component_id: str) -> PackageLock:
     if not isinstance(name, str) or not PACKAGE_PATTERN.fullmatch(name):
         raise ValueError(f"invalid package name: {name}")
     ecosystem = item.get("ecosystem", "apt")
-    if ecosystem not in {"apt", "conda"}:
+    if ecosystem not in {"apt", "conda", "pypi", "npm"}:
         raise ValueError(f"invalid package ecosystem: {component_id}/{name}")
     return PackageLock(name, exact_version(item["version"], "package", f"{component_id}/{name}"), str(ecosystem))
 
@@ -413,7 +414,7 @@ def parse_component(value: object, profile_id: str) -> ComponentLock:
                 raise ValueError(f"capability policy has an unsafe argv template: {component_id}/{capability_id}")
             if policy["input_kind"] not in {"file", "directory", "file-or-directory"}:
                 raise ValueError(f"capability policy has an invalid input kind: {component_id}/{capability_id}")
-            if policy["network"] not in {"deny", "target-broker"}:
+            if policy["network"] not in {"deny", "target-broker", "research-broker"}:
                 raise ValueError(f"capability policy has an invalid network class: {component_id}/{capability_id}")
             schema_prefix = "resident." if profile_id == "resident" else f"{profile_id}."
             if not isinstance(policy["output_schema"], str) or not policy["output_schema"].startswith(schema_prefix):
@@ -535,6 +536,77 @@ def tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def capability_catalogue(source: Path, plan: AssemblyPlan) -> bytes | None:
+    """Validate the queryable required/triggered catalogue against locked components."""
+
+    path = source / "capabilities.json"
+    if not path.exists():
+        return None
+    document = object_with_keys(json.loads(path.read_bytes()), {"schema_version", "capabilities"}, "capabilities")
+    if document["schema_version"] != 1 or not isinstance(document["capabilities"], list):
+        raise ValueError("unsupported capability catalogue")
+    component_ids = {component.component_id for component in plan.components}
+    seen: set[str] = set()
+    required_fields = {
+        "capability_id",
+        "requirement",
+        "component_ids",
+        "profiles",
+        "installed",
+        "proved",
+        "enabled",
+        "authority",
+        "reason",
+        "promotion_rule",
+    }
+    for value in document["capabilities"]:
+        if (
+            not isinstance(value, Mapping)
+            or not required_fields <= set(value)
+            or set(value) - required_fields > {"candidates"}
+        ):
+            raise ValueError("capability row has unknown or missing fields")
+        capability_id = value["capability_id"]
+        if not isinstance(capability_id, str) or not ID_PATTERN.fullmatch(capability_id) or capability_id in seen:
+            raise ValueError(f"invalid capability row: {capability_id}")
+        seen.add(capability_id)
+        components = value["component_ids"]
+        profiles = value["profiles"]
+        if (
+            value["requirement"] not in {"required", "triggered"}
+            or not isinstance(components, list)
+            or any(not isinstance(item, str) or item not in component_ids for item in components)
+            or not isinstance(profiles, list)
+            or any(not isinstance(item, str) or not ID_PATTERN.fullmatch(item) for item in profiles)
+            or value["authority"] not in {"tool-handle", "target-handle", "research-handle", "none"}
+            or any(not isinstance(value[name], bool) for name in ("installed", "proved", "enabled"))
+            or any(not isinstance(value[name], str) for name in ("reason", "promotion_rule"))
+        ):
+            raise ValueError(f"invalid capability row: {capability_id}")
+        if value["requirement"] == "required":
+            if not components or not value["installed"] or not value["proved"] or not value["enabled"]:
+                raise ValueError(f"unresolved required capability: {capability_id}")
+            if value["reason"] or value["promotion_rule"] or value["authority"] == "none":
+                raise ValueError(f"invalid required capability state: {capability_id}")
+        elif (
+            components
+            or value["installed"]
+            or value["proved"]
+            or value["enabled"]
+            or not value["reason"]
+            or not value["promotion_rule"]
+        ):
+            raise ValueError(f"invalid triggered capability state: {capability_id}")
+        candidates = value.get("candidates")
+        if candidates is not None and (
+            not isinstance(candidates, list)
+            or not candidates
+            or any(not isinstance(item, str) or "@" not in item for item in candidates)
+        ):
+            raise ValueError(f"capability candidates are not exact: {capability_id}")
+    return canonical_json(document)
+
+
 def build_assembly(plan: AssemblyPlan, source: Path, output: Path) -> BuiltAssembly:
     rootfs = output / "rootfs"
     rootfs.mkdir(parents=True)
@@ -555,7 +627,10 @@ def build_assembly(plan: AssemblyPlan, source: Path, output: Path) -> BuiltAssem
     package_input = plan.package_input()
     (output / "inventory.json").write_bytes(inventory)
     (output / "apt-packages.txt").write_bytes(package_input)
-    return BuiltAssembly(inventory, package_input, tree_digest(rootfs))
+    capabilities = capability_catalogue(source, plan)
+    if capabilities is not None:
+        (output / "capabilities.json").write_bytes(capabilities)
+    return BuiltAssembly(inventory, package_input, tree_digest(rootfs), capabilities)
 
 
 def validate_output_path(source: Path, output: Path) -> None:
@@ -613,6 +688,8 @@ def publish(source: Path, output: Path) -> None:
                 "second_inventory_digest": inventory_digest,
             },
         }
+        if first.capabilities is not None:
+            receipt["capability_catalogue_digest"] = digest_bytes(first.capabilities)
         (first_path / "receipt.json").write_bytes(canonical_json(receipt))
         if output.exists():
             exchange_directories(first_path, output)

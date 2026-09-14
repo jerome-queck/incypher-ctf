@@ -23,6 +23,7 @@ ATTEMPT_UID = 20_000
 WORKER_SOURCE = Path("/opt/solver/solver/attempt_executor_worker.py")
 TARGET_CLIENT_SOURCE = Path("/opt/solver/solver/target_broker_worker_client.py")
 RESEARCH_CLIENT_SOURCE = Path("/opt/solver/solver/research_broker_worker_client.py")
+TOOL_SUPPLY_ROOT = Path("/opt/solver/tool-supply")
 BROKER_SOURCE = Path("/opt/solver/solver/attempt_executor_broker.py")
 REQUIRED_CONTROLLERS = ("cpu", "memory", "pids")
 POOL_ENV = "INCYPHER_ATTEMPT_POOL"
@@ -111,6 +112,9 @@ def discover_container_cgroup(mount: Path = CGROUP_MOUNT) -> Path:
     if not mount.is_dir():
         raise OSError(f"cgroup mount is absent: {mount}")
     domains = sorted(path for path in mount.iterdir() if path.is_dir() and not path.is_symlink())
+    markers = tuple(mount / name for name in ("cgroup.controllers", "cgroup.procs", "cgroup.subtree_control"))
+    if all(path.is_file() for path in markers) and (not domains or (mount / "control").is_dir()):
+        return mount.resolve()
     if len(domains) != 1:
         raise OSError(f"expected one container cgroup, found {len(domains)}")
     return domains[0].resolve()
@@ -152,6 +156,16 @@ def _fixed_worker_command(work: Path, control_fd: int = 3, seccomp_fd: int = 4, 
         "--ro-bind",
         "/etc/john",
         "/etc/john",
+        "--ro-bind",
+        "/etc/alternatives",
+        "/etc/alternatives",
+        "--dir",
+        "/opt",
+        "--dir",
+        "/opt/solver",
+        "--ro-bind",
+        str(TOOL_SUPPLY_ROOT),
+        str(TOOL_SUPPLY_ROOT),
         "--tmpfs",
         "/tmp",
         "--chmod",

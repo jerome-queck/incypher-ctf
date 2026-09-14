@@ -24,6 +24,8 @@ class CodexRequest:
     attempt_id: str = ""
     deadline: str = ""
     first_step: int = 1
+    tool_socket: str = ""
+    tool_handle: str = ""
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from solver import isolation_runtime
+from solver.attempt_executor_pool import discover_container_cgroup
 from solver.isolation import (
     STRICT_CONTROLS,
     STRICT_PROFILE_ID,
@@ -139,6 +140,23 @@ def test_a_hung_hostile_probe_is_a_typed_pre_authority_refusal():
 
     assert refused.value.reason is IsolationReason.BOUNDARY_PROBE
     assert str(refused.value) == "[boot] isolation:boundary-probe — fixed probe timed out after 45 seconds"
+
+
+def test_a_private_cgroup_namespace_exposes_its_container_domain_at_the_mount_root(tmp_path):
+    for name in ("cgroup.controllers", "cgroup.procs", "cgroup.subtree_control"):
+        (tmp_path / name).write_text("")
+
+    assert discover_container_cgroup(tmp_path) == tmp_path.resolve()
+
+    (tmp_path / "control").mkdir()
+    assert discover_container_cgroup(tmp_path) == tmp_path.resolve()
+
+
+def test_a_host_cgroup_namespace_exposes_one_container_domain_below_the_mount(tmp_path):
+    domain = tmp_path / "docker-container.scope"
+    domain.mkdir()
+
+    assert discover_container_cgroup(tmp_path) == domain.resolve()
 
 
 def test_outer_namespace_setup_capabilities_are_removed_from_every_set(monkeypatch: pytest.MonkeyPatch):

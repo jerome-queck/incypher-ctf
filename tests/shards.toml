@@ -129,11 +129,13 @@
   "tests/test_rig_seed_evidence.py",
   "tests/test_strict_isolation.py",
   "tests/test_strict_runtime.py",
+  "tests/test_supply_proof.py",
   "tests/test_tool_control.py",
   "tests/test_tool_handle_probe.py",
   "tests/test_tool_supply.py",
   "tests/test_tool_supply_image.py",
   "tests/test_tool_supply_probe.py",
   "tests/test_tool_supply_receipt.py",
+  "tests/test_web_tool.py",
   "tests/test_verify_sage_closure.py",
 ]

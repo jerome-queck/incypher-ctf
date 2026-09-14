@@ -318,6 +318,39 @@ def test_cancellation_is_idempotent_and_cannot_be_reported_as_a_normal_exit(tmp_
     assert runtime.cancel_count == 1
 
 
+def test_generation_cancellation_revokes_drains_and_blocks_late_starts_before_fencing(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    fence = GenerationFence(state, "run-1", Redactor({}), timestamp=lambda: "2026-09-11T00:00:00Z")
+    generation = fence.acquire("challenge-1", "attempt-1")
+    runtime = CancellableRuntime()
+    executor = AttemptExecutor(
+        state=state,
+        run_id="run-1",
+        isolation_receipt=isolation_receipt(state),
+        binding=RuntimeBinding(IMAGE_ID, "sha256:" + "b" * 64, "sha256:" + "c" * 64, "linux/arm64"),
+        generation_fence=fence,
+        runtime=runtime,
+        timestamp=lambda: "2026-09-11T00:00:00Z",
+    )
+    revoked = []
+    executor.add_generation_revocation(revoked.append)
+    handle = executor.start(request(tmp_path, generation.generation_id))
+    assert runtime.started.wait(2)
+
+    executor.cancel_generation(generation.generation_id)
+    executor.cancel_generation(generation.generation_id)
+
+    assert handle.result().outcome is ResourceOutcome.CANCELLED
+    assert revoked == [generation.generation_id]
+    assert runtime.cancel_count == 1
+    assert fence.projection().active_by_work["challenge-1"].generation_id == generation.generation_id
+    with pytest.raises(ValueError, match="closing"):
+        executor.start(request(tmp_path, generation.generation_id))
+
+    executor.close_generation(generation.generation_id, GenerationDisposition.COMPLETE)
+    assert not fence.projection().generations[-1].active
+
+
 def test_result_is_rejected_when_its_generation_closed_during_execution(tmp_path: Path) -> None:
     state = tmp_path / "state"
     fence = GenerationFence(state, "run-1", Redactor({}), timestamp=lambda: "2026-09-11T00:00:00Z")

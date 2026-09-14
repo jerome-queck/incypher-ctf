@@ -132,6 +132,7 @@ def compose(
             _opening(challenge, rules, workdir, budget_s),
             _forbidden(rules),
             _finding_the_flag(rules),
+            _tools(),
             boundary.carried(facts=_facts(challenge, staged, lease), recon=recon),
             _closing(),
         ]
@@ -141,7 +142,7 @@ def compose(
 def _opening(challenge: Sighting, rules: Rules, workdir: Path, budget_s: int) -> str:
     return (
         f"You are solving one Capture The Flag Challenge on {rules.url}, alone and unattended, with "
-        f"a root shell in a container and the forensics, crypto and reversing tooling the image "
+        f"a root shell in a container and the forensics, crypto, reversing, Web, OSINT and protocol tooling the image "
         f"ships.\n"
         f"Your working directory is {workdir}. It is yours, it already holds this Challenge's files, "
         f"and it survives into your next turn on this Challenge — anything you want later, leave "
@@ -166,6 +167,19 @@ def _finding_the_flag(rules: Rules) -> str:
         f"is not yours and there is nothing here to submit to; the Flag is taken from your output.\n"
         f"{DERIVATION}\n"
         f"{UNWINNABLE}"
+    )
+
+
+def _tools() -> str:
+    return (
+        "## Governed Tools\n"
+        "List available capabilities with `python3 "
+        "/opt/solver/solver/attempt_tool_client.py list`. Put a capability's JSON or file input "
+        "under your working directory, then run `python3 "
+        "/opt/solver/solver/attempt_tool_client.py run <capability> <input-path>`. The port fixes "
+        "the executable, arguments, resources and network authority; do not invoke supplied "
+        "component binaries directly. Read-only request examples and adapters are under "
+        "`/opt/solver/tool-supply/` when an input shape is unclear."
     )
 
 
@@ -219,7 +233,8 @@ def _instance(lease: Lease) -> str:
     until = lease.until.isoformat() if isinstance(lease.until, dt.datetime) else "an unstated time"
     return (
         "A Target is available only through the generation-bound Target broker. Use "
-        "`/target-client.py tcp '<payload>'` or `/target-client.py http <METHOD> <PATH>` from an "
+        "`/target-client.py tcp '<payload>'`, `/target-client.py http <METHOD> <PATH>`, or the "
+        "typed `http-session`, `http-fuzz`, `tcp-session`, and `browser` JSON operations from an "
         f"authorised Tool; its raw address is withheld. It stops answering at {until}."
     )
 

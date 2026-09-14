@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from solver.attempt_tool_client import TOOL_HANDLE_ENV, TOOL_SOCKET_ENV
 from solver.credentials import CHILD_ENVIRONMENT
 from solver.record import Recorder, Step, Usage
 from solver.stall import Deadline
@@ -252,6 +253,8 @@ def run_attempt(
     first_step: int = 1,
     launch: Launch | None = None,
     now: Callable[[], dt.datetime] | None = None,
+    tool_socket: Path | None = None,
+    tool_handle: str = "",
 ) -> Iterator[Taken]:
     """Run one Attempt and stream what happened, Step by Step, as it happens.
 
@@ -273,6 +276,10 @@ def run_attempt(
     `first_step` continues the Attempt's numbering rather than restarting it: recon opened this
     Attempt and its probes were its first Steps.
 
+    `tool_socket` and `tool_handle` are the narrow, Attempt-owned Tool capability. They contain no
+    Target, Research or Board authority; the owner behind them binds each declared call to this
+    Attempt. The handle is never written to the Run record.
+
     Refuses loudly, before anything is spent, if the Run's own record sits inside the working
     directory. The sandbox makes the workdir the one place the vendor's agent may write, so a Run
     that put its stream in there would be handing the model the file its own stall is judged from —
@@ -281,6 +288,8 @@ def run_attempt(
     root = Path(workdir).resolve()
     if Path(recorder.run_dir).resolve().is_relative_to(root):
         raise ValueError(f"the working directory {root} holds this Run's own record, which the model could rewrite")
+    if bool(tool_socket) != bool(tool_handle):
+        raise ValueError("Attempt Tool socket and handle must be supplied together")
     transcript = _Transcript(
         recorder=recorder,
         attempt_id=attempt_id,
@@ -290,6 +299,8 @@ def run_attempt(
         step=first_step - 1,
         launch=launch or _spawn,
         now=now or _utcnow,
+        tool_socket=Path(tool_socket) if tool_socket is not None else None,
+        tool_handle=tool_handle,
     )
     return transcript.run(prompt, deadline, tuple(chain))
 
@@ -400,6 +411,8 @@ class _Transcript:
     step: int
     launch: Launch
     now: Callable[[], dt.datetime]
+    tool_socket: Path | None = None
+    tool_handle: str = ""
     # Per-invocation, reset at every spawn.
     _usage: dict[str, int] = field(default_factory=dict)
     _flights: dict[str, _Flight] = field(default_factory=dict)
@@ -441,7 +454,12 @@ class _Transcript:
         if refused := _could_not_make(credential.home):
             return UNUSABLE, self._shut(flight, credential, None, refused.encode(), kind=CLOSE)
         try:
-            child = self.launch(argv, self.workdir, _environment(credential), prompt.encode())
+            child = self.launch(
+                argv,
+                self.workdir,
+                _environment(credential, self.tool_socket, self.tool_handle),
+                prompt.encode(),
+            )
         except OSError as error:
             broken = f"{MARK} {argv[0]} did not run — {error}"
             return FAILED, self._shut(flight, credential, None, broken.encode(), kind=CLOSE)
@@ -753,10 +771,18 @@ def _argv(credential: Credential, invocation: Invocation, images: Sequence[Path]
     return (*argv, "-")
 
 
-def _environment(credential: Credential) -> dict[str, str]:
-    """The allowlist, plus the one variable that is an address rather than a secret."""
+def _environment(
+    credential: Credential,
+    tool_socket: Path | None = None,
+    tool_handle: str = "",
+) -> dict[str, str]:
+    """The allowlist plus one private, Attempt-owned Tool capability."""
     kept = {name: os.environ[name] for name in CHILD_ENVIRONMENT if name in os.environ}
-    return {**kept, "CODEX_HOME": str(credential.home)}
+    environment = {**kept, "CODEX_HOME": str(credential.home)}
+    if tool_socket is not None:
+        environment[TOOL_SOCKET_ENV] = str(tool_socket)
+        environment[TOOL_HANDLE_ENV] = tool_handle
+    return environment
 
 
 def _could_not_make(home: Path) -> str:

@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from solver.isolation import STRICT_CONTROLS, STRICT_PROFILE_DIGEST, STRICT_PROFILE_ID, STRICT_RUNTIME_PIN
+from solver.resident_handle_receipt import (
+    RESEARCH_PROOF_FIELDS,
+    _validate_research_proof,
+    _validate_target_proof,
+)
 from solver.tool_supply_receipt import (
     ReceiptInvalid,
     canonical_receipt_bytes,
@@ -19,7 +24,12 @@ def sha(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def receipt() -> dict[str, object]:
+def receipt(
+    *,
+    packages: list[dict[str, str]] | None = None,
+    platform: str = "linux/arm64",
+    supported_platforms: list[str] | None = None,
+) -> dict[str, object]:
     source = b"#!/usr/bin/python3\nprint('fixture')\n"
     licence = b"MIT License\n"
     fixture_input = b"alpha beta\n"
@@ -63,8 +73,8 @@ def receipt() -> dict[str, object]:
             "expected_stdout_sha256": sha(expected),
             "timeout_seconds": 5,
         },
-        "platforms": ["amd64", "arm64"],
-        "packages": [],
+        "platforms": supported_platforms or ["amd64", "arm64"],
+        "packages": packages or [],
         "files": files,
     }
     lock = (
@@ -77,6 +87,7 @@ def receipt() -> dict[str, object]:
     ).encode()
     inventory_component = copy.deepcopy(component)
     inventory_component["profiles"] = ["resident-fixture"]
+    inventory_component["packages"] = sorted(inventory_component["packages"], key=lambda item: item["name"])
     inventory = (
         json.dumps({"schema_version": 1, "components": [inventory_component]}, sort_keys=True, separators=(",", ":"))
         + "\n"
@@ -100,7 +111,7 @@ def receipt() -> dict[str, object]:
         "component_id": "fixture.identity",
         "profile_id": "resident-fixture",
         "image": {
-            "platform": "linux/arm64",
+            "platform": platform,
             "manifest_digest": "sha256:" + "1" * 64,
             "config_digest": "sha256:" + "2" * 64,
         },
@@ -165,7 +176,7 @@ def receipt() -> dict[str, object]:
                 }
                 for item in files
             ],
-            "packages": [],
+            "packages": sorted(packages or [], key=lambda item: item["name"]),
         },
         "component_admission": {
             "entrypoint": "/usr/local/bin/incypher-fixture-tool",
@@ -193,6 +204,34 @@ def test_one_receipt_carries_supply_chain_semantics_and_manifest_link() -> None:
         "kind": "tool-supply-receipt",
         "digest": document["identity"].removeprefix("sha256:"),
     }
+
+
+@pytest.mark.parametrize("platform", ["linux/mips64", "arm64", "linux/arm/v7"])
+def test_receipt_rejects_an_unsupported_image_platform(platform: str) -> None:
+    with pytest.raises(ReceiptInvalid, match="platform"):
+        validate_receipt(receipt(platform=platform))
+
+
+def test_receipt_rejects_a_platform_absent_from_the_locked_component() -> None:
+    with pytest.raises(ReceiptInvalid, match="platform"):
+        validate_receipt(receipt(platform="linux/amd64", supported_platforms=["arm64"]))
+
+
+def test_sbom_accepts_the_canonical_inventory_order_without_weakening_package_identity() -> None:
+    document = receipt(
+        packages=[
+            {"name": "zeta", "version": "2.0.0"},
+            {"ecosystem": "pypi", "name": "alpha", "version": "1.0.0"},
+        ]
+    )
+
+    validate_receipt(document)
+
+    changed = copy.deepcopy(document)
+    changed["sbom"]["packages"][0]["ecosystem"] = "npm"  # type: ignore[index]
+    changed["identity"] = "sha256:" + sha(canonical_receipt_bytes(changed, without_identity=True))
+    with pytest.raises(ReceiptInvalid, match="SBOM identity"):
+        validate_receipt(changed)
 
 
 @pytest.mark.parametrize(
@@ -224,6 +263,93 @@ def test_presence_without_the_locked_entrypoint_semantic_result_is_rejected() ->
 
     with pytest.raises(ReceiptInvalid, match="locked entrypoint"):
         validate_receipt(changed)
+
+
+def test_broker_proofs_reject_unknown_authority_fields_and_stringified_limits() -> None:
+    promoted = json.loads(
+        (Path(__file__).parent.parent / "tool-supply" / "receipts" / "misc-protocols.core.json").read_text()
+    )
+    relay = next(
+        proof for proof in promoted["handle_solve"]["capabilities"] if proof["capability_id"] == "protocol.relay"
+    )
+    changed = copy.deepcopy(relay["target"])
+    changed["reserved"]["ambient_authority"] = "unbounded"
+    with pytest.raises(ValueError, match="broker provenance"):
+        _validate_target_proof(changed, "protocol.relay", relay["generation_id"], promoted["image"])
+
+    body = b'{"answer":"recorded"}'
+    record = {field: None for field in RESEARCH_PROOF_FIELDS}
+    record.update(
+        {
+            "request_id": "research-broker:osint.dns:000001",
+            "generation_id": "generation-000001",
+            "attempt_id": "qualification:osint.dns",
+            "url_digest": "1" * 64,
+            "outcome": "answered",
+            "content_type": "application/vnd.incypher.osint+json",
+            "dns_chain": [],
+            "redirect_chain": [],
+            "observed_at": "2026-09-14T00:00:00+00:00",
+            "expires_at": "2026-09-14T00:01:00+00:00",
+            "elapsed_ms": 1,
+            "cached": False,
+            "max_body_bytes": "4096",
+            "timeout_ms": 2000,
+            "max_redirects": 0,
+            "cache_seconds": 60,
+            "kind": "dns",
+            "source_id": "dns",
+            "terms": "fixture",
+            "robots": "allowed",
+            "origin": "recorded",
+            "query_digest": "2" * 64,
+            "max_requests": 1,
+            "max_total_bytes": 4096,
+            "max_total_seconds_ms": 2000,
+            "min_interval_ms": 0,
+            "blob_digest": sha(body),
+            "blob_bytes": len(body),
+        }
+    )
+    with pytest.raises(ValueError, match="Research bound"):
+        _validate_research_proof(
+            {"record": record, "body": body.hex()},
+            "osint.dns",
+            "generation-000001",
+        )
+
+    record.update(
+        {
+            "attempt_id": "qualification:osint.domain",
+            "content_type": "application/json",
+            "kind": "domain",
+            "max_body_bytes": 4096,
+            "source_id": "crtsh",
+        }
+    )
+    _validate_research_proof(
+        {"record": record, "body": body.hex()},
+        "osint.domain",
+        "generation-000001",
+    )
+
+    live = copy.deepcopy(record)
+    live.update(
+        {
+            "request_id": "research-broker:osint.domain:000002",
+            "origin": "live",
+            "redirect_chain": ["https://example.test/example.test"],
+            "max_redirects": 2,
+        }
+    )
+    _validate_research_proof(
+        [
+            {"record": record, "body": body.hex()},
+            {"record": live, "body": body.hex()},
+        ],
+        "osint.domain",
+        "generation-000001",
+    )
 
 
 def test_promotion_refuses_host_paths_and_secret_forms_then_writes_canonical_evidence(tmp_path: Path) -> None:

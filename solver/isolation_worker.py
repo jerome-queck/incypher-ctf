@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 
+from solver.attempt_executor_pool import discover_container_cgroup
 from solver.isolation_seccomp import write_seccomp_policy
 
 BASE = Path("/run/incypher-isolation-preflight")
@@ -175,10 +176,10 @@ def _probe() -> dict[str, object]:
 def _container_cgroup() -> Path:
     if not CGROUP_MOUNT.is_dir() or not os.access(CGROUP_MOUNT, os.W_OK):
         raise RuntimeError("dedicated cgroup parent is absent or read-only")
-    children = [path for path in CGROUP_MOUNT.iterdir() if path.is_dir()]
-    if len(children) != 1:
-        raise RuntimeError(f"dedicated cgroup parent contains {len(children)} container domains")
-    return children[0]
+    try:
+        return discover_container_cgroup(CGROUP_MOUNT)
+    except OSError as error:
+        raise RuntimeError(str(error)) from error
 
 
 def _owned_residue(control_baseline: int) -> list[str]:

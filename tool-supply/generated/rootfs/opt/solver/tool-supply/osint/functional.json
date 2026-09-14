@@ -1,0 +1,8 @@
+{
+  "fixture_id": "osint-functional-fixture-v1",
+  "username": "fixture-user",
+  "email": "fixture@example.test",
+  "domain": "fixture.example",
+  "coordinates": [1.3521, 103.8198],
+  "whois_record": "Domain Name: fixture.example"
+}

@@ -1,0 +1,27 @@
+{
+  "Holehe": {
+    "version": "1.61",
+    "license": "GPL-3.0-or-later",
+    "source": "https://pypi.org/project/holehe/1.61/"
+  },
+  "Holehe runtime dependencies": {
+    "version": "apt-locked",
+    "license": "BSD-3-Clause AND MIT",
+    "source": "https://pkg.kali.org/"
+  },
+  "Sherlock": {
+    "version": "0.16.0-3",
+    "license": "MIT",
+    "source": "https://packages.debian.org/source/stable/sherlock"
+  },
+  "geopy": {
+    "version": "2.4.1-3",
+    "license": "MIT",
+    "source": "https://packages.debian.org/source/stable/geopy"
+  },
+  "theHarvester": {
+    "version": "4.11.1-0kali1",
+    "license": "GPL-2.0-or-later",
+    "source": "https://pkg.kali.org/pkg/theharvester"
+  }
+}

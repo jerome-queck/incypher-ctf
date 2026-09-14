@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import secrets
 import shutil
 import threading
 import time
@@ -31,6 +32,7 @@ from pathlib import Path
 
 from solver import codex, prompt, recon
 from solver.attempt_progress import ProgressController
+from solver.attempt_tool_broker import AttemptToolBrokerService
 from solver.attempt_executor_contracts import EnvelopeSpec, NetworkPolicy
 from solver.final_interval import FinalIntervalController, RunInventory
 from solver.final_interval_runtime import FinalIntervalRuntime
@@ -223,6 +225,8 @@ class _Held:
     # a fresh spawn with no memory of the last (ADR-0023), so a picture attached once would leave
     # every turn after it inferring the drawing again, which is the failure being fixed.
     pictures: tuple[Path, ...] = ()
+    tool_socket: Path | None = None
+    tool_handle: str = ""
 
 
 class Run:
@@ -333,6 +337,8 @@ class Run:
         self._stopping = ""
         self._crashed = ""
         self._lane_controller = lane_controller
+        if lane_controller is not None and attempt_executor is not None:
+            lane_controller.bind_generation_closer(attempt_executor.close_generation)
         self._lane_picks: dict[str, Pick] = {}
         self._lane_owner_condition = threading.Condition()
         self._lane_active: dict[str, int] = {}
@@ -495,6 +501,9 @@ class Run:
             deadline = self._in_flight.get(binding.lane_id)
             if deadline is not None:
                 deadline.shorten(self._now())
+        if self._attempt_executor is not None:
+            self._attempt_executor.cancel_generation(binding.generation.generation_id)
+        with self._lane_owner_condition:
             while binding.attempt_id in self._lane_active:
                 remaining = deadline_at - time.monotonic()
                 if remaining <= 0:
@@ -632,7 +641,9 @@ class Run:
                 self._close_generation(generation.generation_id, CRASHED)
             raise
         self._in_flight[held.lane_id] = held.deadline
+        tool_service = None
         try:
+            tool_service = self._open_attempt_tools(held)
             found = self._recon(held, challenge)
             held.recon_block, held.pictures = found.block(), found.pictures
             while not self._turn(held, challenge):
@@ -644,6 +655,13 @@ class Run:
             held.cause = CRASHED
             if lane_binding is None:
                 self._stopping, self._crashed = CRASHED, f"{type(broken).__name__}: {broken}"
+        finally:
+            try:
+                if self._attempt_executor is not None:
+                    self._attempt_executor.cancel_generation(held.generation_id)
+            finally:
+                if tool_service is not None:
+                    tool_service.close()
         self._in_flight.pop(held.lane_id, None)
         self._attempts += 1
         try:
@@ -670,6 +688,23 @@ class Run:
             self._recorder.close_generation(generation_id, cause)
             return
         self._attempt_executor.close_generation(generation_id, generation_disposition(cause))
+
+    def _open_attempt_tools(self, held: _Held) -> AttemptToolBrokerService | None:
+        if self._tool_runtime is None:
+            return None
+        held.tool_handle = secrets.token_urlsafe(32)
+        held.tool_socket = Path("/tmp") / f"incypher-tool-{secrets.token_hex(16)}.sock"
+        service = AttemptToolBrokerService(
+            held.tool_socket,
+            self._tool_runtime,
+            generation_id=held.generation_id,
+            attempt_id=held.attempt_id,
+            lane_id=held.lane_id,
+            workspace=held.workdir,
+            handle=held.tool_handle,
+        )
+        service.start()
+        return service
 
     def _turn(self, held: _Held, challenge: Sighting) -> bool:
         """One invocation of the vendor's agent, and whether it ended the Attempt.
@@ -789,6 +824,8 @@ class Run:
                             attempt_id=held.attempt_id,
                             deadline=held.deadline.at,
                             first_step=self._steps.next_index(),
+                            tool_socket=held.tool_socket,
+                            tool_handle=held.tool_handle,
                         )
                     except NativeControlFailure as failure:
                         evidence = digest_bytes(failure.outcome.encode())
@@ -878,6 +915,8 @@ class Run:
                 first_step=self._steps.next_index(),
                 launch=self._launch,
                 now=self._now,
+                tool_socket=held.tool_socket,
+                tool_handle=held.tool_handle,
             ):
                 self._steps.reached(taken.step_index)
                 if taken.kind == COMMAND and taken.tool != ADAPTER:
@@ -1276,6 +1315,8 @@ class Run:
                 checkpoints = held.checkpoints if "held" in locals() else 0
                 self._scheduler.release(Ended(pick.challenge.challenge_id, cause, spent, checkpoints))
         finally:
+            if self._attempt_executor is not None:
+                self._attempt_executor.cancel_generation(binding.generation.generation_id)
             self._exit_lane_owner(binding)
         if held.cause == CRASHED:
             # The LaneController contains a final-chance worker failure; it must not cancel the

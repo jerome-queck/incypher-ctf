@@ -76,6 +76,23 @@ def test_order_is_recomputed_for_each_free_lane_without_a_queue(tmp_path):
     assert result.parked == ()
 
 
+def test_bound_generation_closer_owns_lane_settlement(tmp_path):
+    topology = controller(tmp_path, lanes=1)
+    closed = []
+
+    def close_generation(generation_id, disposition):
+        closed.append((generation_id, disposition.value))
+        topology.generations.close(generation_id, disposition)
+
+    topology.bind_generation_closer(close_generation)
+    result = topology.run_cycle(
+        lambda excluded: candidates()[:1] if not excluded else (),
+        lambda binding: LaneOutcome.complete(binding, seconds=1),
+    )
+
+    assert closed == [(result.timelines[0].generation_id, "complete")]
+
+
 def test_final_interval_skips_spent_lane_and_admits_available_peer(tmp_path):
     state = tmp_path / "state"
     ends = NOW + dt.timedelta(seconds=120)

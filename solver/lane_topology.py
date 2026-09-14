@@ -107,7 +107,13 @@ class LaneController:
         self._lock = RLock()
         self._attempt_sequence = len(generations.projection().generations)
         self._journal = LaneJournal(self.state, self.run_id)
+        self._close_generation = self.generations.close
         self._fence_interrupted_lanes()
+
+    def bind_generation_closer(self, close: Callable[[str, GenerationDisposition], None]) -> None:
+        """Route admitted Lane closure through the owner that revokes and drains its processes."""
+
+        self._close_generation = close
 
     def run_cycle(self, order: OrderPort, execute: ExecutePort) -> LaneCycleResult:
         """Keep each free Lane fed directly from fresh Order until no Work is eligible."""
@@ -316,7 +322,7 @@ class LaneController:
         )
         self._journal.begin_settle(outcome)
         self._hook("after_settlement_reservation")
-        self.generations.close(binding.generation.generation_id, disposition)
+        self._close_generation(binding.generation.generation_id, disposition)
         self._hook("after_generation_close")
         self._journal.finish_settle(binding.generation.generation_id)
 

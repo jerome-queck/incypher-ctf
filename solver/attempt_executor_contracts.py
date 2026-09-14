@@ -15,6 +15,9 @@ class NetworkPolicy(str, enum.Enum):
     DENY = "deny"
 
 
+BROKER_NETWORK_CLASSES = frozenset({"deny", "target-broker", "research-broker"})
+
+
 class ResourceOutcome(str, enum.Enum):
     EXITED = "exited"
     CPU = "cpu-limit"
@@ -46,6 +49,7 @@ class EnvelopeSpec:
     network: NetworkPolicy
     wall_seconds: float
     cleanup_seconds: float
+    network_class: str = "deny"
 
     def __post_init__(self) -> None:
         numbers = (
@@ -61,6 +65,8 @@ class EnvelopeSpec:
             raise ValueError("every Resource-envelope limit must be positive")
         if self.cpu_quota_us > 100_000:
             raise ValueError("CPU quota cannot exceed one full core per 100ms period")
+        if self.network_class not in BROKER_NETWORK_CLASSES:
+            raise ValueError("Attempt broker network class is unsupported")
 
     def document(self) -> dict[str, object]:
         document = asdict(self)
@@ -324,6 +330,7 @@ __all__ = [
     "AttemptEnvelopeRecorded",
     "AttemptRequest",
     "AttemptResult",
+    "BROKER_NETWORK_CLASSES",
     "EnvelopeRecord",
     "EnvelopeSpec",
     "NetworkPolicy",

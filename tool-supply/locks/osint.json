@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "profile_id": "osint",
+  "components": [
+    {
+      "component_id": "osint.core",
+      "capability_ids": [
+        "osint.dns",
+        "osint.identity",
+        "osint.email",
+        "osint.domain",
+        "osint.geo"
+      ],
+      "version": "1.0.0",
+      "license_expression": "GPL-2.0-or-later AND GPL-3.0-or-later AND MIT",
+      "license_classification": "free-redistributable",
+      "source": {
+        "uri": "repo:tool-supply/fixtures/osint/osint.sh",
+        "file": "fixtures/osint/osint.sh"
+      },
+      "license": {
+        "authority": "locked-package-notices",
+        "file": "fixtures/osint/LICENSES.json"
+      },
+      "entrypoint": "/usr/local/bin/incypher-osint",
+      "interpreter": "/bin/dash",
+      "version_argv": [
+        "--version"
+      ],
+      "fixture": {
+        "fixture_id": "osint.core.recorded-live-v2",
+        "argv": [
+          "--self-check",
+          "/opt/solver/tool-supply/osint-input.txt"
+        ],
+        "input_file": "fixtures/osint/input.txt",
+        "expected_stdout_sha256": "bc789ac78dcfcf66b2f9e0aab4556ddeb29d5ccddb074e14099af91b204b31cd",
+        "capability_stdout_sha256": {
+          "osint.dns": "a9674749521c98af3e86d34d67a0c8753dd11d56c2a9a0778efbf1a0a0094c0f",
+          "osint.identity": "1ff5b3c97e8c238f6b4f6d27280cf9458f59874b42f65ca4accb6a0d0125a6c7",
+          "osint.email": "72a014847e938d1cf0e01a34b65ed0bf8166fddce55a6dd5cd4783c054a25211",
+          "osint.domain": "065f91a3b90bfd3f7fe98608fcd502cc5151383782644e527ffdc0411f748013",
+          "osint.geo": "5148a6110d5bf884051519be15dfa288568c9ff99a87c868c8db33edc21e5cbd"
+        },
+        "capability_argv": {
+          "osint.dns": [
+            "/opt/solver/tool-supply/osint/dns.json"
+          ],
+          "osint.identity": [
+            "/opt/solver/tool-supply/osint/identity.json"
+          ],
+          "osint.email": [
+            "/opt/solver/tool-supply/osint/email.json"
+          ],
+          "osint.domain": [
+            "/opt/solver/tool-supply/osint/domain.json"
+          ],
+          "osint.geo": [
+            "/opt/solver/tool-supply/osint/geo.json"
+          ]
+        },
+        "capability_input_files": {
+          "osint.dns": [
+            "fixtures/osint/dns.json"
+          ],
+          "osint.identity": [
+            "fixtures/osint/identity.json"
+          ],
+          "osint.email": [
+            "fixtures/osint/email.json"
+          ],
+          "osint.domain": [
+            "fixtures/osint/domain.json"
+          ],
+          "osint.geo": [
+            "fixtures/osint/geo.json"
+          ]
+        },
+        "capability_expected_facts": {
+          "osint.dns": [
+            "schema=osint.dns.v1",
+            "outcome=answered",
+            "origin=recorded",
+            "origin=live",
+            "body_sha256=876926f99f044f48327d86b694e71754abe32015a30d5a729c0a0d4f08fcbcd9",
+            "body_sha256=ed374f0afb0468733a3069fc35551804c50d677f1b27f8dd69a91a3874ec10c8",
+            "tool=research-dns"
+          ],
+          "osint.identity": [
+            "schema=osint.identity.v1",
+            "outcome=answered",
+            "origin=recorded",
+            "origin=live",
+            "body_sha256=6c3c17a07a038367ae536a510489eecce9581c7eff0afac4746f4ad7a3787b99",
+            "body_sha256=9264d8e97954abc506966fc47ad7d9fbba11a87f78a21986139c30a7b0b9f152",
+            "tool=sherlock",
+            "tool_inference={\"claimed\":true,\"status\":\"Claimed\"}"
+          ],
+          "osint.email": [
+            "schema=osint.email.v1",
+            "outcome=answered",
+            "origin=recorded",
+            "origin=live",
+            "body_sha256=272041f23278bd3f45455726f833ff1d639dbfe6b63d520037fb5e501a261f86",
+            "tool=holehe",
+            "tool_inference={\"exists\":true,\"rate_limited\":false,\"service\":\"gravatar\"}"
+          ],
+          "osint.domain": [
+            "schema=osint.domain.v1",
+            "outcome=answered",
+            "origin=recorded",
+            "origin=live",
+            "body_sha256=b6ba4fcdfad0f4d2e8b054b6d548375cfeb9ce4cc2db34bded21919c39f8fc6e",
+            "tool=theharvester",
+            "tool_inference={\"hostnames\":[\"api.fixture.example\",\"fixture.example\"]}"
+          ],
+          "osint.geo": [
+            "schema=osint.geo.v1",
+            "outcome=answered",
+            "origin=recorded",
+            "origin=live",
+            "body_sha256=4d5ce00e636ea9eb277fe5f9d8824cb79e7ea67635c1ed208fd56612fe0d2e9e",
+            "body_sha256=c2c2a46efab1a7d4a594b6df410f81cfb7cf09b7195e020e68444a38795b135e",
+            "tool=geopy",
+            "tool_inference={\"latitude\":1.3521,\"longitude\":103.8198}"
+          ]
+        },
+        "timeout_seconds": 60
+      },
+      "platforms": [
+        "amd64",
+        "arm64"
+      ],
+      "packages": [
+        {
+          "name": "holehe",
+          "version": "1.61",
+          "ecosystem": "pypi"
+        },
+        {
+          "name": "python3-bs4",
+          "version": "4.15.0-1"
+        },
+        {
+          "name": "python3-colorama",
+          "version": "0.4.6-5"
+        },
+        {
+          "name": "python3-geopy",
+          "version": "2.4.1-3"
+        },
+        {
+          "name": "python3-httpx",
+          "version": "0.28.1-1.1"
+        },
+        {
+          "name": "python3-termcolor",
+          "version": "2.4.0-3"
+        },
+        {
+          "name": "python3-tqdm",
+          "version": "4.69.0-1"
+        },
+        {
+          "name": "python3-trio",
+          "version": "0.34.0-1"
+        },
+        {
+          "name": "sherlock",
+          "version": "0.16.0-3"
+        },
+        {
+          "name": "theharvester",
+          "version": "4.11.1-0kali1"
+        }
+      ],
+      "files": [
+        {
+          "source": "fixtures/osint/LICENSES.json",
+          "destination": "/opt/solver/tool-supply/LICENSE.osint.core",
+          "sha256": "2bb7d5382af6e21a6cbff1ac19f44eaf8555341efbd73abc72dd34c6fc348a5f",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/dns.json",
+          "destination": "/opt/solver/tool-supply/osint/dns.json",
+          "sha256": "047cd1344ea1e30fea73c1e807b71d16c566b212b39e6f76cd76e04db6184d38",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/domain.json",
+          "destination": "/opt/solver/tool-supply/osint/domain.json",
+          "sha256": "78a2e89c29271b9a8f9fe80570aaeb65d9f50d92de114c9f6a874bcee0be227b",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/email.json",
+          "destination": "/opt/solver/tool-supply/osint/email.json",
+          "sha256": "d42db17b9a52abe373db87b234a16dd80ece25e74a5dec2a518edaf5adde13f2",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/geo.json",
+          "destination": "/opt/solver/tool-supply/osint/geo.json",
+          "sha256": "a01a6386ac1c03751b700aa401fcd3b40a75fe4fc33a88e379972c892091ccb7",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/identity.json",
+          "destination": "/opt/solver/tool-supply/osint/identity.json",
+          "sha256": "99e252bfd10d1fa1b632ad28552b51ba340b0c9ecfa0e97296aa1f7b2781a782",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/functional.json",
+          "destination": "/opt/solver/tool-supply/osint/functional.json",
+          "sha256": "fa31f76bf01e46d4555d90e0000091e434944ac53760e5e2640c4abc0a45d1ef",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/input.txt",
+          "destination": "/opt/solver/tool-supply/osint-input.txt",
+          "sha256": "bc789ac78dcfcf66b2f9e0aab4556ddeb29d5ccddb074e14099af91b204b31cd",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/osint.py",
+          "destination": "/opt/solver/tool-supply/osint/osint.py",
+          "sha256": "f3877393a7699c59ba8df449be4294a27289578862f13a0c07dfe5678a2d0329",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/requirements.txt",
+          "destination": "/opt/solver/tool-supply/osint/requirements.txt",
+          "sha256": "e177c7a0c98395a25901200dac8e3224c140bd51cf22086b0e6444730708177f",
+          "mode": "0444"
+        },
+        {
+          "source": "fixtures/osint/osint.sh",
+          "destination": "/usr/local/bin/incypher-osint",
+          "sha256": "bcf0d8920e539352455ff5e603f9ca61254055add2136bed7697a51d72cee801",
+          "mode": "0444"
+        }
+      ],
+      "capability_policies": {
+        "osint.dns": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-osint",
+            "osint.dns",
+            "{input}"
+          ],
+          "input_kind": "file",
+          "max_input_bytes": 65536,
+          "max_output_bytes": 65536,
+          "cpu_seconds": 30,
+          "filesystem_bytes": 16777216,
+          "pids": 64,
+          "network": "research-broker",
+          "output_schema": "osint.dns.v1",
+          "memory_bytes": 268435456,
+          "wall_seconds": 45
+        },
+        "osint.identity": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-osint",
+            "osint.identity",
+            "{input}"
+          ],
+          "input_kind": "file",
+          "max_input_bytes": 65536,
+          "max_output_bytes": 65536,
+          "cpu_seconds": 30,
+          "filesystem_bytes": 16777216,
+          "pids": 64,
+          "network": "research-broker",
+          "output_schema": "osint.identity.v1",
+          "memory_bytes": 268435456,
+          "wall_seconds": 45
+        },
+        "osint.email": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-osint",
+            "osint.email",
+            "{input}"
+          ],
+          "input_kind": "file",
+          "max_input_bytes": 65536,
+          "max_output_bytes": 65536,
+          "cpu_seconds": 30,
+          "filesystem_bytes": 16777216,
+          "pids": 64,
+          "network": "research-broker",
+          "output_schema": "osint.email.v1",
+          "memory_bytes": 268435456,
+          "wall_seconds": 45
+        },
+        "osint.domain": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-osint",
+            "osint.domain",
+            "{input}"
+          ],
+          "input_kind": "file",
+          "max_input_bytes": 65536,
+          "max_output_bytes": 65536,
+          "cpu_seconds": 30,
+          "filesystem_bytes": 16777216,
+          "pids": 64,
+          "network": "research-broker",
+          "output_schema": "osint.domain.v1",
+          "memory_bytes": 268435456,
+          "wall_seconds": 45
+        },
+        "osint.geo": {
+          "argv": [
+            "/bin/dash",
+            "/usr/local/bin/incypher-osint",
+            "osint.geo",
+            "{input}"
+          ],
+          "input_kind": "file",
+          "max_input_bytes": 65536,
+          "max_output_bytes": 65536,
+          "cpu_seconds": 30,
+          "filesystem_bytes": 16777216,
+          "pids": 64,
+          "network": "research-broker",
+          "output_schema": "osint.geo.v1",
+          "memory_bytes": 268435456,
+          "wall_seconds": 45
+        }
+      }
+    }
+  ]
+}

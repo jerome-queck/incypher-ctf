@@ -25,33 +25,70 @@ from solver.tool_supply_receipt import ReceiptInvalid, create_receipt, promote_r
 from solver.resident_handle_receipt import create_receipt as create_handle_receipt  # noqa: E402
 
 Runner = Callable[..., Any]
+RUNTIME_HOSTS = ("colima", "native-docker")
+PLATFORMS = ("linux/amd64", "linux/arm64")
+NATIVE_CGROUP_PARENT = "incypher-v2-strict.slice"
+NATIVE_CGROUP_SOURCE = "/sys/fs/cgroup/incypher-v2-strict.slice"
 
 
 def _run(command: list[str], **options: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, **options)
 
 
-def build_image(runner: Runner = _run) -> tuple[str, str, str]:
-    """Return platform, OCI manifest digest and config digest for the one loaded build."""
+def _cleanup_cgroup(runtime_host: str, runner: Runner) -> None:
+    if runtime_host == "colima":
+        command = ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+        runner(command, check=True)
+        return
+    elif runtime_host == "native-docker":
+        command = ["sudo", "rmdir", NATIVE_CGROUP_SOURCE]
+    else:
+        raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    result = runner(command, check=False, capture_output=True, text=True)
+    if result.returncode and "No such file or directory" not in result.stderr:
+        raise ReceiptInvalid(f"native cgroup cleanup failed: {result.stderr.strip() or result.returncode}")
 
-    if runtime.verify() != 0:
+
+def _prepare_cgroup(runtime_host: str, runner: Runner) -> None:
+    if runtime_host == "colima":
+        return
+    if runtime_host != "native-docker":
+        raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    runner(["sudo", "mkdir", NATIVE_CGROUP_SOURCE], check=True)
+
+
+def _strict_command(command: list[str], runtime_host: str) -> list[str]:
+    if runtime_host == "colima":
+        return command
+    if runtime_host != "native-docker":
+        raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    return [
+        NATIVE_CGROUP_PARENT
+        if item == strict_runtime.CGROUP_PARENT
+        else item.replace(strict_runtime.CGROUP_SOURCE, NATIVE_CGROUP_SOURCE)
+        for item in command
+    ]
+
+
+def build_image(
+    runner: Runner = _run,
+    *,
+    platform: str = "linux/arm64",
+    runtime_host: str = "colima",
+) -> strict_runtime.RuntimeBinding:
+    """Return the loaded image identity and its exact OCI binding."""
+
+    if runtime_host not in RUNTIME_HOSTS:
+        raise ReceiptInvalid(f"unsupported qualification runtime host: {runtime_host}")
+    if platform not in PLATFORMS:
+        raise ReceiptInvalid(f"unsupported qualification platform: {platform}")
+    if runtime_host == "colima" and runtime.verify() != 0:
         raise ReceiptInvalid("the pinned container runtime is unavailable")
     metadata_path = new_retained_directory("image-metadata", "tool-") / "metadata.json"
-    runner(
-        [
-            "docker",
-            "buildx",
-            "build",
-            "--load",
-            "--provenance=false",
-            "--metadata-file",
-            str(metadata_path),
-            "--tag",
-            strict_runtime.IMAGE_TAG,
-            ".",
-        ],
-        check=True,
-    )
+    tag = strict_runtime.IMAGE_TAG
+    command = ["docker", "buildx", "build", "--load", "--provenance=false", "--platform", platform]
+    command.extend(("--metadata-file", str(metadata_path), "--tag", tag, "."))
+    runner(command, check=True)
     metadata = json.loads(metadata_path.read_text())
     manifest_digest = metadata.get("containerimage.digest")
     config_digest = metadata.get("containerimage.config.digest")
@@ -59,7 +96,7 @@ def build_image(runner: Runner = _run) -> tuple[str, str, str]:
         raise ReceiptInvalid("BuildKit did not return the OCI manifest digest")
     inspected = (
         runner(
-            ["docker", "image", "inspect", "--format", "{{.Id}} {{.Os}}/{{.Architecture}}", strict_runtime.IMAGE_TAG],
+            ["docker", "image", "inspect", "--format", "{{.Id}} {{.Os}}/{{.Architecture}}", tag],
             check=True,
             capture_output=True,
             text=True,
@@ -69,38 +106,51 @@ def build_image(runner: Runner = _run) -> tuple[str, str, str]:
     )
     if not isinstance(config_digest, str) or not config_digest.startswith("sha256:"):
         raise ReceiptInvalid("BuildKit did not return the OCI config digest")
-    if len(inspected) != 2 or inspected[0] != manifest_digest:
-        raise ReceiptInvalid("the loaded strict image is not the OCI manifest")
-    strict_runtime.enforce_host_storage("development", runner)
-    return inspected[1], manifest_digest, config_digest
+    if len(inspected) != 2 or inspected[0] not in {manifest_digest, config_digest} or inspected[1] != platform:
+        raise ReceiptInvalid("the loaded strict image is not the requested platform and OCI manifest")
+    if runtime_host == "colima":
+        strict_runtime.enforce_host_storage("development", runner)
+    return strict_runtime.RuntimeBinding(inspected[0], manifest_digest, config_digest, platform)
 
 
 def strict_observation(
     component_id: str,
     *,
+    image_id: str,
     platform: str,
     manifest_digest: str,
     config_digest: str,
+    runtime_host: str = "colima",
     runner: Runner = _run,
 ) -> dict[str, object]:
     """Execute the fixture under the pinned strict command and always clean its cgroup."""
 
-    runner(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--cgroup-parent",
-            strict_runtime.CGROUP_PARENT,
-            "--entrypoint",
-            "/bin/true",
-            manifest_digest,
-        ],
-        check=True,
-    )
+    _prepare_cgroup(runtime_host, runner)
     try:
+        runner(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--cgroup-parent",
+                NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
+                "--entrypoint",
+                "/bin/true",
+                image_id,
+            ],
+            check=True,
+        )
         result = runner(
-            strict_runtime.tool_probe_command(manifest_digest, manifest_digest, config_digest, platform, component_id),
+            _strict_command(
+                strict_runtime.tool_probe_command(
+                    image_id,
+                    manifest_digest,
+                    config_digest,
+                    platform,
+                    component_id,
+                ),
+                runtime_host,
+            ),
             check=False,
             capture_output=True,
             text=True,
@@ -112,16 +162,25 @@ def strict_observation(
             raise ReceiptInvalid("strict semantic fixture returned no observation object")
         return observation
     finally:
-        runner(["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE], check=True)
+        _cleanup_cgroup(runtime_host, runner)
 
 
-def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> dict[str, object]:
-    platform, manifest_digest, config_digest = build_image(runner)
+def qualify(
+    component_id: str,
+    destination: Path,
+    *,
+    platform: str = "linux/arm64",
+    runtime_host: str = "colima",
+    runner: Runner = _run,
+) -> dict[str, object]:
+    binding = build_image(runner, platform=platform, runtime_host=runtime_host)
     observation = strict_observation(
         component_id,
-        platform=platform,
-        manifest_digest=manifest_digest,
-        config_digest=config_digest,
+        image_id=binding.image_id,
+        platform=binding.platform,
+        manifest_digest=binding.image_manifest_digest,
+        config_digest=binding.image_config_digest,
+        runtime_host=runtime_host,
         runner=runner,
     )
     supply = REPO_ROOT / "tool-supply"
@@ -134,26 +193,30 @@ def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> d
         raise ReceiptInvalid(f"no generated component named {component_id}") from error
     handle_solve = None
     if component.get("capability_policies"):
-        runner(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--cgroup-parent",
-                strict_runtime.CGROUP_PARENT,
-                "--entrypoint",
-                "/bin/true",
-                manifest_digest,
-            ],
-            check=True,
-        )
+        _prepare_cgroup(runtime_host, runner)
         try:
+            runner(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--cgroup-parent",
+                    NATIVE_CGROUP_PARENT if runtime_host == "native-docker" else strict_runtime.CGROUP_PARENT,
+                    "--entrypoint",
+                    "/bin/true",
+                    binding.image_id,
+                ],
+                check=True,
+            )
             state = new_retained_directory("tool-handles", f"{component_id}-")
             result = runner(
-                strict_runtime.tool_handle_probe_command(
-                    strict_runtime.RuntimeBinding(manifest_digest, manifest_digest, config_digest, platform),
-                    state,
-                    component_id,
+                _strict_command(
+                    strict_runtime.tool_handle_probe_command(
+                        binding,
+                        state,
+                        component_id,
+                    ),
+                    runtime_host,
                 ),
                 check=False,
                 capture_output=True,
@@ -164,7 +227,7 @@ def qualify(component_id: str, destination: Path, *, runner: Runner = _run) -> d
             closure = {str(item["source"]): (supply / item["source"]).read_bytes() for item in component["files"]}
             handle_solve = create_handle_receipt(state, component, inventory, closure)
         finally:
-            runner(["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE], check=True)
+            _cleanup_cgroup(runtime_host, runner)
     receipt = create_receipt(
         observation,
         lock_fragment=(supply / "locks" / f"{profile}.json").read_bytes(),
@@ -186,10 +249,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("component_id")
     parser.add_argument("--into", type=Path)
+    parser.add_argument("--platform", choices=PLATFORMS, default="linux/arm64")
+    parser.add_argument("--runtime-host", choices=RUNTIME_HOSTS, default="colima")
     arguments = parser.parse_args(argv)
-    destination = arguments.into or REPO_ROOT / "tool-supply" / "receipts" / f"{arguments.component_id}.json"
+    receipt_root = REPO_ROOT / "tool-supply" / "receipts"
+    if arguments.platform == "linux/amd64":
+        receipt_root /= "amd64"
+    destination = arguments.into or receipt_root / f"{arguments.component_id}.json"
     try:
-        receipt = qualify(arguments.component_id, destination)
+        receipt = qualify(
+            arguments.component_id,
+            destination,
+            platform=arguments.platform,
+            runtime_host=arguments.runtime_host,
+        )
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print(f"Tool qualification refused: {error}", file=sys.stderr)
         return 2

@@ -27,6 +27,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from solver import boot, profile
 from solver.clock import Clock, SystemClock, qualification_from_environment
@@ -78,6 +79,9 @@ from solver.order_runtime import CanonicalScheduler
 from solver.lead_controller import LeadController
 from solver.lead_v1_adapter import V1LeadAdapter
 from solver.tool_control import AttemptToolRuntime, ToolController, attempt_components
+from solver.target_broker_browser import BROWSER_LAUNCHER_FD_ENV, attach_browser_launcher
+from solver.research_broker import ResearchBrokerRuntime
+from solver.research_broker_contracts import ResearchKind, ResearchLimits, ResearchSource
 from solver.candidate_admission import CandidateAdmission
 from solver.submission.ambiguity_types import CompleteSubmissionIdentity
 from solver.submission.bridge import CandidateSubmissionBridge, ObservedCandidateSubmissionBridge
@@ -713,7 +717,15 @@ def _run_admitted(
     attempt_executor = None
     tool_runtime = None
     target_broker = None
+    research_broker = None
+    browser_launcher = None
     if POOL_ENV in environ:
+        if BROWSER_LAUNCHER_FD_ENV not in environ:
+            raise Refusal(f"{boot.MARK} pre-admitted browser launcher is required")
+        try:
+            browser_launcher = attach_browser_launcher(environ)
+        except OSError as error:
+            raise Refusal(f"{boot.MARK} browser launcher attachment refused — {error}") from None
         binding = RuntimeBinding(
             image_id=environ.get(STRICT_IMAGE_ENV, ""),
             image_manifest_digest=environ.get("INCYPHER_IMAGE_MANIFEST", ""),
@@ -737,19 +749,86 @@ def _run_admitted(
                 ),
                 target_authority=lease_target_authority,
                 timestamp=lambda: clock.now().isoformat(),
+                browser_launcher=browser_launcher,
                 recovery=deterministic_recovery,
             )
+        board_host = urlsplit(held.url).hostname or ""
+        research_broker = ResearchBrokerRuntime(
+            state=run_state,
+            run_id=held.run_id,
+            boot_id=boot_id,
+            limits=ResearchLimits(
+                max_body_bytes=1024 * 1024,
+                timeout_seconds=20,
+                max_redirects=4,
+                cache_seconds=300,
+                max_requests=32,
+                max_total_bytes=4 * 1024 * 1024,
+                max_total_seconds=120,
+                min_interval_ms=250,
+            ),
+            timestamp=lambda: clock.now().isoformat(),
+            denied_hosts=(board_host,) if board_host else (),
+            sources={
+                "github": ResearchSource(
+                    ResearchKind.IDENTITY,
+                    "https://api.github.com/users/{subject}",
+                    "github-public-api",
+                    "api-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
+                ),
+                "gravatar": ResearchSource(
+                    ResearchKind.EMAIL,
+                    "https://en.gravatar.com/{md5_subject}.json",
+                    "gravatar-public-profile",
+                    "public-profile-route",
+                    terms_decision="allow",
+                    robots_decision="allow",
+                ),
+                "rdap": ResearchSource(
+                    ResearchKind.DOMAIN,
+                    "https://rdap.org/domain/{subject}",
+                    "rdap-bootstrap-service",
+                    "protocol-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
+                ),
+                "crtsh": ResearchSource(
+                    ResearchKind.DOMAIN,
+                    "https://crt.sh/?q=%25.{subject}&exclude=expired&deduplicate=Y&output=json",
+                    "crtsh-public-certificate-search",
+                    "api-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
+                ),
+                "nominatim": ResearchSource(
+                    ResearchKind.GEO,
+                    "https://nominatim.openstreetmap.org/search?q={subject}&format=json&limit=5",
+                    "openstreetmap-nominatim-usage-policy",
+                    "api-route-not-robots",
+                    terms_decision="allow",
+                    robots_decision="not-applicable",
+                ),
+            },
+            recovery=deterministic_recovery,
+        )
         attempt_executor = AttemptExecutor(
             state=run_state,
             run_id=held.run_id,
             isolation_receipt=(run_state / "runs" / held.run_id / "canonical" / ISOLATION_RECEIPT_FILENAME),
             binding=binding,
             generation_fence=recorder.generations,
-            runtime=AttemptRuntime(attach_attempt_pool(environ), target_broker=target_broker),
+            runtime=AttemptRuntime(
+                attach_attempt_pool(environ),
+                target_broker=target_broker,
+                research_broker=research_broker,
+            ),
             timestamp=lambda: dt.datetime.now(dt.timezone.utc).isoformat(),
         )
         if target_broker is not None:
             target_broker.bind_attempt_executor(attempt_executor)
+        research_broker.bind_attempt_executor(attempt_executor)
         tool_peer = PeerIdentity(
             pid=os.getpid(),
             uid=ATTEMPT_UID,

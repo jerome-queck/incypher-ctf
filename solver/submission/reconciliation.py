@@ -5,8 +5,12 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
+from solver.board_broker import BROKER_REQUEST_TIMEOUT_SECONDS
 from solver.board_broker_contracts import BoardOutcome
 from solver.submission.ambiguity_types import AuthenticatedSubmissionEvidence, Evidence
+
+RECONCILIATION_IPC_ROUND_TRIPS = 3
+RECONCILIATION_CLOSE_TIMEOUT_SECONDS = BROKER_REQUEST_TIMEOUT_SECONDS * RECONCILIATION_IPC_ROUND_TRIPS + 1.0
 
 
 class SubmissionReconciler:
@@ -28,7 +32,7 @@ class SubmissionReconciler:
     def close(self):
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=max(1.0, self._interval * 2))
+            self._thread.join(timeout=max(1.0, self._interval * 2, RECONCILIATION_CLOSE_TIMEOUT_SECONDS))
             if self._thread.is_alive():
                 raise RuntimeError("submission reconciliation did not stop")
 

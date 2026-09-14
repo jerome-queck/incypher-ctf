@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "profile_id": "web",
+  "components": [
+    {
+      "component_id": "web.core",
+      "capability_ids": ["web.discovery", "web.browser"],
+      "version": "1.0.0",
+      "license_expression": "MIT AND Apache-2.0 AND BSD-3-Clause",
+      "license_classification": "free-redistributable",
+      "source": {"uri": "repo:tool-supply/fixtures/web/tool.sh", "file": "fixtures/web/tool.sh"},
+      "license": {"authority": "locked-package-closure-notices", "file": "fixtures/web/LICENSES.json"},
+      "entrypoint": "/usr/local/bin/incypher-web",
+      "interpreter": "/bin/dash",
+      "version_argv": ["--version"],
+      "fixture": {
+        "fixture_id": "web.semantic-v1",
+        "argv": ["--self-check", "/opt/solver/tool-supply/web/input.txt"],
+        "input_file": "fixtures/web/input.txt",
+        "expected_stdout_sha256": "02e57347acfcfdd750059c487ca408b3646ecd1ba1424599115014740443120e",
+        "timeout_seconds": 60,
+        "capability_stdout_sha256": {
+          "web.discovery": "becd31d7292d62afbed4deb0e86f6c655a2cf04cb65aaaecabd8bfd5c0680828",
+          "web.browser": "ab26b1bc22b9dbfa5732301bd79e485e387d2ed87be0d653426616772a197969"
+        },
+        "capability_argv": {
+          "web.discovery": ["/opt/solver/tool-supply/web/discovery.json"],
+          "web.browser": ["/opt/solver/tool-supply/web/browser.json"]
+        },
+        "capability_input_files": {
+          "web.discovery": ["fixtures/web/discovery.json"],
+          "web.browser": ["fixtures/web/browser.json"]
+        },
+        "capability_expected_facts": {
+          "web.discovery": [
+            "schema=web.discovery.v1",
+            "engine=ffuf@2.2.1+target-broker-http-session+curated-wordlist",
+            "ffuf=pass",
+            "found=/hidden-route"
+          ],
+          "web.browser": ["schema=web.browser.v1", "engine=playwright@1.55.0+chromium@150.0.7871.181", "local_storage=[[\"browser-state\",\"held\"]]"]
+        }
+      },
+      "platforms": ["arm64", "amd64"],
+      "packages": [
+        {"name": "ffuf", "version": "2.2.1-1"},
+        {"name": "chromium", "version": "150.0.7871.181-1"},
+        {"name": "chromium-driver", "version": "150.0.7871.181-1"},
+        {"name": "python3-greenlet", "version": "3.3.2-4+b1"},
+        {"name": "python3-pyee", "version": "13.0.0-3"},
+        {"name": "playwright", "version": "1.55.0", "ecosystem": "pypi"},
+        {"name": "fonts-liberation", "version": "1:2.1.5-3"}
+      ],
+      "files": [
+        {"source": "fixtures/web/tool.sh", "destination": "/usr/local/bin/incypher-web", "sha256": "4de98133877a6c29fd9b6c5e0747cb4fe11fb8cc677d911ef706c947ad108c80", "mode": "0444"},
+        {"source": "fixtures/web/tool.py", "destination": "/opt/solver/tool-supply/web/tool.py", "sha256": "bf2db27375a6f6131e4e4b8263cfa1634e20918552b5b8ddc151a3a00bef6f81", "mode": "0444"},
+        {"source": "fixtures/web/requirements.txt", "destination": "/opt/solver/tool-supply/web/requirements.txt", "sha256": "b41b44e189a4c0d557c1bec8fb740c8dc6e740fe88647bbfb9f4eda8d4dee38f", "mode": "0444"},
+        {"source": "fixtures/web/browser_driver.py", "destination": "/opt/solver/tool-supply/web/browser_driver.py", "sha256": "a4632b26749c25eca38785b62a41de8e0597b9b120bf8692d3d91ef0b48255b2", "mode": "0444"},
+        {"source": "fixtures/web/LICENSES.json", "destination": "/opt/solver/tool-supply/LICENSE.web", "sha256": "77c67bf1ebb1e8110b247302558fe2d9a7977d31caba7480f7b8e76e658fee19", "mode": "0444"},
+        {"source": "fixtures/web/input.txt", "destination": "/opt/solver/tool-supply/web/input.txt", "sha256": "02e57347acfcfdd750059c487ca408b3646ecd1ba1424599115014740443120e", "mode": "0444"},
+        {"source": "fixtures/web/discovery.json", "destination": "/opt/solver/tool-supply/web/discovery.json", "sha256": "1c18c3aea4ad9280744aa0920ff50ab0316a6146398265150d63499be2368353", "mode": "0444"},
+        {"source": "fixtures/web/browser.json", "destination": "/opt/solver/tool-supply/web/browser.json", "sha256": "b3b7cf0ff953edfb1e495fa3ecda0eed0ed234635c8245d6e1db1ecbb1737569", "mode": "0444"},
+        {"source": "fixtures/web/routes.txt", "destination": "/opt/solver/tool-supply/web/seclists-routes-2026.2.txt", "sha256": "40ae437b2cb6dd1d5e49de8ef10680717a305cd1a544acf7d09f24f8973bdc47", "mode": "0444"},
+        {"source": "fixtures/web/payloads-ssti.txt", "destination": "/opt/solver/tool-supply/web/payloads-all-the-things-ssti-2026.08.txt", "sha256": "1e95764419fd2913aa7acd1193376564ec50404f420f7f58a8ea5327f7899382", "mode": "0444"}
+      ],
+      "capability_policies": {
+        "web.discovery": {"argv": ["/bin/dash", "/usr/local/bin/incypher-web", "web.discovery", "{input}"], "input_kind": "file", "max_input_bytes": 65536, "max_output_bytes": 65536, "cpu_seconds": 30, "memory_bytes": 536870912, "filesystem_bytes": 67108864, "pids": 64, "wall_seconds": 45, "network": "target-broker", "output_schema": "web.discovery.v1"},
+        "web.browser": {"argv": ["/bin/dash", "/usr/local/bin/incypher-web", "web.browser", "{input}"], "input_kind": "file", "max_input_bytes": 65536, "max_output_bytes": 1048576, "cpu_seconds": 60, "memory_bytes": 1073741824, "filesystem_bytes": 268435456, "pids": 256, "wall_seconds": 60, "network": "target-broker", "output_schema": "web.browser.v1"}
+      }
+    }
+  ]
+}

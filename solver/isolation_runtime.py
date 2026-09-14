@@ -16,6 +16,7 @@ from solver.isolation import (
     IsolationRefusal,
     ProbeResult,
 )
+from solver.attempt_executor_pool import discover_container_cgroup
 
 STRICT_PROBE_COMMAND = (
     "/usr/bin/unshare",
@@ -89,13 +90,13 @@ def _prepare_control_cgroup() -> None:
 
     if not CGROUP_MOUNT.is_dir() or not os.access(CGROUP_MOUNT, os.W_OK):
         raise IsolationRefusal(IsolationReason.BOUNDARY_PROBE, "dedicated cgroup parent is absent or read-only")
-    domains = [path for path in CGROUP_MOUNT.iterdir() if path.is_dir()]
-    if len(domains) != 1:
+    try:
+        domain = discover_container_cgroup(CGROUP_MOUNT)
+    except OSError as error:
         raise IsolationRefusal(
             IsolationReason.BOUNDARY_PROBE,
-            f"dedicated cgroup parent contains {len(domains)} container domains",
-        )
-    domain = domains[0]
+            str(error),
+        ) from error
     control = domain / "control"
     attempt = domain / "attempt"
     try:

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import datetime as dt
+import gzip
 import json
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -28,6 +31,14 @@ from solver.lease_target_broker import LeaseTargetBroker, target_endpoint
 from solver.target_broker import TargetBrokerRuntime
 from solver.target_broker_contracts import (
     TARGET_EXCHANGE_RECORDED,
+    BrowserObservations,
+    BrowserSessionRequest,
+    BrowserTransportResult,
+    HttpBody,
+    HttpFuzzRequest,
+    HttpSessionRequest,
+    TcpReceive,
+    TcpSessionRequest,
     TargetCandidateBinding,
     TargetEndpoint,
     TargetLimits,
@@ -41,8 +52,19 @@ from solver.target_broker_ipc import (
     TargetBrokerClient,
     TargetBrokerService,
 )
+from solver.target_broker_ffuf import FfufResult
 from solver.target_broker_receipt import capsule_contract, link_manifest, verify_receipt, write_receipt
-from solver.target_broker_transport import TransportResult, exchange as target_transport_exchange
+from solver.target_broker_transport import (
+    HttpSessionTransport,
+    HttpTransportRequest,
+    HttpTransportResult,
+    TcpSessionTransport,
+    TransportResult,
+    exchange as target_transport_exchange,
+    http_session_exchange,
+)
+from solver import target_broker_worker_client
+from solver import target_broker_browser
 from solver.work_generation import GenerationFence
 from test_attempt_executor import (
     IMAGE_ID,
@@ -54,6 +76,563 @@ from test_attempt_executor import (
 from test_manifest import draft
 
 TEST_CANDIDATE = TargetCandidateBinding(IMAGE_ID, "sha256:" + "b" * 64, "sha256:" + "c" * 64, "linux/arm64", "d" * 64)
+
+
+def test_browser_launcher_has_a_dedicated_uid_and_private_mount_process_boundary() -> None:
+    command = target_broker_browser._browser_worker_command(9, 10)
+
+    assert command[0] == "/usr/bin/bwrap"
+    assert "--unshare-pid" in command
+    assert "--unshare-uts" in command
+    assert "--unshare-ipc" in command
+    assert "--unshare-net" in command
+    assert "/state" not in command
+    assert ["--ro-bind", "/opt/solver", "/opt/solver"] not in [
+        command[index : index + 3] for index in range(len(command) - 2)
+    ]
+    assert command[-15:] == [
+        "PATH",
+        "/usr/local/bin:/usr/bin:/bin",
+        "/usr/bin/setpriv",
+        "--reuid",
+        "30001",
+        "--regid",
+        "30001",
+        "--clear-groups",
+        "--bounding-set=-all",
+        "--no-new-privs",
+        "/usr/bin/python3",
+        "-I",
+        "/browser-worker.py",
+        "9",
+        "10",
+    ]
+
+
+def test_controller_attaches_and_resets_the_inherited_browser_launcher(monkeypatch) -> None:
+    controller, worker = socket.socketpair()
+    transport_controller, transport_worker = socket.socketpair()
+    descriptor = controller.detach()
+    transport_descriptor = transport_controller.detach()
+    reset = {}
+
+    def acknowledge() -> None:
+        request = target_broker_browser._receive(worker)
+        reset.update(request)
+        target_broker_browser._send(
+            worker,
+            {"status": "ready", "reset_id": request["reset_id"]},
+            threading.Lock(),
+        )
+
+    thread = threading.Thread(target=acknowledge)
+    thread.start()
+    monkeypatch.setattr(target_broker_browser, "_prepared_launcher", None)
+    launcher = target_broker_browser.attach_browser_launcher(
+        {target_broker_browser.BROWSER_LAUNCHER_FD_ENV: f"{descriptor}:{transport_descriptor}"}
+    )
+    thread.join()
+
+    assert reset["command"] == "reset"
+    assert isinstance(reset["reset_id"], str)
+    assert target_broker_browser._prepared_launcher is launcher
+    target_broker_browser.close_browser_launcher()
+    worker.close()
+    transport_worker.close()
+
+
+def test_owner_kills_and_reaps_a_browser_launcher_that_ignores_shutdown() -> None:
+    controller, worker = socket.socketpair()
+    target_broker_browser._send(worker, {"status": "ready"}, threading.Lock())
+
+    class Process:
+        def __init__(self) -> None:
+            self.killed = False
+            self.waits = 0
+
+        def wait(self, timeout):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired("browser", timeout)
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    process = Process()
+    launcher = target_broker_browser.BrowserLauncher(controller, process)  # type: ignore[arg-type]
+
+    launcher.close()
+
+    assert process.killed is True
+    assert process.waits == 2
+    worker.close()
+
+
+def test_browser_launcher_multiplexes_every_request_through_controller_transport() -> None:
+    controller, worker = socket.socketpair()
+    transport_controller, transport_worker = socket.socketpair()
+    launcher = target_broker_browser.BrowserLauncher(
+        controller,
+        None,
+        transport_controller,
+        await_ready=False,
+    )
+    observed = {}
+
+    def browse() -> None:
+        request = target_broker_browser._receive(worker)
+        request_id = request["request_id"]
+        transport_request_id = "subrequest-1"
+        target_broker_browser._send(
+            transport_worker,
+            {"request_id": transport_request_id, "exchange": {"method": "GET", "url": "http://target.test/"}},
+            threading.Lock(),
+        )
+        transport_response = target_broker_browser._receive(transport_worker)
+        observed.update(transport_response["result"])
+        observed["request_id"] = transport_response["request_id"]
+        target_broker_browser._send(
+            worker,
+            {
+                "outcome": "completed",
+                "request_id": request_id,
+                "returncode": 0,
+                "stdout": base64.b64encode(
+                    b'{"dom":"","network":[],"local_storage":[],"session_storage":[],"downloads":[]}'
+                ).decode(),
+            },
+            threading.Lock(),
+        )
+
+    thread = threading.Thread(target=browse)
+    thread.start()
+    result = launcher.execute(
+        "request-1",
+        {},
+        timeout_seconds=1,
+        transport=lambda request: {"outcome": "answered", "status": 200, "url": request["url"]},
+    )
+    thread.join()
+    launcher.close()
+    worker.close()
+    transport_worker.close()
+
+    assert result is not None and result[0] == "completed"
+    assert observed == {
+        "outcome": "answered",
+        "request_id": "subrequest-1",
+        "status": 200,
+        "url": "http://target.test/",
+    }
+
+
+def test_browser_launcher_timeout_cancels_and_drains_before_reuse() -> None:
+    controller, worker = socket.socketpair()
+    transport_controller, transport_worker = socket.socketpair()
+    launcher = target_broker_browser.BrowserLauncher(
+        controller,
+        None,
+        transport_controller,
+        await_ready=False,
+    )
+    completed = base64.b64encode(
+        b'{"dom":"","network":[],"local_storage":[],"session_storage":[],"downloads":[]}'
+    ).decode()
+    observed = []
+
+    def serve() -> None:
+        first = target_broker_browser._receive(worker)
+        observed.append(first["request_id"])
+        control = target_broker_browser._receive(worker)
+        observed.append(control)
+        if control != {"command": "cancel", "request_id": first["request_id"]}:
+            target_broker_browser._send(
+                worker,
+                {"outcome": "completed", "request_id": "wrong", "returncode": 0, "stdout": completed},
+                threading.Lock(),
+            )
+            return
+        target_broker_browser._send(
+            worker,
+            {"outcome": "cancelled", "request_id": first["request_id"], "returncode": -9, "stdout": ""},
+            threading.Lock(),
+        )
+        second = target_broker_browser._receive(worker)
+        observed.append(second["request_id"])
+        target_broker_browser._send(
+            worker,
+            {"outcome": "completed", "request_id": second["request_id"], "returncode": 0, "stdout": completed},
+            threading.Lock(),
+        )
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        with pytest.raises(TimeoutError):
+            launcher.execute("slow", {}, timeout_seconds=0.01, transport=lambda _request: {})
+        result = launcher.execute("fast", {}, timeout_seconds=1, transport=lambda _request: {})
+    finally:
+        launcher.close()
+        worker.close()
+        transport_worker.close()
+        thread.join(1)
+
+    assert result is not None and result[0] == "completed"
+    assert observed == ["slow", {"command": "cancel", "request_id": "slow"}, "fast"]
+
+
+def test_browser_launcher_protocol_failure_cancels_and_drains_before_reuse() -> None:
+    controller, worker = socket.socketpair()
+    transport_controller, transport_worker = socket.socketpair()
+    launcher = target_broker_browser.BrowserLauncher(
+        controller,
+        None,
+        transport_controller,
+        await_ready=False,
+    )
+    completed = base64.b64encode(
+        b'{"dom":"","network":[],"local_storage":[],"session_storage":[],"downloads":[]}'
+    ).decode()
+    observed = []
+
+    def serve() -> None:
+        first = target_broker_browser._receive(worker)
+        target_broker_browser._send(
+            worker,
+            {"outcome": "completed", "request_id": "wrong", "returncode": 0, "stdout": completed},
+            threading.Lock(),
+        )
+        control = target_broker_browser._receive(worker)
+        observed.append(control)
+        if control != {"command": "cancel", "request_id": first["request_id"]}:
+            return
+        target_broker_browser._send(
+            worker,
+            {"outcome": "cancelled", "request_id": first["request_id"], "returncode": -9, "stdout": ""},
+            threading.Lock(),
+        )
+        second = target_broker_browser._receive(worker)
+        observed.append(second["request_id"])
+        target_broker_browser._send(
+            worker,
+            {"outcome": "completed", "request_id": second["request_id"], "returncode": 0, "stdout": completed},
+            threading.Lock(),
+        )
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        with pytest.raises(OSError):
+            launcher.execute("broken", {}, timeout_seconds=1, transport=lambda _request: {})
+        result = launcher.execute("fast", {}, timeout_seconds=1, transport=lambda _request: {})
+    finally:
+        launcher.close()
+        worker.close()
+        transport_worker.close()
+        thread.join(1)
+
+    assert result is not None and result[0] == "completed"
+    assert observed == [{"command": "cancel", "request_id": "broken"}, "fast"]
+
+
+def test_browser_session_preserves_launcher_timeout_classification() -> None:
+    class Launcher:
+        def execute(self, *_args, **_kwargs):
+            raise TimeoutError("launcher response timed out")
+
+        def cancel(self, _request_id):
+            pass
+
+    session = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "target.test", 80),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        Launcher(),
+    )
+
+    assert session.browse(BrowserSessionRequest("/")).outcome is TargetOutcome.TIMEOUT
+
+
+def test_browser_session_uses_the_prepared_fixed_uid_launcher() -> None:
+    observed = {}
+
+    class Launcher:
+        def execute(self, request_id, document, *, timeout_seconds, transport):
+            observed.update(request_id=request_id, document=document, timeout_seconds=timeout_seconds)
+            observed["transport"] = transport
+            return (
+                "completed",
+                0,
+                json.dumps(
+                    {
+                        "dom": "<html></html>",
+                        "network": [],
+                        "local_storage": [],
+                        "session_storage": [],
+                        "downloads": [],
+                    }
+                ).encode(),
+            )
+
+        def cancel(self, _request_id):
+            raise AssertionError("completed launch must not be cancelled")
+
+    transport = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        "127.0.0.1",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        Launcher(),
+    )
+
+    result = transport.browse(BrowserSessionRequest("/"))
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert observed["document"]["origin"]["address"] == "127.0.0.1"
+    assert observed["timeout_seconds"] == 1
+    assert callable(observed["transport"])
+
+
+def test_browser_session_brokers_only_admitted_origins_and_uses_measured_wire_bytes(monkeypatch) -> None:
+    exchanges = []
+
+    class Transport:
+        def __init__(self, endpoint, address, _limits):
+            exchanges.append((endpoint, address))
+
+        def exchange(self, request, *, max_response_bytes):
+            assert request.target == "/state?view=full"
+            assert max_response_bytes == 1024
+            return HttpTransportResult(
+                TargetOutcome.ANSWERED,
+                b"held",
+                200,
+                (("content-length", "999999"), ("content-type", "text/plain")),
+                request_bytes=31,
+                response_bytes=47,
+                certificate_sha256="b" * 64,
+            )
+
+    monkeypatch.setattr(target_broker_browser, "HttpSessionTransport", Transport)
+
+    class Launcher:
+        def execute(self, request_id, _document, *, timeout_seconds, transport):
+            assert timeout_seconds == 1
+            denied = transport({"method": "GET", "url": "http://off-origin.test/", "headers": {}, "body": ""})
+            answered = transport(
+                {
+                    "method": "GET",
+                    "url": "https://target.test/state?view=full",
+                    "headers": {"Accept": "text/plain"},
+                    "body": "",
+                }
+            )
+            assert denied == {"outcome": "denied"}
+            assert answered["response_bytes"] == 47
+            assert ["content-length", "999999"] not in answered["headers"]
+            return (
+                "completed",
+                0,
+                json.dumps(
+                    {
+                        "dom": "held",
+                        "network": [["GET", "/state", 200, 47]],
+                        "local_storage": [],
+                        "session_storage": [],
+                        "downloads": [],
+                    }
+                ).encode(),
+            )
+
+        def cancel(self, _request_id):
+            return None
+
+    transport = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTPS, "target.test", 443),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        Launcher(),
+    )
+
+    result = transport.browse(BrowserSessionRequest("/state"))
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert result.request_bytes == 31
+    assert result.response_bytes == 47
+    assert result.connections == 1
+    assert result.certificate_sha256 == "b" * 64
+    assert exchanges == [(TargetEndpoint(TargetProtocol.HTTPS, "target.test", 443), "192.0.2.10")]
+
+
+def test_browser_session_close_interrupts_an_active_controller_exchange(monkeypatch) -> None:
+    observed = {"transport_closed": False, "cancelled": ""}
+
+    class Transport:
+        def __init__(self, _endpoint, _address, _limits):
+            return None
+
+        def exchange(self, _request, *, max_response_bytes):
+            assert max_response_bytes == 1024
+            session.close()
+            assert observed["transport_closed"] is True
+            return HttpTransportResult(TargetOutcome.REVOKED)
+
+        def close(self):
+            observed["transport_closed"] = True
+
+    monkeypatch.setattr(target_broker_browser, "HttpSessionTransport", Transport)
+
+    class Launcher:
+        def execute(self, request_id, _document, *, timeout_seconds, transport):
+            assert timeout_seconds == 1
+            transport({"method": "GET", "url": "http://target.test/", "headers": {}, "body": ""})
+            return None
+
+        def cancel(self, request_id):
+            observed["cancelled"] = request_id
+
+    session = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "target.test", 80),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        Launcher(),
+    )
+
+    assert session.browse(BrowserSessionRequest("/")).outcome is TargetOutcome.REVOKED
+    assert observed["cancelled"]
+
+
+def test_browser_session_does_not_discover_a_launcher_from_module_state(monkeypatch) -> None:
+    class Launcher:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("an uninjected launcher must remain unreachable")
+
+    monkeypatch.setattr(target_broker_browser, "_prepared_launcher", Launcher())
+    transport = target_broker_browser.BrowserSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        "127.0.0.1",
+        TargetLimits(1, 1024, 1024, 1),
+        {},
+        None,
+    )
+
+    assert transport.browse(BrowserSessionRequest("/")).outcome is TargetOutcome.DENIED
+
+
+def test_hostile_target_client_exposes_typed_session_documents(tmp_path: Path, monkeypatch, capsys) -> None:
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(TcpSessionRequest(b"a\0b", TcpReceive.fixed(4)).document()))
+    sent = []
+
+    def request(document):
+        sent.append(document)
+        if document["command"] == "claim":
+            return {"status": "issued", "handle": "opaque"}
+        return {
+            "status": "answered",
+            "result": {"outcome": "answered", "body": base64.b64encode(b"held").decode()},
+        }
+
+    monkeypatch.setenv("INCYPHER_TARGET_GENERATION", "generation-000001")
+    monkeypatch.setattr(target_broker_worker_client, "request", request)
+
+    assert target_broker_worker_client.main(["tcp-session", str(request_path)]) == 0
+
+    assert json.loads(capsys.readouterr().out)["body"] == base64.b64encode(b"held").decode()
+    assert sent[1] == {
+        "command": "tcp-session",
+        "handle": "opaque",
+        "request": TcpSessionRequest(b"a\0b", TcpReceive.fixed(4)).document(),
+    }
+
+
+def test_hostile_target_client_exposes_only_bounded_http_fuzz_paths(tmp_path: Path, monkeypatch, capsys) -> None:
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(HttpFuzzRequest(("/missing", "/hidden")).document()))
+    sent = []
+
+    def request(document):
+        sent.append(document)
+        if document["command"] == "claim":
+            return {"status": "issued", "handle": "opaque"}
+        return {"status": "answered", "result": {"outcome": "answered", "body": ""}}
+
+    monkeypatch.setenv("INCYPHER_TARGET_GENERATION", "generation-000001")
+    monkeypatch.setattr(target_broker_worker_client, "request", request)
+
+    assert target_broker_worker_client.main(["http-fuzz", str(request_path)]) == 0
+
+    assert json.loads(capsys.readouterr().out)["outcome"] == "answered"
+    assert sent[1] == {
+        "command": "http-fuzz",
+        "handle": "opaque",
+        "request": {"paths": ["/missing", "/hidden"]},
+    }
+
+
+def test_browser_session_uses_fresh_generation_owned_target_context(tmp_path: Path) -> None:
+    made = []
+
+    class Browser:
+        def __init__(self, *_args):
+            self.closed = False
+            made.append(self)
+
+        def browse(self, request):
+            assert request == BrowserSessionRequest("/state", wait_selector="#held")
+            return BrowserTransportResult(
+                TargetOutcome.ANSWERED,
+                BrowserObservations(
+                    dom='<div id="held">browser-only</div>',
+                    network=(("GET", "/state", 200, 41),),
+                    local_storage=(("held", "browser-only"),),
+                ),
+                elapsed_ms=7,
+                response_bytes=41,
+                request_bytes=29,
+                connections=1,
+                certificate_sha256="a" * 64,
+            )
+
+        def close(self):
+            self.closed = True
+
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 9),
+        limits=TargetLimits(1, 1024, 1024, 1, max_exchanges=2),
+        timestamp=lambda: "now",
+        browser_factory=Browser,
+    )
+    with tempfile.TemporaryDirectory(prefix="target-broker-", dir="/tmp") as directory:
+        service = TargetBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        client = claim_client(
+            runtime,
+            service,
+            CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1"),
+        )
+        result = client.browser(BrowserSessionRequest("/state", wait_selector="#held"))
+        runtime.revoke_generation(generation.generation_id)
+        service.close()
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert result.browser.dom == '<div id="held">browser-only</div>'
+    assert result.browser.network == (("GET", "/state", 200, 41),)
+    assert result.browser.local_storage == (("held", "browser-only"),)
+    assert result.provenance.resolved_address == "127.0.0.1"
+    assert result.provenance.certificate_sha256 == "a" * 64
+    assert made[0].closed
 
 
 @pytest.mark.parametrize(
@@ -98,6 +677,11 @@ def test_lease_target_router_publishes_only_current_generation_authority(tmp_pat
             assert handle == "opaque-handle"
             return TargetResult(TargetOutcome.ANSWERED, b"answer")
 
+        http_session = exchange
+        http_fuzz = exchange
+        tcp_session = exchange
+        browser = exchange
+
         def revoke(self, handle):
             self.revoked.append(handle)
 
@@ -138,6 +722,10 @@ def test_lease_target_router_publishes_only_current_generation_authority(tmp_pat
         router.prepare_attempt(binding)
         handle = router.claim(left, grant.generation_id)
         assert router.exchange(left, handle, {"body": ""}).outcome is TargetOutcome.ANSWERED
+        assert router.http_session(left, handle, {}).outcome is TargetOutcome.ANSWERED
+        assert router.http_fuzz(left, handle, {}).outcome is TargetOutcome.ANSWERED
+        assert router.tcp_session(left, handle, {}).outcome is TargetOutcome.ANSWERED
+        assert router.browser(left, handle, {}).outcome is TargetOutcome.ANSWERED
         authority.current = False
         assert router.exchange(left, handle, {"body": ""}).outcome is TargetOutcome.REVOKED
     finally:
@@ -429,6 +1017,521 @@ def test_worker_completes_http_exchange_with_its_declared_target_through_broker(
     assert result.provenance.response_bytes > len(result.body)
 
 
+def test_http_session_retains_cookie_and_returns_bounded_selected_observations(tmp_path: Path) -> None:
+    observed = []
+
+    class SessionTarget(BaseHTTPRequestHandler):
+        def do_GET(self):
+            observed.append((self.command, self.path, dict(self.headers), b""))
+            if self.path == "/ready":
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(302)
+            self.send_header("Location", "/ready")
+            self.send_header("Set-Cookie", "challenge=admitted; Path=/; HttpOnly")
+            self.end_headers()
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            observed.append((self.command, self.path, dict(self.headers), body))
+            compressed = gzip.compress(b'{"held":"session-value"}')
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(compressed)))
+            self.send_header("X-Proof", "selected")
+            self.send_header("X-Private", "omitted")
+            self.end_headers()
+            self.wfile.write(compressed)
+
+        def log_message(self, *_args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), SessionTarget)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", target.server_port),
+        limits=TargetLimits(
+            max_connections=3,
+            max_request_bytes=1024,
+            max_response_bytes=1024,
+            timeout_seconds=1,
+            max_exchanges=3,
+            max_total_request_bytes=2048,
+            max_total_response_bytes=2048,
+            max_redirects=1,
+        ),
+        timestamp=lambda: "2026-09-12T00:00:00+00:00",
+    )
+    with tempfile.TemporaryDirectory(prefix="target-broker-", dir="/tmp") as directory:
+        service = TargetBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        try:
+            client = claim_client(
+                runtime,
+                service,
+                CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1"),
+            )
+            redirected = client.http_session(HttpSessionRequest("GET", "/start"))
+            answered = client.http_session(
+                HttpSessionRequest(
+                    "POST",
+                    "/graphql",
+                    query=(("operation", "Held Value"),),
+                    body=HttpBody.json(b'{"query":"{ held }"}'),
+                    headers=(("X-Challenge", "session"),),
+                    response_headers=("X-Proof",),
+                )
+            )
+            client.close()
+        finally:
+            service.close()
+            target.shutdown()
+            target_thread.join()
+
+    assert redirected.outcome is TargetOutcome.ANSWERED
+    assert redirected.redirect_chain == ("/start", "/ready")
+    assert redirected.cookies == (("challenge", "admitted"),)
+    assert answered.outcome is TargetOutcome.ANSWERED
+    assert answered.body == b'{"held":"session-value"}'
+    assert answered.headers == (("x-proof", "selected"),)
+    assert answered.redirect_chain == ("/graphql?operation=Held+Value",)
+    assert answered.cookies == (("challenge", "admitted"),)
+    assert answered.provenance.resolved_address == "127.0.0.1"
+    assert answered.provenance.response_bytes > len(answered.body)
+    assert observed[0][1] == "/start"
+    assert observed[1][1] == "/ready"
+    method, path, headers, body = observed[2]
+    assert method == "POST"
+    assert path == "/graphql?operation=Held+Value"
+    assert headers["Cookie"] == "challenge=admitted"
+    assert headers["Content-Type"] == "application/json"
+    assert headers["X-Challenge"] == "session"
+    assert body == b'{"query":"{ held }"}'
+
+
+def test_http_fuzz_runs_controller_side_and_records_each_target_request(tmp_path: Path) -> None:
+    class Target(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/hidden" else 404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    made = []
+
+    class Fuzz:
+        def __init__(self, paths, exchange, timeout_seconds):
+            self.paths = paths
+            self.exchange = exchange
+            self.timeout_seconds = timeout_seconds
+            self.closed = False
+            made.append(self)
+
+        def run(self):
+            results = {path: self.exchange(path) for path in self.paths}
+            return FfufResult(
+                TargetOutcome.ANSWERED,
+                tuple(path for path, result in results.items() if result.status != 404),
+            )
+
+        def close(self):
+            self.closed = True
+
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", target.server_port),
+        limits=TargetLimits(3, 1024, 1024, 1, max_exchanges=3),
+        timestamp=lambda: "now",
+        ffuf_factory=Fuzz,
+    )
+    left, right = socket.socketpair()
+    try:
+        binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        runtime.prepare_attempt(binding)
+        handle = runtime.claim(left, generation.generation_id)
+        result = runtime.http_fuzz(left, handle, HttpFuzzRequest(("/missing", "/hidden")).document())
+        denied = runtime.http_fuzz(left, handle, {"paths": ["https://off-origin.invalid/"]})
+    finally:
+        left.close()
+        right.close()
+        target.shutdown()
+        target_thread.join()
+
+    assert result.outcome is TargetOutcome.ANSWERED
+    assert json.loads(result.body) == {"found": ["/hidden"]}
+    assert denied.outcome is TargetOutcome.DENIED
+    assert made[0].timeout_seconds == 2
+    assert made[0].closed
+    classified = [
+        event.payload["operation"]
+        for event in EventStore(state, run_id="run-1").events()
+        if event.event_type == TARGET_EXCHANGE_RECORDED and event.payload["record"] == "classified"
+    ]
+    assert classified == ["http-session", "http-session", "http-fuzz", "http-fuzz"]
+
+
+def test_http_session_rejects_a_truncated_compressed_response() -> None:
+    compressed = gzip.compress(b"held")[:-4]
+
+    class CompressedTarget(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(compressed)))
+            self.end_headers()
+            self.wfile.write(compressed)
+
+        def log_message(self, *_args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), CompressedTarget)
+    thread = threading.Thread(target=target.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = http_session_exchange(
+            TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", target.server_port),
+            "127.0.0.1",
+            TargetLimits(1, 1024, 1024, 1),
+            HttpTransportRequest("GET", "/", b"", ()),
+        )
+    finally:
+        target.shutdown()
+        thread.join()
+
+    assert result.outcome is TargetOutcome.TOO_LARGE
+    assert result.body == b""
+
+
+def test_http_session_close_race_does_not_use_a_socket_after_connect(monkeypatch) -> None:
+    client, peer = socket.socketpair()
+    peer.settimeout(1)
+
+    class TrackedSocket:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+            self.sent = []
+            self.closed = False
+
+        def sendall(self, data):
+            self.sent.append(data)
+            self.wrapped.sendall(data)
+
+        def makefile(self, *args, **kwargs):
+            return self.wrapped.makefile(*args, **kwargs)
+
+        def shutdown(self, how):
+            return self.wrapped.shutdown(how)
+
+        def close(self):
+            self.closed = True
+            self.wrapped.close()
+
+    opened = TrackedSocket(client)
+
+    class RevocationEvent(threading.Event):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+            self.revoke = None
+
+        def is_set(self):
+            self.calls += 1
+            if self.calls == 3:
+                assert self.revoke is not None
+                self.revoke()
+                return False
+            return super().is_set()
+
+    session = HttpSessionTransport(
+        TargetEndpoint(TargetProtocol.HTTP, "target.test", 80),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+    )
+    cancelled = RevocationEvent()
+    cancelled.revoke = session.close
+    session._cancelled = cancelled
+
+    def create_connection(*_args, **_kwargs):
+        return opened
+
+    monkeypatch.setattr("solver.target_broker_transport.socket.create_connection", create_connection)
+    result = session.exchange(HttpTransportRequest("GET", "/", b"", ()), max_response_bytes=1024)
+    peer.close()
+
+    assert result.outcome is TargetOutcome.REVOKED
+    assert opened.sent == []
+    assert opened.closed
+
+
+def test_http_session_generation_revocation_interrupts_an_active_request(tmp_path: Path) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowTarget(BaseHTTPRequestHandler):
+        def do_GET(self):
+            entered.set()
+            release.wait(3)
+            try:
+                self.send_response(200)
+                self.end_headers()
+            except OSError:
+                pass
+
+        def log_message(self, *_args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), SlowTarget)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", target.server_port),
+        limits=TargetLimits(1, 256, 256, 10, max_exchanges=2),
+        timestamp=lambda: "now",
+    )
+    with tempfile.TemporaryDirectory(prefix="target-broker-", dir="/tmp") as directory:
+        service = TargetBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        client = claim_client(
+            runtime,
+            service,
+            CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1"),
+        )
+        held = []
+        request_thread = threading.Thread(
+            target=lambda: held.append(client.http_session(HttpSessionRequest("GET", "/")))
+        )
+        request_thread.start()
+        assert entered.wait(1)
+        runtime.revoke_generation(generation.generation_id)
+        request_thread.join(1)
+        interrupted = not request_thread.is_alive()
+        release.set()
+        service.close()
+    target.shutdown()
+    target_thread.join()
+
+    assert interrupted
+    assert held[0].outcome is TargetOutcome.REVOKED
+    classified = next(
+        event
+        for event in EventStore(state, run_id="run-1").events()
+        if event.event_type == TARGET_EXCHANGE_RECORDED and event.payload["record"] == "classified"
+    )
+    assert hashlib.sha256(classified.body).hexdigest() == classified.payload["transcript_digest"]
+
+
+def test_http_session_revocation_after_transport_seals_the_scrubbed_result(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        limits=TargetLimits(1, 256, 256, 1),
+        timestamp=lambda: "now",
+    )
+    left, right = socket.socketpair()
+    try:
+        runtime.prepare_attempt(
+            CapabilityBinding(
+                "run-1",
+                "boot-1",
+                generation.generation_id,
+                "lane-1",
+                "attempt-1",
+                "step-1",
+            )
+        )
+        handle = runtime.claim(left, generation.generation_id)
+
+        class RevokingTransport:
+            def exchange(self, *_args, **_kwargs):
+                runtime.revoke_generation(generation.generation_id)
+                return HttpTransportResult(
+                    TargetOutcome.ANSWERED,
+                    b"must-not-escape",
+                    200,
+                    request_bytes=64,
+                    response_bytes=80,
+                )
+
+            def close(self):
+                pass
+
+        runtime._http_sessions[handle] = RevokingTransport()
+        result = runtime.http_session(left, handle, HttpSessionRequest("GET", "/").document())
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is TargetOutcome.REVOKED
+    assert result.body == b""
+    classified = next(
+        event
+        for event in EventStore(state, run_id="run-1").events()
+        if event.event_type == TARGET_EXCHANGE_RECORDED and event.payload["record"] == "classified"
+    )
+    assert hashlib.sha256(classified.body).hexdigest() == classified.payload["transcript_digest"]
+
+
+def test_http_session_refuses_cumulative_request_budget_before_transport(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        limits=TargetLimits(
+            2,
+            256,
+            256,
+            1,
+            max_exchanges=2,
+            max_total_request_bytes=16,
+            max_total_seconds=1,
+        ),
+        timestamp=lambda: "now",
+    )
+    calls: list[HttpTransportRequest] = []
+
+    class Transport:
+        def exchange(self, request, **_kwargs):
+            calls.append(request)
+            return HttpTransportResult(TargetOutcome.ANSWERED, b"late", 200, request_bytes=128)
+
+        def close(self):
+            pass
+
+    left, right = socket.socketpair()
+    try:
+        runtime.prepare_attempt(
+            CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        )
+        handle = runtime.claim(left, generation.generation_id)
+        runtime._http_sessions[handle] = Transport()
+        result = runtime.http_session(left, handle, HttpSessionRequest("GET", "/").document())
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is TargetOutcome.BUDGET_EXHAUSTED
+    assert calls == []
+
+
+def test_http_session_refuses_cumulative_time_budget_before_transport(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        limits=TargetLimits(2, 256, 256, 1, max_exchanges=2, max_total_seconds=1),
+        timestamp=lambda: "now",
+    )
+    calls: list[HttpTransportRequest] = []
+
+    class Transport:
+        def exchange(self, request, **_kwargs):
+            calls.append(request)
+            return HttpTransportResult(TargetOutcome.ANSWERED, b"late", 200, elapsed_ms=1)
+
+        def close(self):
+            pass
+
+    left, right = socket.socketpair()
+    try:
+        runtime.prepare_attempt(
+            CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        )
+        handle = runtime.claim(left, generation.generation_id)
+        runtime._http_sessions[handle] = Transport()
+        runtime._session_elapsed_ms[generation.generation_id] = 1_000
+        result = runtime.http_session(left, handle, HttpSessionRequest("GET", "/").document())
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is TargetOutcome.BUDGET_EXHAUSTED
+    assert calls == []
+
+
+def test_http_session_caps_transport_timeout_to_remaining_cumulative_time(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 8080),
+        limits=TargetLimits(2, 256, 256, 1, max_exchanges=2, max_total_seconds=1),
+        timestamp=lambda: "now",
+    )
+    observed: list[float] = []
+
+    class Transport:
+        def exchange(self, _request, *, timeout_seconds, **_kwargs):
+            observed.append(timeout_seconds)
+            return HttpTransportResult(TargetOutcome.TIMEOUT, elapsed_ms=100)
+
+        def close(self):
+            pass
+
+    left, right = socket.socketpair()
+    try:
+        runtime.prepare_attempt(
+            CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        )
+        handle = runtime.claim(left, generation.generation_id)
+        runtime._http_sessions[handle] = Transport()
+        runtime._session_elapsed_ms[generation.generation_id] = 900
+        result = runtime.http_session(left, handle, HttpSessionRequest("GET", "/").document())
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is TargetOutcome.TIMEOUT
+    assert observed == [pytest.approx(0.1)]
+
+
 def test_http_response_headers_are_capped_below_library_defaults(tmp_path: Path) -> None:
     class HeaderTarget(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -521,6 +1624,256 @@ def test_tcp_exchange_is_bounded_and_old_generation_is_revoked_before_replacemen
     assert answered.provenance.transcript_digest
     assert refused.outcome is TargetOutcome.CAPABILITY_REFUSED
     assert calls == [b"ping"]
+
+
+def test_tcp_session_close_race_does_not_use_a_socket_after_connect(monkeypatch) -> None:
+    class TrackedSocket:
+        def __init__(self):
+            self.sent = []
+            self.closed = False
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+        def recv(self, _size):
+            return b"answer"
+
+        def shutdown(self, _how):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    opened = TrackedSocket()
+    session = TcpSessionTransport(
+        TargetEndpoint(TargetProtocol.TCP, "target.test", 80),
+        "192.0.2.10",
+        TargetLimits(1, 1024, 1024, 1),
+    )
+
+    def create_connection(*_args, **_kwargs):
+        session.close()
+        return opened
+
+    monkeypatch.setattr("solver.target_broker_transport.socket.create_connection", create_connection)
+    result = session.exchange(TcpSessionRequest(b"request", TcpReceive.raw(1024)))
+
+    assert result.outcome is TargetOutcome.REVOKED
+    assert opened.sent == []
+    assert opened.closed
+
+
+def test_tcp_session_keeps_one_binary_connection_and_supports_framing_and_half_close(tmp_path: Path) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    observed = []
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            first = connection.recv(32)
+            observed.append(first)
+            connection.sendall(b"first\0\n")
+            second = connection.recv(32)
+            observed.append(second)
+            connection.sendall(len(b"second").to_bytes(4, "big") + b"second")
+            third = connection.recv(32)
+            observed.append(third)
+            observed.append(connection.recv(1))
+            connection.sendall(b"bye")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.TCP, "127.0.0.1", listener.getsockname()[1]),
+        limits=TargetLimits(
+            max_connections=1,
+            max_request_bytes=32,
+            max_response_bytes=32,
+            timeout_seconds=1,
+            max_exchanges=3,
+            max_total_request_bytes=32,
+            max_total_response_bytes=32,
+        ),
+        timestamp=lambda: "2026-09-12T00:00:00+00:00",
+    )
+    with tempfile.TemporaryDirectory(prefix="target-broker-", dir="/tmp") as directory:
+        service = TargetBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        try:
+            client = claim_client(
+                runtime,
+                service,
+                CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1"),
+            )
+            first = client.tcp_session(TcpSessionRequest(b"hello\0", TcpReceive.line(16)))
+            second = client.tcp_session(TcpSessionRequest(b"again", TcpReceive.length_prefixed(4, 16)))
+            third = client.tcp_session(TcpSessionRequest(b"done", TcpReceive.raw(16), half_close=True))
+            client.close()
+        finally:
+            service.close()
+            listener.close()
+            thread.join(1)
+
+    assert first.outcome is TargetOutcome.ANSWERED
+    assert first.body == b"first\0\n"
+    assert second.outcome is TargetOutcome.ANSWERED
+    assert second.body == b"second"
+    assert third.outcome is TargetOutcome.ANSWERED
+    assert third.body == b"bye"
+    assert observed == [b"hello\0", b"again", b"done", b""]
+    assert sum(result.provenance.request_bytes for result in (first, second, third)) == 15
+    assert sum(result.provenance.response_bytes for result in (first, second, third)) == 20
+
+
+def test_tcp_session_reports_partial_fixed_frame_on_ambiguous_close(tmp_path: Path) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            assert connection.recv(16) == b"frame"
+            connection.sendall(b"part")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.TCP, "127.0.0.1", listener.getsockname()[1]),
+        limits=TargetLimits(1, 16, 16, 1, max_exchanges=2),
+        timestamp=lambda: "now",
+    )
+    with tempfile.TemporaryDirectory(prefix="target-broker-", dir="/tmp") as directory:
+        service = TargetBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        try:
+            client = claim_client(
+                runtime,
+                service,
+                CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1"),
+            )
+            result = client.tcp_session(TcpSessionRequest(b"frame", TcpReceive.fixed(8)))
+            client.close()
+        finally:
+            service.close()
+            listener.close()
+            thread.join(1)
+
+    assert result.outcome is TargetOutcome.AMBIGUOUS_CLOSE
+    assert result.body == b"part"
+    assert result.provenance.response_bytes == 4
+
+
+def test_tcp_session_timeout_retains_partial_delimited_response(tmp_path: Path) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            assert connection.recv(16) == b"wait"
+            connection.sendall(b"partial")
+            time.sleep(0.3)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.TCP, "127.0.0.1", listener.getsockname()[1]),
+        limits=TargetLimits(1, 16, 16, 0.1, max_exchanges=2),
+        timestamp=lambda: "now",
+    )
+    with tempfile.TemporaryDirectory(prefix="target-broker-", dir="/tmp") as directory:
+        service = TargetBrokerService(Path(directory) / "broker.sock", runtime)
+        service.start()
+        try:
+            client = claim_client(
+                runtime,
+                service,
+                CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1"),
+            )
+            result = client.tcp_session(TcpSessionRequest(b"wait", TcpReceive.delimiter_terminated(b"END", 16)))
+            client.close()
+        finally:
+            service.close()
+            listener.close()
+            thread.join(1)
+
+    assert result.outcome is TargetOutcome.TIMEOUT
+    assert result.body == b"partial"
+    assert result.provenance.response_bytes == 7
+
+
+def test_tcp_session_generation_revocation_interrupts_an_active_receive(tmp_path: Path) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    entered = threading.Event()
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            connection.recv(16)
+            entered.set()
+            time.sleep(2)
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.TCP, "127.0.0.1", listener.getsockname()[1]),
+        limits=TargetLimits(1, 64, 64, 10, max_exchanges=2),
+        timestamp=lambda: "now",
+    )
+    left, right = socket.socketpair()
+    binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+    runtime.prepare_attempt(binding)
+    handle = runtime.claim(left, generation.generation_id)
+    held = []
+    request_thread = threading.Thread(
+        target=lambda: held.append(
+            runtime.tcp_session(left, handle, TcpSessionRequest(b"held", TcpReceive.fixed(8)).document())
+        )
+    )
+    request_thread.start()
+    assert entered.wait(1)
+    runtime.revoke_generation(generation.generation_id)
+    request_thread.join(1)
+    listener.close()
+    left.close()
+    right.close()
+
+    assert not request_thread.is_alive()
+    assert held[0].outcome is TargetOutcome.REVOKED
 
 
 def test_undeclared_destinations_are_denied_and_receipt_is_independently_verifiable(tmp_path: Path) -> None:

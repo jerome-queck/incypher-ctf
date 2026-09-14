@@ -9,10 +9,18 @@ from pathlib import Path
 
 import pytest
 
-from solver.attempt_executor_contracts import AttemptRequest, EnvelopeSpec, NetworkPolicy, ResourceOutcome
+from solver.attempt_executor_contracts import (
+    AttemptRequest,
+    EnvelopeSpec,
+    NetworkPolicy,
+    ResourceOutcome,
+    RuntimeBinding,
+)
 from solver.attempt_executor_pool import AttemptPool, AttemptSlot, _fixed_worker_command
-from solver.attempt_executor_runtime import AttemptRuntime, _first_cause
+from solver.attempt_executor_runtime import AttemptRuntime, RuntimeUnavailable, _first_cause, _workspace_usage
 from solver.attempt_executor_worker import _network_breach
+from solver.isolation import STRICT_PROFILE_DIGEST
+from solver.target_broker_contracts import TargetCandidateBinding
 
 
 class FakeCgroup:
@@ -65,7 +73,7 @@ class UnreadableCgroup(FakeCgroup):
         self.kills += 1
 
 
-def _request(tmp_path: Path) -> AttemptRequest:
+def _request(tmp_path: Path, *, network_class: str = "deny") -> AttemptRequest:
     work = tmp_path / "work"
     work.mkdir()
     (work / "input.txt").write_text("ok")
@@ -75,7 +83,7 @@ def _request(tmp_path: Path) -> AttemptRequest:
         "s",
         ("cat", "/work/input.txt"),
         work,
-        EnvelopeSpec(1, 20_000, 1024, 4, 1024, NetworkPolicy.DENY, 1, 0.1),
+        EnvelopeSpec(1, 20_000, 1024, 4, 1024, NetworkPolicy.DENY, 1, 0.1, network_class),
     )
 
 
@@ -95,6 +103,15 @@ def _initial_counters(cgroup: Path) -> None:
     (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n")
     (cgroup / "pids.events").write_text("max 0\n")
     (cgroup / "cgroup.procs").write_text("")
+
+
+def test_workspace_usage_ignores_an_entry_removed_after_listing(tmp_path: Path, monkeypatch) -> None:
+    vanished = tmp_path / "temporary-output"
+    vanished.write_bytes(b"held")
+    vanished.unlink()
+    monkeypatch.setattr(Path, "rglob", lambda _path, _pattern: iter((vanished,)))
+
+    assert _workspace_usage(tmp_path) == (0, False)
 
 
 def test_prepare_records_real_limits_then_kernel_gate_precedes_exec(tmp_path: Path) -> None:
@@ -131,6 +148,52 @@ def test_prepare_records_real_limits_then_kernel_gate_precedes_exec(tmp_path: Pa
     worker.close()
 
 
+def test_success_closes_research_socket_before_workspace_sync(tmp_path: Path, monkeypatch) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, cgroup = _runtime(tmp_path, parent)
+    incoming = type("I", (), {"request": _request(tmp_path)})()
+    runtime.prepare("envelope-1", incoming)
+    _initial_counters(cgroup)
+    slot_work = runtime.pool.slots[0].work_path
+    broker_path = slot_work / ".research.sock"
+    broker_path.write_bytes(b"")
+
+    class Service:
+        path = broker_path
+
+        def close(self) -> None:
+            broker_path.unlink(missing_ok=True)
+
+    runtime._research_services["envelope-1"] = Service()  # type: ignore[assignment]
+    runtime._broker_socket_inodes[slot_work] = {broker_path.stat().st_ino}
+    sync_saw_closed_service: list[bool] = []
+
+    def sync(_request, _slot) -> bool:
+        sync_saw_closed_service.append("envelope-1" not in runtime._research_services)
+        return True
+
+    monkeypatch.setattr(runtime, "_sync_result_workspace", sync)
+
+    def reply() -> None:
+        worker.recv(1_000_000)
+        worker.recv(1_000_000)
+        worker.send(json.dumps({"type": "result", "exit_code": 0, "output": ""}).encode())
+        worker.recv(1_000_000)
+        worker.send(json.dumps({"type": "term-sent", "pids": [4321]}).encode())
+
+    thread = threading.Thread(target=reply)
+    thread.start()
+    result = runtime.launch("envelope-1", incoming)
+    thread.join()
+
+    assert result.outcome is ResourceOutcome.EXITED
+    assert result.cleanup_complete is True
+    assert sync_saw_closed_service == [True]
+    assert not broker_path.exists()
+    parent.close()
+    worker.close()
+
+
 def test_runtime_does_not_expose_a_target_socket_without_published_generation_authority(tmp_path: Path) -> None:
     parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     runtime, _cgroup = _runtime(tmp_path, parent)
@@ -147,6 +210,174 @@ def test_runtime_does_not_expose_a_target_socket_without_published_generation_au
 
     assert runtime._target_services == {}
     runtime.cancel("envelope-1")
+    parent.close()
+    worker.close()
+
+
+@pytest.mark.parametrize(
+    ("network_class", "target_expected", "research_expected"),
+    (("deny", False, False), ("target-broker", True, False), ("research-broker", False, True)),
+)
+def test_runtime_exposes_only_the_declared_broker_authority(
+    tmp_path: Path, network_class: str, target_expected: bool, research_expected: bool
+) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, _cgroup = _runtime(tmp_path, parent)
+    image_id = "sha256:" + "a" * 64
+    candidate = TargetCandidateBinding(
+        image_id,
+        "sha256:" + "b" * 64,
+        "sha256:" + "c" * 64,
+        "linux/arm64",
+        STRICT_PROFILE_DIGEST,
+    )
+
+    class Broker:
+        boot_id = "boot-1"
+
+        def __init__(self):
+            self.candidate = candidate
+            self.prepared: list[str] = []
+
+        def available(self, _generation_id):
+            return True
+
+        def prepare_attempt(self, binding):
+            self.prepared.append(binding.generation_id)
+
+        def revoke_generation(self, _generation_id):
+            return None
+
+    class Research:
+        boot_id = "boot-1"
+
+        def __init__(self):
+            self.prepared: list[str] = []
+
+        def prepare_attempt(self, binding):
+            self.prepared.append(binding.generation_id)
+
+        def revoke_generation(self, _generation_id):
+            return None
+
+    class Service:
+        def __init__(self, path: Path, calls: list[Path]):
+            self.path = path
+            self.calls = calls
+
+        def start(self):
+            self.calls.append(self.path)
+            self.path.write_bytes(b"")
+
+        def close(self):
+            self.path.unlink(missing_ok=True)
+
+    target = Broker()
+    research = Research()
+    target_calls: list[Path] = []
+    research_calls: list[Path] = []
+    runtime.target_broker = target
+    runtime.research_broker = research
+    runtime._target_service_factory = lambda path, _broker: Service(path, target_calls)
+    runtime._research_service_factory = lambda path, _broker: Service(path, research_calls)
+    incoming = type(
+        "I",
+        (),
+        {
+            "run_id": "run-1",
+            "request": _request(tmp_path, network_class=network_class),
+            "binding": RuntimeBinding(image_id, candidate.manifest_digest, candidate.config_digest, candidate.platform),
+        },
+    )()
+
+    runtime.prepare("envelope-1", incoming)
+    assert bool(target_calls) is target_expected
+    assert bool(research_calls) is research_expected
+    assert bool(target.prepared) is target_expected
+    assert bool(research.prepared) is research_expected
+    runtime._close_target("envelope-1")
+    runtime._close_research("envelope-1")
+    runtime.pool.release(runtime.pool.slots[0])
+    parent.close()
+    worker.close()
+
+
+def test_research_setup_failure_revokes_partially_prepared_target_authority(tmp_path: Path) -> None:
+    parent, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    runtime, _cgroup = _runtime(tmp_path, parent)
+    image_id = "sha256:" + "a" * 64
+    candidate = TargetCandidateBinding(
+        image_id,
+        "sha256:" + "b" * 64,
+        "sha256:" + "c" * 64,
+        "linux/arm64",
+        STRICT_PROFILE_DIGEST,
+    )
+
+    class Target:
+        boot_id = "boot-1"
+        revoked = []
+
+        def __init__(self):
+            self.candidate = candidate
+
+        def available(self, _generation_id):
+            return True
+
+        def prepare_attempt(self, _binding):
+            pass
+
+        def revoke_generation(self, generation_id):
+            self.revoked.append(generation_id)
+
+    class Research:
+        boot_id = "boot-1"
+
+        def prepare_attempt(self, _binding):
+            pass
+
+        def revoke_generation(self, _generation_id):
+            pass
+
+    class Service:
+        def __init__(self, path: Path, *, fail: bool):
+            self.path = path
+            self.fail = fail
+
+        def start(self):
+            if self.fail:
+                raise OSError("research unavailable")
+            self.path.write_bytes(b"")
+
+        def close(self):
+            self.path.unlink(missing_ok=True)
+
+    target = Target()
+    runtime.target_broker = target
+    runtime.research_broker = Research()
+    runtime._target_service_factory = lambda path, _broker: Service(path, fail=False)
+    runtime._research_service_factory = lambda path, _broker: Service(path, fail=True)
+    request = _request(tmp_path, network_class="research-broker")
+    incoming = type(
+        "I",
+        (),
+        {
+            "run_id": "run-1",
+            "request": request,
+            "binding": RuntimeBinding(
+                image_id,
+                candidate.manifest_digest,
+                candidate.config_digest,
+                candidate.platform,
+            ),
+        },
+    )()
+
+    with pytest.raises(RuntimeUnavailable, match="Research broker preparation failed"):
+        runtime.prepare("envelope-1", incoming)
+
+    assert target.revoked == []
+    assert runtime.pool.slots[0].busy is False
     parent.close()
     worker.close()
 
@@ -220,6 +451,12 @@ def test_only_the_fixed_target_unix_port_is_exempt_from_raw_egress_detection() -
         '1 sendto(3, "request", 7, 0, {sa_family=AF_INET, sin_port=htons(443)}, 16) = 7',
         "/work/.target.sock",
     )
+
+
+def test_incomplete_live_trace_line_is_not_network_evidence() -> None:
+    partial = '1 sendto(3, "request", 7, 0, NULL, 0'
+
+    assert not _network_breach(partial, "/work/.target.sock")
 
 
 def test_result_terms_the_adopted_tree_then_kills_and_reaps_the_survivor(tmp_path: Path) -> None:
@@ -372,6 +609,12 @@ def test_fixed_worker_has_private_namespaces_uid_root_and_no_control_path(tmp_pa
     assert "--bounding-set=-all" in command
     assert "/state" not in command
     assert ["--ro-bind", "/opt/solver", "/opt/solver"] not in [
+        command[index : index + 3] for index in range(len(command) - 2)
+    ]
+    assert ["--ro-bind", "/opt/solver/tool-supply", "/opt/solver/tool-supply"] in [
+        command[index : index + 3] for index in range(len(command) - 2)
+    ]
+    assert ["--ro-bind", "/etc/alternatives", "/etc/alternatives"] in [
         command[index : index + 3] for index in range(len(command) - 2)
     ]
 

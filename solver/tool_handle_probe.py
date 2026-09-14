@@ -22,8 +22,18 @@ from solver.capability import CapabilityBinding
 from solver.isolation import IMAGE_ID, IsolationReceipt, strict_preflight
 from solver.isolation_receipt import write_receipt as write_isolation_receipt
 from solver.redaction import Redactor
+from solver.resident_handle_receipt import qualification_target_limits
 from solver.target_broker import TargetBrokerRuntime
-from solver.target_broker_contracts import TargetCandidateBinding, TargetEndpoint, TargetLimits, TargetProtocol
+from solver.target_broker_browser import close_browser_launcher, prepare_browser_launcher
+from solver.target_broker_contracts import TargetCandidateBinding, TargetEndpoint, TargetProtocol
+from solver.research_broker import ResearchBrokerRuntime
+from solver.research_broker_contracts import (
+    ResearchKind,
+    ResearchLimits,
+    ResearchOutcome,
+    ResearchSource,
+    ResearchTransportResult,
+)
 from solver.tool_control import AttemptToolRuntime, ToolController, ToolInvocation, profile_components
 from solver.tool_control_receipt import verify_receipt, write_receipt
 from solver.work_generation import GenerationDisposition, GenerationFence
@@ -66,20 +76,50 @@ def _copy_input(source: Path, workspace: Path, capability_id: str) -> tuple[Path
 def _target(protocol: TargetProtocol) -> tuple[socket.socket, threading.Thread]:
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
+    listener.listen(8)
 
     def serve() -> None:
-        connection, _address = listener.accept()
-        with connection:
-            request = connection.recv(4096)
-            if protocol is TargetProtocol.HTTP and request.startswith(b"GET /resident-fixture "):
-                connection.sendall(b"HTTP/1.0 200 OK\r\nContent-Length: 25\r\n\r\nresident fixture payload\n")
-            elif protocol is TargetProtocol.TCP and request == b"ping":
-                connection.sendall(b"pong")
+        while True:
+            try:
+                connection, _address = listener.accept()
+            except OSError:
+                return
+            with connection:
+                request = connection.recv(4096)
+                if protocol is TargetProtocol.HTTP:
+                    path = request.split(b" ", 2)[1] if request.startswith((b"GET ", b"POST ")) else b""
+                    if path in {b"/resident-fixture", b"/hidden-route"}:
+                        body, status = b"resident fixture payload\n", b"200 OK"
+                    elif path == b"/browser-fixture":
+                        body = (
+                            b"<!doctype html><html><body><script>localStorage.setItem('browser-state','held')"
+                            b"</script><div id=held>browser-state=held</div></body></html>"
+                        )
+                        status = b"200 OK"
+                    else:
+                        body, status = b"missing\n", b"404 Not Found"
+                    connection.sendall(
+                        b"HTTP/1.1 "
+                        + status
+                        + b"\r\nContent-Type: text/html\r\nContent-Length: "
+                        + str(len(body)).encode()
+                        + b"\r\nConnection: close\r\n\r\n"
+                        + body
+                    )
+                elif protocol is TargetProtocol.TCP and request:
+                    connection.sendall(b"pong" if request == b"ping" else request)
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     return listener, thread
+
+
+def _fixture_protocol(capability_id: str) -> TargetProtocol:
+    return (
+        TargetProtocol.HTTP
+        if capability_id.startswith("web.") or capability_id == "network.http"
+        else TargetProtocol.TCP
+    )
 
 
 class _QualificationTargets:
@@ -110,6 +150,18 @@ class _QualificationTargets:
 
     def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
         return self._handle_brokers[handle].exchange(connection, handle, request)
+
+    def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
+        return self._handle_brokers[handle].http_session(connection, handle, request)
+
+    def http_fuzz(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
+        return self._handle_brokers[handle].http_fuzz(connection, handle, request)
+
+    def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
+        return self._handle_brokers[handle].tcp_session(connection, handle, request)
+
+    def browser(self, connection: socket.socket, handle: str, request: Mapping[str, object]):
+        return self._handle_brokers[handle].browser(connection, handle, request)
 
     def revoke(self, handle: str) -> None:
         broker = self._handle_brokers.pop(handle, None)
@@ -143,11 +195,17 @@ def qualify(
     binding = _binding(environ)
     catalogue = json.loads(inventory_path.read_text())
     component = _component(catalogue, component_id)
+    capability_ids = tuple(str(item) for item in component["capability_ids"])  # type: ignore[index]
     pool: AttemptPool | None = None
+    browser_prepared = False
+    browser_launcher = None
 
     def prepare() -> None:
-        nonlocal pool
+        nonlocal browser_launcher, browser_prepared, pool
         pool = prepare_attempt_pool(slots=1)
+        if "web.browser" in capability_ids:
+            browser_launcher = prepare_browser_launcher()
+            browser_prepared = True
 
     try:
         admitted = preflight(environ, prepare_attempt_runtime=prepare if runtime is None else None)
@@ -166,7 +224,6 @@ def qualify(
             peer_identity=lambda _connection: peer,
             timestamp=timestamp,
         )
-        capability_ids = tuple(str(item) for item in component["capability_ids"])  # type: ignore[index]
         profile_id = str(component["profiles"][0])  # type: ignore[index]
         available = {
             item.capability_id: item for item in profile_components(inventory_path, profile_id, require_complete=False)
@@ -194,11 +251,12 @@ def qualify(
         listeners: list[socket.socket] = []
         target_threads: list[threading.Thread] = []
         brokers: dict[str, TargetBrokerRuntime] = {}
+        research_broker = None
         if runtime is None:
             for capability_id in capability_ids:
                 if policies[capability_id]["network"] != "target-broker":
                     continue
-                protocol = TargetProtocol.HTTP if capability_id == "network.http" else TargetProtocol.TCP
+                protocol = _fixture_protocol(capability_id)
                 listener, target_thread = _target(protocol)
                 listeners.append(listener)
                 target_threads.append(target_thread)
@@ -215,14 +273,82 @@ def qualify(
                         admitted.profile_digest,
                     ),
                     endpoint=TargetEndpoint(protocol, "127.0.0.1", listener.getsockname()[1]),
-                    limits=TargetLimits(1, 4096, 4096, 2),
+                    limits=qualification_target_limits(capability_id),
                     timestamp=timestamp,
                     request_namespace=capability_id,
+                    browser_launcher=browser_launcher,
+                )
+            if any(policies[capability_id]["network"] == "research-broker" for capability_id in capability_ids):
+
+                def research_fixture(url, *_args):
+                    bodies = {
+                        "github.fixture": b'{"login":"fixture-user"}',
+                        "gravatar.fixture": b'{"entry":[{"displayName":"Fixture User","profileUrl":"https://example.test/u"}]}',
+                        "crtsh.fixture": b'[{"name_value":"*.fixture.example"},{"name_value":"api.fixture.example"}]',
+                        "geo.fixture": b'[{"lat":"1.3521","lon":"103.8198"}]',
+                    }
+                    body = next((body for marker, body in bodies.items() if marker in url), None)
+                    if body is None:
+                        return ResearchTransportResult(outcome=ResearchOutcome.DENIED)
+                    return ResearchTransportResult(
+                        status=200,
+                        headers={"content-type": "application/json"},
+                        body=body,
+                        elapsed_ms=1,
+                    )
+
+                research_broker = ResearchBrokerRuntime(
+                    state=state,
+                    run_id=RUN_ID,
+                    boot_id="boot-qualification",
+                    limits=ResearchLimits(1024 * 1024, 10, 2, 0, max_requests=16),
+                    timestamp=timestamp,
+                    resolve=lambda _host: ("8.8.8.8",),
+                    dns_resolve=lambda _host: ("8.8.8.8",),
+                    transport=research_fixture,
+                    sources={
+                        "github": ResearchSource(
+                            ResearchKind.IDENTITY,
+                            "https://github.fixture/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
+                        ),
+                        "gravatar": ResearchSource(
+                            ResearchKind.EMAIL,
+                            "https://gravatar.fixture/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
+                        ),
+                        "crtsh": ResearchSource(
+                            ResearchKind.DOMAIN,
+                            "https://crtsh.fixture/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
+                        ),
+                        "nominatim": ResearchSource(
+                            ResearchKind.GEO,
+                            "https://geo.fixture/{subject}",
+                            "fixture",
+                            "fixture",
+                            terms_decision="allow",
+                            robots_decision="not-applicable",
+                        ),
+                    },
                 )
         selected_runtime = (
             runtime
             if runtime is not None
-            else AttemptRuntime(pool, target_broker=_QualificationTargets(brokers) if brokers else None)
+            else AttemptRuntime(
+                pool,
+                target_broker=_QualificationTargets(brokers) if brokers else None,
+                research_broker=research_broker,
+            )
         )
         executor = AttemptExecutor(
             state=state,
@@ -235,6 +361,8 @@ def qualify(
         )
         if brokers:
             executor.add_generation_revocation(selected_runtime.target_broker.revoke_generation)  # type: ignore[union-attr]
+        if research_broker is not None:
+            executor.add_generation_revocation(research_broker.revoke_generation)
         try:
             for capability_id in capability_ids:
                 policy = policies[capability_id]
@@ -288,6 +416,8 @@ def qualify(
                 target_thread.join(1)
         return verify_receipt(write_receipt(state, RUN_ID))
     finally:
+        if browser_prepared:
+            close_browser_launcher()
         close_attempt_pool(pool)
 
 

@@ -1,0 +1,7 @@
+--require-hashes
+qiling==1.4.6 \
+    --hash=sha256:9ecb74b86addfce904034cad2de41a06c022b86ef2979b5569a332d0c59f9287
+python-fx==0.4.0 \
+    --hash=sha256:31d8c22ea12ba5a15435be046089fcd3ed0ef994a0fb2b8f970fe466a4b6883f
+python-registry==1.3.1 \
+    --hash=sha256:b5b8ae07c271dce12dacd24e16af8aa8d56167ebdb360112a4f152b6d04a4ca9

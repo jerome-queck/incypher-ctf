@@ -1,0 +1,3 @@
+--require-hashes
+holehe==1.61 \
+    --hash=sha256:1a02e7c103b9abcb485eb0aaca36d950ac6bff4ec001d644362cc46739916b3b

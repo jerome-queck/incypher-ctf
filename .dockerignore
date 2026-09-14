@@ -18,6 +18,7 @@ tool-supply/generated/*
 !tool-supply/generated/apt-packages.txt
 !tool-supply/generated/inventory.json
 !tool-supply/generated/receipt.json
+!tool-supply/generated/capabilities.json
 
 # Git retains only the executable class of committed modes. This build-only helper restores the
 # exact modes from the validated generated inventory after its rootfs crosses that boundary.

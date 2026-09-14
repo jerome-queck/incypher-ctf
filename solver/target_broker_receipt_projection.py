@@ -31,6 +31,13 @@ _REQUEST_IDENTITY = (
     "max_request_bytes",
     "max_response_bytes",
     "timeout_ms",
+    "operation",
+    "max_exchanges",
+    "max_total_request_bytes",
+    "max_total_response_bytes",
+    "max_total_seconds_ms",
+    "max_redirects",
+    "max_cookies",
     "request_digest",
     "observation_sequence",
     "observation_digest",
@@ -111,11 +118,18 @@ def _request_document(request_id: str, lifecycle: list[object]) -> dict[str, obj
         "declared_endpoint": payload["endpoint"],
         "resolved_address": payload["resolved_address"],
         "protocol": payload["protocol"],
+        "operation": payload["operation"],
         "bounds": {
             "connections": payload["max_connections"],
+            "exchanges": payload["max_exchanges"],
             "request_bytes": payload["max_request_bytes"],
             "response_bytes": payload["max_response_bytes"],
             "timeout_ms": payload["timeout_ms"],
+            "total_request_bytes": payload["max_total_request_bytes"],
+            "total_response_bytes": payload["max_total_response_bytes"],
+            "total_seconds_ms": payload["max_total_seconds_ms"],
+            "redirects": payload["max_redirects"],
+            "cookies": payload["max_cookies"],
         },
         "classification": payload["outcome"],
         "request_bytes": payload["request_bytes"],
@@ -127,6 +141,14 @@ def _request_document(request_id: str, lifecycle: list[object]) -> dict[str, obj
         "attempted_endpoint_digest": payload["attempted_endpoint_digest"],
         "observation_sequence": payload["observation_sequence"],
         "observation_digest": payload["observation_digest"],
+        "tls": {
+            "server_name": payload["server_name"],
+            "certificate_sha256": payload["certificate_sha256"],
+        },
+        "response_headers_digest": payload["response_headers_digest"],
+        "redirect_chain": payload["redirect_chain"],
+        "cookies_digest": payload["cookies_digest"],
+        "browser_observation_digest": payload["browser_observation_digest"],
     }
 
 
@@ -167,19 +189,33 @@ def _accounting(requests: list[dict[str, object]]) -> dict[str, dict[str, int]]:
     for request in (item for item in requests if not item["probe_kind"]):
         generation = str(request["binding"]["generation_id"])
         row = accounting.setdefault(
-            generation, {"connections": 0, "request_bytes": 0, "response_bytes": 0, "elapsed_ms": 0}
+            generation,
+            {"connections": 0, "exchanges": 0, "request_bytes": 0, "response_bytes": 0, "elapsed_ms": 0},
         )
-        if request["classification"] != "budget-exhausted" and not (
-            request["classification"] in {"too-large", "denied"} and request["request_bytes"] == 0
+        session_operation = request["operation"] in {"http-session", "tcp-session", "browser"}
+        target_exchange = request["operation"] != "http-fuzz"
+        if session_operation:
+            row["exchanges"] += 1
+        if (
+            target_exchange
+            and request["classification"] != "budget-exhausted"
+            and not (request["classification"] in {"too-large", "denied"} and request["request_bytes"] == 0)
         ):
             row["connections"] += 1
-        for field in ("request_bytes", "response_bytes", "elapsed_ms"):
-            row[field] += int(request[field])
+        if target_exchange:
+            for field in ("request_bytes", "response_bytes", "elapsed_ms"):
+                row[field] += int(request[field])
         bounds = request["bounds"]
         if (
             row["connections"] > bounds["connections"]
-            or any(request[field] > bounds[field] for field in ("request_bytes", "response_bytes"))
+            or (
+                target_exchange and any(request[field] > bounds[field] for field in ("request_bytes", "response_bytes"))
+            )
             or request["elapsed_ms"] > bounds["timeout_ms"]
+            or (session_operation and row["exchanges"] > bounds["exchanges"])
+            or (session_operation and row["request_bytes"] > bounds["total_request_bytes"])
+            or (session_operation and row["response_bytes"] > bounds["total_response_bytes"])
+            or (session_operation and row["elapsed_ms"] > bounds["total_seconds_ms"])
         ):
             raise InvalidReceiptError("Target-broker accounting exceeds its sealed bounds")
     return accounting
