@@ -137,9 +137,9 @@ def launch_until_terminal(
     """Observe the default Supervisor's terminal quiescence, then stop PID 1 cleanly."""
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline and not all(receipt.is_file() for receipt in receipts) and process.poll() is None:
+    while time.monotonic() < deadline and not _terminal_ready(receipts) and process.poll() is None:
         time.sleep(0.1)
-    terminal_observed = all(receipt.is_file() for receipt in receipts)
+    terminal_observed = _terminal_ready(receipts)
     subprocess.run(
         ["docker", "stop", "--time", "3", "incypher-final-interval-qualification"],
         check=False,
@@ -149,6 +149,18 @@ def launch_until_terminal(
     if not terminal_observed:
         raise RuntimeError(f"strict final-interval Candidate did not reach terminal state: {stderr[-5000:]}")
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _terminal_ready(receipts: tuple[Path, ...]) -> bool:
+    if not all(receipt.is_file() for receipt in receipts):
+        return False
+    canonical = next((receipt.parent for receipt in receipts if receipt.parent.name == "canonical"), None)
+    if canonical is None:
+        return False
+    lifecycle = canonical / "supervisor-lifecycle.receipt.json"
+    if not lifecycle.is_file():
+        return False
+    return json.loads(lifecycle.read_bytes()).get("terminal_disposition") == "normal"
 
 
 def launch_until_final_chance_then_crash(

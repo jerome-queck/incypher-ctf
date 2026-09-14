@@ -40,6 +40,7 @@ from solver.submission.receipt import write_receipt
 from solver.supervisor_process import SpawnedBoot
 from solver.work_generation import GenerationFence
 from solver.write_reservation import EffectIndeterminate
+from scripts.deterministic_recovery_qualification import qualify as qualify_deterministic_recovery
 
 RUN_ID_293 = "runtime-qualification-293"
 RUN_ID_296 = "runtime-qualification-296"
@@ -440,10 +441,12 @@ def main(argv: list[str] | None = None) -> int:
     arguments.output.mkdir(parents=True, exist_ok=False)
     serial, serial_trace = qualify_serial_submission(arguments.output)
     incident, trace = qualify_incident(arguments.output)
+    deterministic = qualify_deterministic_recovery(arguments.output, arguments.output / "deterministic-recovery")
     print(serial)
     print(serial_trace)
     print(incident)
     print(trace)
+    print(deterministic)
     return 0
 
 

@@ -1,7 +1,9 @@
 """Shared quota and bounded inference-route policy."""
 
 import json
+import os
 import math
+import datetime as dt
 
 import pytest
 
@@ -21,6 +23,7 @@ from solver.route_and_quota import (
 )
 from solver.record import Recorder
 from solver.redaction import Redactor
+from solver.recovery.runtime import DeterministicRecovery
 
 
 @pytest.mark.parametrize(
@@ -275,6 +278,114 @@ def test_execute_switches_once_for_typed_local_failure_but_never_shared(tmp_path
     assert caught.value.kind is FailureKind.SHARED_EXHAUSTION
     assert calls == ["native"]
     other.write_authority.close()
+
+
+def test_production_route_switch_is_an_incident_authorized_changed_remedy(tmp_path):
+    now = dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc)
+    recorder = Recorder(tmp_path, "run-recovery", Redactor({}))
+    recovery = DeterministicRecovery(
+        tmp_path,
+        "run-recovery",
+        Redactor({}),
+        now=lambda: now,
+        authority=recorder.write_authority,
+    )
+    controller = RouteAndQuotaController(
+        RouteAndQuotaPolicy(primary=InferenceRoute.NATIVE),
+        authority=recorder.write_authority,
+        recovery=recovery,
+        now=lambda: now,
+    )
+    calls = []
+
+    def native():
+        calls.append("native")
+        raise RouteTransportFailure.classified("timeout", InferenceRoute.NATIVE, "a" * 64)
+
+    def cpa():
+        calls.append("cpa")
+        return {"text": "answer"}
+
+    result = controller.execute(
+        request_id="request-1",
+        generation_id="generation-2",
+        payload_digest="b" * 64,
+        observations=(),
+        transports={InferenceRoute.NATIVE: native, InferenceRoute.CPA: cpa},
+        encode=lambda value: value,
+        decode=dict,
+    )
+
+    receipt = json.loads((tmp_path / "runs/run-recovery/canonical/incident-containment.receipt.json").read_text())
+    assert result == {"text": "answer"}
+    assert calls == ["native", "cpa"]
+    assert receipt["fault_kind"] == "route-local-inference"
+    assert receipt["changed_action"]["before"] == "native-codex"
+    assert receipt["changed_action"]["after"] == "private-cpa"
+    assert receipt["final_outcome"] == "resolved"
+    recorder.write_authority.close()
+
+
+def test_route_recovery_replays_at_controller_boot_after_probation_crash(monkeypatch, tmp_path):
+    now = dt.datetime(2026, 9, 14, tzinfo=dt.timezone.utc)
+    recorder = Recorder(tmp_path, "run-route-boot", Redactor({}))
+    recovery = DeterministicRecovery(
+        tmp_path, "run-route-boot", Redactor({}), now=lambda: now, authority=recorder.write_authority
+    )
+    original = os.fsync
+    crash = [True]
+    events = tmp_path / "runs/run-route-boot/canonical/events.jsonl"
+
+    def interrupted(descriptor):
+        original(descriptor)
+        if crash[0] and events.exists():
+            rows = events.read_bytes().splitlines()
+            if rows:
+                row = json.loads(rows[-1]).get("payload", {})
+                if "changed-remedy" in row.get("completed_steps", ()) and not row.get("terminal"):
+                    crash[0] = False
+                    raise RuntimeError("boot between remedy and probation")
+
+    monkeypatch.setattr(os, "fsync", interrupted)
+    calls = []
+
+    def native():
+        calls.append("native")
+        raise RouteTransportFailure.classified("timeout", InferenceRoute.NATIVE, "a" * 64)
+
+    def cpa():
+        calls.append("cpa")
+        return {"text": "answer"}
+
+    first = RouteAndQuotaController(
+        RouteAndQuotaPolicy(primary=InferenceRoute.NATIVE),
+        authority=recorder.write_authority,
+        recovery=recovery,
+        now=lambda: now,
+    )
+    with pytest.raises(RuntimeError, match="between remedy and probation"):
+        first.execute(
+            request_id="request-boot",
+            generation_id="generation-boot",
+            payload_digest="b" * 64,
+            observations=(),
+            transports={InferenceRoute.NATIVE: native, InferenceRoute.CPA: cpa},
+            encode=lambda value: value,
+            decode=dict,
+        )
+
+    RouteAndQuotaController(
+        RouteAndQuotaPolicy(primary=InferenceRoute.NATIVE),
+        authority=recorder.write_authority,
+        recovery=recovery,
+        now=lambda: now,
+    )
+    receipt = json.loads((tmp_path / "runs/run-route-boot/canonical/incident-containment.receipt.json").read_text())
+    assert calls == ["native", "cpa"]
+    assert receipt["adapter"]["id"] == "route-switch-v1"
+    assert receipt["replay_count"] == 1
+    assert receipt["final_outcome"] == "resolved"
+    recorder.write_authority.close()
 
 
 def test_durable_failure_history_survives_controller_recreation_and_bounds_switch(tmp_path):

@@ -5,6 +5,8 @@ from __future__ import annotations
 import socket
 import tempfile
 import hashlib
+import datetime as dt
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from solver.event_store import EventStore
 from solver.redaction import Redactor
 from solver.recon import recon
 from solver.record import Recorder
+from solver.recovery.runtime import DeterministicRecovery
+from solver.recovery.incident import RECEIPT
 from solver.research_broker import ResearchBrokerRuntime
 from solver.research_broker_contracts import (
     RESEARCH_BROKER_RECORDED,
@@ -82,6 +86,54 @@ def test_allowed_public_fixture_is_bounded_sealed_and_provenanced(tmp_path: Path
     )
     assert EventStore(state, run_id="run-1").blob(event.blob_digest) == b"public fixture"
     assert event.payload["blob_digest"] == result.provenance.body_digest.removeprefix("sha256:")
+
+
+def test_timeout_recovery_contains_an_identical_research_request(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    attempts = []
+
+    def transport(_url: str, _address: str, _limits: ResearchLimits) -> ResearchTransportResult:
+        attempts.append(True)
+        if len(attempts) == 1:
+            return ResearchTransportResult(outcome=ResearchOutcome.TIMEOUT)
+        return ResearchTransportResult(status=200, headers={"content-type": "text/plain"}, body=b"answer")
+
+    recovery = DeterministicRecovery(
+        state,
+        "run-1",
+        Redactor({}),
+        now=lambda: dt.datetime(2026, 9, 13, tzinfo=dt.timezone.utc),
+    )
+    runtime = ResearchBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        limits=ResearchLimits(64, 1, 2, 60),
+        timestamp=lambda: "2026-09-13T00:00:00+00:00",
+        resolve=lambda _host: ("8.8.8.8",),
+        transport=transport,
+        recovery=recovery,
+    )
+    left, right = socket.socketpair()
+    try:
+        binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        runtime.prepare_attempt(binding)
+        handle = runtime.claim(left, generation.generation_id)
+        result = runtime.fetch(left, handle, "https://research.example/fact")
+        refused = runtime.fetch(left, handle, "https://research.example/fact")
+        unrelated = runtime.fetch(left, handle, "https://research.example/other")
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is ResearchOutcome.TIMEOUT
+    assert refused.outcome is ResearchOutcome.DENIED
+    assert unrelated.outcome is ResearchOutcome.ANSWERED
+    assert len(attempts) == 2
+    receipt = json.loads((state / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["changed_action"] == {}
+    assert receipt["probe"]["outcome"] == "unsettled"
 
 
 @pytest.mark.parametrize(

@@ -135,6 +135,7 @@ def _fixed_point(
             "scripts/lock_sage_closure.py",
             "scripts/qualify_crypto_profile.py",
             "scripts/qualify_runtime_evidence.py",
+            "scripts/deterministic_recovery_qualification.py",
             "scripts/qualification_retention.py",
             "scripts/runtime_qualification.py",
             "scripts/verify_sage_closure.py",
@@ -294,6 +295,13 @@ def _candidate_manifest(
             "incident-containment.receipt.json",
             "Worker-process Incident containment is qualified; later fixed domain remedies remain planned.",
         ),
+        297: (
+            "core.deterministic-recovery",
+            "receipt:deterministic-recovery",
+            "deterministic-recovery",
+            "deterministic-recovery.trace.json",
+            "",
+        ),
     }
     for path, capsule in capsules:
         if capsule["ticket"] == 299:
@@ -313,9 +321,13 @@ def _candidate_manifest(
         receipts = [row for row in receipts if row["ref"] != reference]
         receipts.append({"digest": _digest(receipt), "kind": kind, "ref": reference})
         row = next(item for item in requirements if item["row_id"] == row_id)
-        row.update(reason=reason, receipt_ref=reference, status="planned")
-        row["evidence_refs"] = [item for item in row["evidence_refs"] if not item.startswith("capsule-content:")]
+        row.update(
+            reason=reason, receipt_ref=reference, status="implemented" if capsule["ticket"] == 297 else "planned"
+        )
+        if capsule["ticket"] != 297:
+            row["evidence_refs"] = [item for item in row["evidence_refs"] if not item.startswith("capsule-content:")]
         row["evidence_refs"].append("capsule-content:" + _digest(path / "capsule.json"))
+        row["evidence_refs"].sort()
     manifest = generate_manifest(
         image_digest=fixed["image_manifest_digest"],
         release_candidate_profile=selected_profile,
@@ -419,6 +431,33 @@ def _incident_capsule(context: _CapsuleContext) -> tuple[Path, dict[str, object]
     )
 
 
+def _deterministic_recovery_capsule(context: _CapsuleContext) -> tuple[Path, dict[str, object]]:
+    root = context.observations / "deterministic-recovery"
+    artifacts = {path.name: path for path in root.iterdir() if path.is_file()}
+    artifacts.update(
+        {
+            "runtime-observation.json": context.runtime_observation,
+            "strict-preflight.json": context.strict_preflight,
+        }
+    )
+    return _capsule(
+        context.private_key,
+        context.public,
+        context.fixed,
+        context.inputs,
+        ticket=297,
+        directory="297-deterministic-recovery",
+        artifacts=artifacts,
+        observed_results=[
+            "seven-fixed-probes:pass",
+            "changed-actions:pass",
+            "cross-boot-probation:pass",
+            "bounded-escalation:pass",
+            "no-inference-fences:pass",
+        ],
+    )
+
+
 def _crypto_capsule(context: _CapsuleContext) -> tuple[Path, dict[str, object]]:
     supply = ROOT / "tool-supply"
     return _capsule(
@@ -449,18 +488,20 @@ def _retain_evidence(
     tuple[Path, dict[str, object]],
     tuple[Path, dict[str, object]],
     tuple[Path, dict[str, object]],
+    tuple[Path, dict[str, object]],
 ]:
     old = json.loads((EVIDENCE / "293-serial-submission/capsule.json").read_bytes())
     fixed, inputs = _fixed_point(binding, old, strict)
     context = _CapsuleContext(private_key, public, fixed, inputs, observations, runtime_observation, strict_path)
     serial = _serial_capsule(context)
     incident = _incident_capsule(context)
+    deterministic = _deterministic_recovery_capsule(context)
     crypto = _crypto_capsule(context)
-    _candidate_manifest(private_key, fixed, [serial, incident, crypto])
-    return serial, incident, crypto
+    _candidate_manifest(private_key, fixed, [serial, incident, deterministic, crypto])
+    return serial, incident, deterministic, crypto
 
 
-def _finalize(serial: Path, incident: Path, crypto: Path) -> None:
+def _finalize(serial: Path, incident: Path, deterministic: Path, crypto: Path) -> None:
     strict_runtime.enforce_host_storage("competition", subprocess.run)
     subprocess.run(
         [
@@ -468,6 +509,7 @@ def _finalize(serial: Path, incident: Path, crypto: Path) -> None:
             str(ROOT / "scripts/verify_runtime_evidence.py"),
             str(serial),
             str(incident),
+            str(deterministic),
             str(crypto),
         ],
         check=True,
@@ -482,7 +524,7 @@ def qualify(private_key: Path) -> Path:
     _qualify_resident_tools(binding.image_manifest_digest)
     work = Path(tempfile.mkdtemp(prefix="runtime-qualification-372-", dir=STATE))
     observations, strict, strict_path, runtime_observation = _run_candidate(binding, work)
-    serial, incident, crypto = _retain_evidence(
+    serial, incident, deterministic, crypto = _retain_evidence(
         private_key, public, binding, observations, strict, strict_path, runtime_observation
     )
     from scripts.qualify_final_interval_runtime import qualify as qualify_final_interval
@@ -493,7 +535,7 @@ def qualify(private_key: Path) -> Path:
         EVIDENCE / "candidate-manifest.json",
         ROOT / "docs/evidence/final-interval-v2",
     )
-    _finalize(serial[0], incident[0], crypto[0])
+    _finalize(serial[0], incident[0], deterministic[0], crypto[0])
     return work
 
 

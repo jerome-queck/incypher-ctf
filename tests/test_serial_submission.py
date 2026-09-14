@@ -1,4 +1,5 @@
 import json
+import datetime as dt
 import threading
 from dataclasses import replace
 from types import SimpleNamespace
@@ -29,6 +30,8 @@ from solver.event_store_storage import canonical_bytes
 from solver.instance_ledger import POPULATED, LedgerResult, LedgerRow
 from solver.record import Recorder
 from solver.redaction import Redactor
+from solver.recovery.incident import RECEIPT
+from solver.recovery.runtime import DeterministicRecovery
 from solver.manifest import generate_manifest
 from solver.submission.authority import SerialSubmission
 from solver.submission.ambiguity import (
@@ -267,6 +270,13 @@ def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_pa
     mono, wall = [0.0], [100.0]
     epochs = SubmissionEpochAuthority(recorder.event_store, Clock())
     epochs.ensure("board-1")
+    recovery = DeterministicRecovery(
+        tmp_path / "state",
+        "run-1",
+        Redactor({}),
+        now=lambda: dt.datetime.fromtimestamp(wall[0], dt.timezone.utc),
+        authority=recorder.write_authority,
+    )
 
     def identity_for(candidate):
         return CompleteSubmissionIdentity(
@@ -293,6 +303,7 @@ def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_pa
         open_client=lambda *_args, **_kwargs: wire,
         reconcile_interval=100,
         post_interval_seconds=0,
+        recovery=recovery,
     )
     successor = replace(ready(identity="d" * 64, candidate=b"zephyr{next}"), candidate_digest="e" * 64)
     other = replace(ready(identity="f" * 64, candidate=b"zephyr{other}"), candidate_digest="1" * 64)
@@ -317,6 +328,10 @@ def test_closed_ambiguity_advances_epoch_once_before_concurrent_successor(tmp_pa
         assert failures == []
         assert epochs.current("board-1") == 2
         assert [row[1]["submission_epoch"] for row in wire.complete_identities[-2:]] == [2, 2]
+        receipt = json.loads((recorder.run_dir / "canonical" / RECEIPT).read_text())
+        assert receipt["changed_action"]["dimension"] == "submission-epoch"
+        assert receipt["changed_action"]["source"] == "closed-ambiguity-submission-epoch"
+        assert receipt["probation_outcome"] == "passed"
     finally:
         runtime.close()
 

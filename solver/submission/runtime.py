@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import time
 from dataclasses import dataclass
 
@@ -50,13 +51,40 @@ def compose_submission_runtime(
     uncertainty_margin_seconds=SUBMISSION_UNCERTAINTY_MARGIN_SECONDS,
     open_client=BoardBrokerClient.open,
     reconcile_interval=0.25,
+    recovery=None,
 ):
     fence = None
+    registry = None
 
     def binding_for(pending):
         if fence is None:
             raise RuntimeError("submission fence is not composed")
         return fence.reconciliation_binding(pending)
+
+    def recover_closed(pending):
+        if recovery is None or epoch_authority is None or not board_identity:
+            return
+        from solver.recovery.contracts import FaultKind
+        from solver.recovery.submission import submission_recovery
+
+        before = epoch_authority.current(board_identity)
+        recovery.handle(
+            kind=FaultKind.SUBMISSION_AMBIGUITY,
+            fault_id=f"submission:{pending.effect_id}",
+            scope="run-shared:submission",
+            generation_id="submission-reconciliation",
+            evidence=pending.provenance or pending.disposition.value,
+            failed_action_value=f"epoch-{before}",
+            original_deadline=dt.datetime.fromtimestamp(wall_time() + 180.0, dt.timezone.utc),
+            recovery=submission_recovery(
+                pending_effect=pending.effect_id,
+                closed_epoch=before,
+                board_identity=board_identity,
+                epochs=epoch_authority,
+                fence=fence,
+                authority=recorder.write_authority,
+            ),
+        )
 
     fence = AmbiguousSubmissionFence(
         state,
@@ -66,7 +94,25 @@ def compose_submission_runtime(
         monotonic=monotonic,
         wall_time=wall_time,
         probe=broker_evidence_probe(open_client, board_broker_path, binding_for),
+        on_close=recover_closed,
     )
+    if recovery is not None and epoch_authority is not None and board_identity:
+        from solver.recovery.runtime import RecoveryRegistry
+        from solver.recovery.submission import SUBMISSION_ADAPTER, submission_recovery
+
+        registry = RecoveryRegistry()
+        registry.register(
+            SUBMISSION_ADAPTER,
+            lambda config: submission_recovery(
+                pending_effect=config["pending_effect"],
+                closed_epoch=int(config["closed_epoch"]),
+                board_identity=config["board_identity"],
+                epochs=epoch_authority,
+                fence=fence,
+                authority=recorder.write_authority,
+            ),
+        )
+        recovery.replay(registry)
     serial = SerialSubmission(
         recorder.run_dir / "canonical",
         recorder.write_authority,
@@ -87,5 +133,6 @@ def compose_submission_runtime(
         epoch_authority=epoch_authority,
         board_identity=board_identity,
         quiesce=reconciler.close,
+        probation=lambda: recovery.replay(registry) if recovery is not None and registry is not None else (),
     )
     return SubmissionRuntime(submission, fence, reconciler)

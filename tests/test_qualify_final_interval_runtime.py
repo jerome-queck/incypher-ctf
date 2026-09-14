@@ -2,10 +2,26 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.qualify_final_interval_runtime import (
+    _terminal_ready,
     default_entrypoint_command,
     final_interval_restart_headroom_seconds,
     prepare_strict_cgroup_command,
 )
+
+
+def test_terminal_observation_waits_for_normal_supervisor_close(tmp_path):
+    receipt = tmp_path / "runs" / "controlled-final-interval" / "canonical" / "serial-submission.receipt.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("{}")
+    final = receipt.parents[1] / "final-interval.receipt.json"
+    final.write_text("{}")
+    ambiguity = receipt.parent / "ambiguous-submission.receipt.json"
+    ambiguity.write_text("{}")
+    receipts = (final, receipt, ambiguity)
+
+    assert not _terminal_ready(receipts)
+    (receipt.parent / "supervisor-lifecycle.receipt.json").write_text('{"terminal_disposition":"normal"}')
+    assert _terminal_ready(receipts)
 
 
 def test_restart_fixture_leaves_safe_wire_start_headroom():

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import datetime as dt
+import json
 import socket
 import tempfile
 import threading
@@ -19,6 +21,8 @@ from solver.attempt_executor_contracts import NetworkProbeDeclaration, ResourceO
 from solver.event_store import GenerationDisposition
 from solver.event_store import EventStore
 from solver.redaction import Redactor
+from solver.recovery.incident import RECEIPT
+from solver.recovery.runtime import DeterministicRecovery
 from solver.target_broker import TargetBrokerRuntime
 from solver.target_broker_contracts import (
     TARGET_EXCHANGE_RECORDED,
@@ -35,6 +39,7 @@ from solver.target_broker_ipc import (
     TargetBrokerService,
 )
 from solver.target_broker_receipt import capsule_contract, link_manifest, verify_receipt, write_receipt
+from solver.target_broker_transport import TransportResult
 from solver.work_generation import GenerationFence
 from test_attempt_executor import (
     IMAGE_ID,
@@ -51,6 +56,104 @@ TEST_CANDIDATE = TargetCandidateBinding(IMAGE_ID, "sha256:" + "b" * 64, "sha256:
 def claim_client(runtime, service, binding):
     runtime.prepare_attempt(binding)
     return TargetBrokerClient.claim(service.path, binding.generation_id)
+
+
+def test_safe_read_timeout_is_contained_without_an_identical_target_retry(tmp_path: Path, monkeypatch) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    attempts = []
+
+    def exchange(*_args):
+        attempts.append(True)
+        if len(attempts) == 1:
+            return TransportResult(TargetOutcome.TIMEOUT)
+        return TransportResult(TargetOutcome.ANSWERED, b"answer", 200, request_bytes=32, response_bytes=38)
+
+    monkeypatch.setattr("solver.target_broker.transport_exchange", exchange)
+    recovery = DeterministicRecovery(
+        state,
+        "run-1",
+        Redactor({}),
+        now=lambda: dt.datetime(2026, 9, 12, tzinfo=dt.timezone.utc),
+    )
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 9),
+        limits=TargetLimits(3, 256, 256, 0.1),
+        timestamp=lambda: "2026-09-12T00:00:00+00:00",
+        recovery=recovery,
+    )
+    left, right = socket.socketpair()
+    try:
+        binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        runtime.prepare_attempt(binding)
+        handle = runtime.claim(left, generation.generation_id)
+        result = runtime.exchange(
+            left,
+            handle,
+            {"method": "GET", "path": "/", "body": ""},
+        )
+        refused = runtime.exchange(left, handle, {"method": "GET", "path": "/", "body": ""})
+        unrelated = runtime.exchange(left, handle, {"method": "GET", "path": "/other", "body": ""})
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is TargetOutcome.TIMEOUT
+    assert refused.outcome is TargetOutcome.DENIED
+    assert unrelated.outcome is TargetOutcome.ANSWERED
+    assert len(attempts) == 2
+    receipt = json.loads((state / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["changed_action"] == {}
+    assert receipt["probe"]["outcome"] == "unsettled"
+
+
+def test_unsafe_target_timeout_is_fenced_without_inference_or_retry(tmp_path: Path, monkeypatch) -> None:
+    state = tmp_path / "state"
+    generation = GenerationFence(state, "run-1", Redactor({}), lambda: "now").acquire("challenge-7", "attempt-1")
+    attempts = []
+    monkeypatch.setattr(
+        "solver.target_broker.transport_exchange",
+        lambda *_args: (attempts.append(True), TransportResult(TargetOutcome.TIMEOUT))[1],
+    )
+    recovery = DeterministicRecovery(
+        state,
+        "run-1",
+        Redactor({}),
+        now=lambda: dt.datetime(2026, 9, 12, tzinfo=dt.timezone.utc),
+    )
+    runtime = TargetBrokerRuntime(
+        state=state,
+        run_id="run-1",
+        boot_id="boot-1",
+        challenge_id="challenge-7",
+        candidate=TEST_CANDIDATE,
+        endpoint=TargetEndpoint(TargetProtocol.HTTP, "127.0.0.1", 9),
+        limits=TargetLimits(3, 256, 256, 0.1),
+        timestamp=lambda: "2026-09-12T00:00:00+00:00",
+        recovery=recovery,
+    )
+    left, right = socket.socketpair()
+    try:
+        binding = CapabilityBinding("run-1", "boot-1", generation.generation_id, "lane-1", "attempt-1", "step-1")
+        runtime.prepare_attempt(binding)
+        handle = runtime.claim(left, generation.generation_id)
+        result = runtime.exchange(left, handle, {"method": "POST", "path": "/", "body": "cGF5bG9hZA=="})
+        refused = runtime.exchange(left, handle, {"method": "GET", "path": "/", "body": ""})
+    finally:
+        left.close()
+        right.close()
+
+    assert result.outcome is TargetOutcome.TIMEOUT
+    assert refused.outcome is TargetOutcome.REVOKED
+    assert len(attempts) == 1
+    receipt = json.loads((state / "runs" / "run-1" / "canonical" / RECEIPT).read_text())
+    assert receipt["disposition"] == "probation"
+    assert receipt["changed_action"] == {}
 
 
 def test_hostile_exchange_schema_and_non_ascii_request_are_canonically_classified(tmp_path: Path) -> None:

@@ -240,6 +240,7 @@ class SerialSubmission:
                     "outcome": answer.outcome,
                     "http_status": answer.http_status,
                     "message_digest": hashlib.sha256(answer.message.encode()).hexdigest(),
+                    "submission_epoch": complete_identity.submission_epoch if complete_identity else 0,
                 },
                 decode=lambda row: Verdict(str(row["outcome"]), "", int(row["http_status"])),
                 indeterminate_observation=lambda _error: {
@@ -249,6 +250,7 @@ class SerialSubmission:
                     "reserved_at": reserved_at,
                     "requested_at": requested_at,
                     "result_at": self._timestamp(),
+                    "submission_epoch": complete_identity.submission_epoch if complete_identity else 0,
                 },
                 retention=RetentionPolicy.RECEIPT,
             )

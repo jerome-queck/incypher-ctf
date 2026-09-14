@@ -264,6 +264,7 @@ class Run:
         final_candidate_preparation=None,
         final_candidate_queue=None,
         initial_leases: Mapping[int | str, Lease] | None = None,
+        recovery=None,
     ) -> None:
         self.profile = profile
         self._recorder = recorder
@@ -289,7 +290,10 @@ class Run:
         self._lead_adapter = lead_adapter
         self._codex_control_path = Path(codex_control_path) if codex_control_path else None
         self._route_controller = RouteAndQuotaController(
-            RouteAndQuotaPolicy(primary=InferenceRoute(inference_route)), authority=recorder.write_authority
+            RouteAndQuotaPolicy(primary=InferenceRoute(inference_route)),
+            authority=recorder.write_authority,
+            recovery=recovery,
+            now=self._now,
         )
         self._progress = ProgressController(
             recorder.run_dir.parents[1],
@@ -336,6 +340,7 @@ class Run:
         self._final_interval = final_interval
         self._final_candidate_preparation = final_candidate_preparation
         self._final_candidate_queue = final_candidate_queue
+        self._recovery = recovery
         if self._scheduler.dials.concurrency == 2 and lane_controller is None:
             raise ValueError("the two-Lane profile requires its controller, Order adapter, and Attempt executor")
 
@@ -382,7 +387,13 @@ class Run:
         if self._final_interval is None:
             return self._tail()
         self._steps.restart()
-        return FinalIntervalRuntime(self._final_interval, self._final_candidate_queue, self, now=self._now).close()
+        return FinalIntervalRuntime(
+            self._final_interval,
+            self._final_candidate_queue,
+            self,
+            now=self._now,
+            recovery=self._recovery,
+        ).close()
 
     def _loop(self) -> None:
         if self._lane_controller is not None:
