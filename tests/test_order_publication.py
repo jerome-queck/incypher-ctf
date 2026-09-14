@@ -240,3 +240,47 @@ def test_concurrent_writers_from_one_prior_fence_publish_exactly_one_boundary(tm
     assert sum(event.payload.get("record") == "fence-conflict" for event in events) == 1
     reservations = EventStore(tmp_path, run_id="run-1").reservations()
     assert len({item.reservation_id for item in reservations}) == len(events)
+
+
+def test_other_event_producer_waits_for_reserved_order_batch(tmp_path):
+    from solver.event_store import ObservationRecorded
+
+    started = threading.Event()
+    finished = threading.Event()
+    failures = []
+    workers = []
+
+    def append_observation():
+        started.set()
+        try:
+            EventStore(tmp_path, run_id="run-1").append(
+                ObservationRecorded(
+                    attempt_id="parallel-attempt",
+                    step_index=1,
+                    command_raw="observe",
+                    command_normalised="observe",
+                    tool="test",
+                ),
+                body=b"parallel observation",
+            )
+        except Exception as error:
+            failures.append(error)
+        finally:
+            finished.set()
+
+    def hook(point):
+        if point == "after_chunk_commit:1":
+            worker = threading.Thread(target=append_observation, daemon=True)
+            workers.append(worker)
+            worker.start()
+            assert started.wait(2)
+            assert not finished.wait(0.1)
+
+    _journal(tmp_path, hook).publish(_decision(257))
+    for worker in workers:
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+    assert not failures
+    events = EventStore(tmp_path, run_id="run-1").events()
+    assert events[-2].payload["record"] == "boundary"
+    assert events[-1].event_type == "observation.recorded"

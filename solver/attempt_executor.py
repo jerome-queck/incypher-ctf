@@ -25,7 +25,7 @@ from solver.attempt_executor_contracts import (
 )
 from solver.attempt_process_contracts import AttemptProcessRecorded, ProcessRecord
 from solver.event_store import EventStore
-from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED, EMPTY_BLOB_DIGEST
+from solver.event_store_contracts import ATTEMPT_ENVELOPE_RECORDED
 from solver.event_store_storage import canonical_bytes
 from solver.isolation import STRICT_PROFILE_DIGEST
 from solver.isolation_receipt import verify_receipt as verify_isolation_receipt
@@ -485,8 +485,7 @@ class AttemptExecutor:
             network_probe=request.network_probe if request else None,
             ts=self._timestamp(),
         )
-        reservation = self._store.reserve(event, blob_digest=EMPTY_BLOB_DIGEST, blob_bytes=0)
-        self._store.commit(reservation, event, body=b"")
+        self._store.append(event, body=b"")
 
 
 def _envelope_states(events) -> dict[str, dict[str, object]]:

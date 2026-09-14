@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
+import threading
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -56,6 +58,9 @@ def _redact(value: Any, redactor: Redactor) -> Any:
     return value
 
 
+_HELD_WRITER_PATHS = threading.local()
+
+
 class EventStoreCore:
     """The locked canonical writer and verifier used by the public EventStore facade."""
 
@@ -86,7 +91,7 @@ class EventStoreCore:
             event.payload(blob_digest=digest_bytes(body_bytes), blob_bytes=len(body_bytes)),
             self._redactor,
         )
-        with self._locked():
+        with self.writer_batch():
             existing = self._read_verified()
             prior = self._find_exact_identity(existing, event, payload)
             if prior is not None:
@@ -118,7 +123,7 @@ class EventStoreCore:
             event.payload(blob_digest=digest_bytes(body_bytes), blob_bytes=len(body_bytes)),
             self._redactor,
         )
-        with self._locked():
+        with self.writer_batch():
             existing = self._read_verified()
             prior = self._find_exact_identity(existing, event, payload)
             if prior is not None:
@@ -173,7 +178,7 @@ class EventStoreCore:
         if blob_bytes < 0:
             raise ValueError("blob_bytes must be non-negative")
         payload = _redact(event.payload(blob_digest=blob_digest, blob_bytes=blob_bytes), self._redactor)
-        with self._locked():
+        with self.writer_batch():
             existing = self._read_verified()
             prior = self._find_exact_identity(existing, event, payload)
             if prior is not None:
@@ -201,7 +206,7 @@ class EventStoreCore:
             event.payload(blob_digest=digest_bytes(body_bytes), blob_bytes=len(body_bytes)),
             self._redactor,
         )
-        with self._locked():
+        with self.writer_batch():
             existing = self._read_verified()
             prior = self._find_exact_identity(existing, event, payload)
             if prior is not None:
@@ -220,7 +225,7 @@ class EventStoreCore:
     def terminal_snapshot(self) -> TerminalEventStoreSnapshot:
         """Hand off a verified terminal chain while holding the canonical writer lock."""
 
-        with self._locked():
+        with self.writer_batch():
             events = self._read_verified()
             if not events or events[0].payload.get("record") != LifecycleRecord.RUN_OPEN.value:
                 raise RunNotTerminalError("terminal snapshot has no Run genesis")
@@ -530,10 +535,27 @@ class EventStoreCore:
         atomic_write(path, body)
 
     @contextmanager
-    def _locked(self):
+    def writer_batch(self):
+        """Serialize bounded canonical writes, including nested stores for this Run.
+
+        Reuse this thread's existing flock so batch members and read projections can open
+        separate EventStore facades without deadlocking. Other threads/processes still flock.
+        The PID keeps an inherited thread-local entry from bypassing locking after a fork.
+        """
+        held = getattr(_HELD_WRITER_PATHS, "paths", None)
+        if held is None:
+            held = _HELD_WRITER_PATHS.paths = set()
+        identity = (os.getpid(), self.lock_path.resolve())
+        if identity in held:
+            yield
+            return
         with self.lock_path.open("a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            yield
+            held.add(identity)
+            try:
+                yield
+            finally:
+                held.remove(identity)
 
     def _read_verified(self) -> list[CommittedEvent]:
         self._read_reservations()

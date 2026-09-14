@@ -6,6 +6,7 @@ read-compatible projection while the migration is deliberately limited to one ev
 
 import hashlib
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -99,7 +100,51 @@ def test_concurrent_producers_share_one_monotonic_digest_chain(tmp_path):
     assert all(
         event.previous_digest == (events[index - 1].event_digest if index else "") for index, event in enumerate(events)
     )
+
     assert {event.event_digest for event in committed} == {event.event_digest for event in events}
+
+
+def test_writer_batch_serializes_one_phase_append_across_reserve_and_commit(tmp_path):
+    store = EventStore(tmp_path)
+    first = ObservationRecorded(
+        attempt_id="attempt-batch-1",
+        step_index=1,
+        command_raw="printf first",
+        command_normalised="printf first",
+        tool="bash",
+    )
+    second = ObservationRecorded(
+        attempt_id="attempt-batch-2",
+        step_index=1,
+        command_raw="printf second",
+        command_normalised="printf second",
+        tool="bash",
+    )
+    append_started = threading.Event()
+    append_finished = threading.Event()
+    errors = []
+
+    def append_second() -> None:
+        append_started.set()
+        try:
+            store.append(second, body=b"second")
+        except BaseException as error:  # pragma: no cover - asserted below
+            errors.append(error)
+        finally:
+            append_finished.set()
+
+    with store.writer_batch() as writer:
+        reservation = writer.reserve(first, blob_digest=digest_of(b"first"), blob_bytes=5, sequence=1)
+        thread = threading.Thread(target=append_second)
+        thread.start()
+        assert append_started.wait(1)
+        assert not append_finished.wait(0.05)
+        writer.commit(reservation, first, body=b"first")
+
+    assert append_finished.wait(1)
+    thread.join()
+    assert errors == []
+    assert [event.sequence for event in store.events()] == [1, 2]
 
 
 def test_reservation_is_durable_before_sealing_body(tmp_path):
