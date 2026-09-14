@@ -45,7 +45,7 @@ from solver.submission.bridge import CandidateSubmissionBridge
 from solver.submission.bridge import ObservedCandidateSubmissionBridge
 from solver.submission.receipt import link_manifest, verify_receipt, write_receipt
 from solver.submission.runtime import compose_submission_runtime
-from solver.submission.reconciliation import broker_evidence_probe
+from solver.submission.reconciliation import SubmissionReconciler, broker_evidence_probe
 from solver.submission.epoch import SubmissionEpochAuthority
 from solver.write_reservation import EffectIndeterminate
 from solver.write_reservation import Capacity, EffectIdentity, ReservationUnavailable
@@ -293,6 +293,31 @@ def test_reconciliation_probe_sanitizes_transport_failures(factory, source):
     evidence = probe(SimpleNamespace(effect_id="effect"))
     assert evidence.source == source
     assert "secret" not in evidence.source
+
+
+def test_reconciler_close_allows_an_in_flight_broker_request_to_finish():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Fence:
+        @staticmethod
+        def pending():
+            return (SimpleNamespace(effect_id="effect"),)
+
+        @staticmethod
+        def reconcile(_pending):
+            entered.set()
+            release.wait(timeout=2)
+
+    reconciler = SubmissionReconciler(Fence(), interval_seconds=0.01).start()
+    assert entered.wait(timeout=1)
+    releaser = threading.Timer(1.1, release.set)
+    releaser.start()
+
+    reconciler.close()
+    releaser.join()
+
+    assert not reconciler.is_alive
 
 
 def test_close_failure_disqualifies_an_exact_authenticated_answer():

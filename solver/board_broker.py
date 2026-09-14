@@ -64,6 +64,7 @@ from solver.local_ipc import receive_exact, receive_line
 from solver.redaction import Redactor
 
 MAX_SEALED_RESPONSE_BYTES = 64 * 1024
+BROKER_REQUEST_TIMEOUT_SECONDS = 35.0
 
 _SCOPE = {
     BoardOperation.INTAKE_READ: "board.intake",
@@ -798,7 +799,13 @@ class BoardBrokerClient:
     def instance_ledger_page(self, page: int) -> BoardBrokerResult:
         return self._execute(BoardOperation.INSTANCE_LEDGER_PAGE, page=page)
 
-    def _execute(self, operation: BoardOperation, *, timeout_seconds: float = 35.0, **arguments) -> BoardBrokerResult:
+    def _execute(
+        self,
+        operation: BoardOperation,
+        *,
+        timeout_seconds: float = BROKER_REQUEST_TIMEOUT_SECONDS,
+        **arguments,
+    ) -> BoardBrokerResult:
         if self._closed:
             return BoardBrokerResult(operation, BoardOutcome.REVOKED)
         response = _ipc_request(
@@ -1123,7 +1130,12 @@ def _decode_ipc_result(response: dict[str, object]) -> BoardBrokerResult:
     return dataclasses.replace(result, value=dataclasses.replace(result.value, body=payload))
 
 
-def _ipc_request(path: Path, request: dict[str, object], *, timeout_seconds: float = 35.0) -> dict[str, object]:
+def _ipc_request(
+    path: Path,
+    request: dict[str, object],
+    *,
+    timeout_seconds: float = BROKER_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, object]:
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(timeout_seconds)
     try:

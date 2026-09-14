@@ -5,6 +5,8 @@ from __future__ import annotations
 import http.client
 import socket
 import ssl
+import threading
+from collections.abc import Callable
 from urllib.parse import urljoin, urlsplit
 
 from solver.research_broker_contracts import ResearchLimits, ResearchOutcome, ResearchTransportResult
@@ -20,7 +22,14 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
 
 
-def fetch(url: str, address: str, limits: ResearchLimits) -> ResearchTransportResult:
+def fetch(
+    url: str,
+    address: str,
+    limits: ResearchLimits,
+    *,
+    cancelled: threading.Event | None = None,
+    activate: Callable[[http.client.HTTPConnection | None], None] | None = None,
+) -> ResearchTransportResult:
     parsed = urlsplit(url)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     connection: http.client.HTTPConnection
@@ -34,9 +43,15 @@ def fetch(url: str, address: str, limits: ResearchLimits) -> ResearchTransportRe
     host = parsed.hostname or ""
     if parsed.port:
         host = f"{host}:{parsed.port}"
+    if cancelled is not None and cancelled.is_set():
+        return ResearchTransportResult(outcome=ResearchOutcome.REVOKED)
+    if activate is not None:
+        activate(connection)
     try:
         connection.request("GET", target, headers={"Host": host, "User-Agent": "incypher-research/1"})
         response = connection.getresponse()
+        if cancelled is not None and cancelled.is_set():
+            return ResearchTransportResult(outcome=ResearchOutcome.REVOKED)
         headers = {key.lower(): value for key, value in response.getheaders()}
         location = headers.get("location", "")
         if 300 <= response.status < 400 and location:
@@ -55,8 +70,13 @@ def fetch(url: str, address: str, limits: ResearchLimits) -> ResearchTransportRe
     except (TimeoutError, socket.timeout):
         return ResearchTransportResult(outcome=ResearchOutcome.TIMEOUT)
     except (OSError, http.client.HTTPException, ssl.SSLError):
-        return ResearchTransportResult(outcome=ResearchOutcome.UNREACHABLE)
+        outcome = (
+            ResearchOutcome.REVOKED if cancelled is not None and cancelled.is_set() else ResearchOutcome.UNREACHABLE
+        )
+        return ResearchTransportResult(outcome=outcome)
     finally:
+        if activate is not None:
+            activate(None)
         connection.close()
 
 

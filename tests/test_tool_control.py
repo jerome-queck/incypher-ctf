@@ -58,8 +58,16 @@ def test_production_attempt_catalogue_includes_qualified_crypto_handles() -> Non
 
     components = attempt_components(inventory)
 
-    assert len(components) == 25
-    assert {item.capability_id for item in components} >= {"crypto.cas", "crypto.lattice", "crypto.hash-crack"}
+    assert len(components) == 36
+    assert {item.capability_id for item in components} >= {
+        "crypto.cas",
+        "crypto.lattice",
+        "crypto.hash-crack",
+        "web.browser",
+        "osint.identity",
+        "misc.emulate",
+    }
+    assert "protocol.smb" not in {item.capability_id for item in components}
 
 
 def test_production_runtime_dispatches_every_resident_capability_from_its_locked_policy(
@@ -71,6 +79,7 @@ def test_production_runtime_dispatches_every_resident_capability_from_its_locked
     controller._components = {item.capability_id: item for item in components}
     runtime = object.__new__(AttemptToolRuntime)
     runtime._controller = controller
+    runtime._enabled_profiles = ("resident",)
     observed = []
 
     def invoke(**request):
@@ -110,6 +119,50 @@ def test_production_runtime_dispatches_every_resident_capability_from_its_locked
             "wall_seconds": dict(component.resource_limits)["wall_seconds"],
             "cleanup_seconds": 5,
         }
+
+
+def test_production_runtime_dispatches_an_enabled_nonresident_profile(tmp_path: Path, monkeypatch) -> None:
+    component = ToolComponent(
+        "web.discovery",
+        "/bin/dash",
+        "1.0.0",
+        ("web",),
+        fixed_arguments=("/usr/local/bin/incypher-web", "web.discovery"),
+        input_paths=1,
+        resource_limits=(
+            ("cpu_seconds", 1),
+            ("filesystem_bytes", 1024),
+            ("memory_bytes", 1024),
+            ("output_bytes", 1024),
+            ("pids", 2),
+            ("wall_seconds", 1),
+        ),
+    )
+    controller = object.__new__(ToolController)
+    controller._components = {component.capability_id: component}
+    runtime = object.__new__(AttemptToolRuntime)
+    runtime._controller = controller
+    runtime._enabled_profiles = ("web",)
+    observed = []
+    monkeypatch.setattr(runtime, "invoke", lambda **request: observed.append(request) or request)
+    held = tmp_path / "request.json"
+    held.write_text("{}")
+
+    runtime.invoke_capability(
+        generation_id="generation-000001",
+        attempt_id="attempt-1",
+        step_id="step-1",
+        workspace=tmp_path,
+        capability_id="web.discovery",
+        input_path=held,
+    )
+
+    assert observed[0]["invocation"].argv == (
+        "/bin/dash",
+        "/usr/local/bin/incypher-web",
+        "web.discovery",
+        "/work/request.json",
+    )
 
 
 def test_resident_policy_denies_flags_code_urls_and_paths_outside_work(tmp_path: Path) -> None:
@@ -259,7 +312,7 @@ def test_declared_component_traverses_the_strict_attempt_executor(tmp_path: Path
         boot_id="boot-1",
         peer=PEER,
     )
-    assert runtime._enabled_profiles == ("resident", "tool-crypto")
+    assert runtime._enabled_profiles == ("resident", "tool-crypto", "web", "osint", "misc-protocols")
 
     result = runtime.invoke(
         generation_id=binding.generation_id,

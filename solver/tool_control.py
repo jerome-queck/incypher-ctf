@@ -163,6 +163,23 @@ PROFILE_COMMANDS = {
         "crypto.symmetric-hash": ("python3", "python3-pycryptodome"),
         "crypto.certificate": ("openssl", "openssl"),
     },
+    "web": {
+        "web.discovery": ("ffuf", "ffuf"),
+        "web.browser": ("chromium", "playwright"),
+    },
+    "osint": {
+        "osint.dns": ("dig", "bind9-dnsutils"),
+        "osint.identity": ("sherlock", "sherlock"),
+        "osint.email": ("holehe", "holehe"),
+        "osint.domain": ("whois", "whois"),
+        "osint.geo": ("python3", "python3-geopy"),
+    },
+    "misc-protocols": {
+        "misc.transform": ("node", "nodejs"),
+        "misc.emulate": ("python3", "qiling"),
+        "protocol.relay": ("socat", "socat"),
+        "jail.reason": ("dash", "nodejs"),
+    },
 }
 
 
@@ -186,7 +203,11 @@ def resident_components(inventory_path: Path, *, require_complete: bool = True) 
 def attempt_components(inventory_path: Path) -> tuple[ToolComponent, ...]:
     """Load every Tool profile admitted for production Attempts."""
 
-    return resident_components(inventory_path) + profile_components(inventory_path, "tool-crypto")
+    return tuple(
+        component
+        for profile in ("resident", "tool-crypto", "web", "osint", "misc-protocols")
+        for component in profile_components(inventory_path, profile)
+    )
 
 
 def _profile_components(
@@ -305,6 +326,14 @@ class ToolController:
         component = self._components.get(capability_id)
         if component is None or "resident" not in component.profiles:
             raise PermissionError("resident Tool capability is unavailable")
+        return component
+
+    def component(self, capability_id: str) -> ToolComponent:
+        """Return a component only when its profile is enabled for this Attempt runtime."""
+
+        component = self._components.get(capability_id)
+        if component is None:
+            raise PermissionError("Tool capability is unavailable")
         return component
 
     def close_generation(self, generation_id: str, *, teardown: Callable[[], None]) -> None:
@@ -609,7 +638,7 @@ class AttemptToolRuntime:
         boot_id: str,
         peer: PeerIdentity,
         lane_id: str = "lane-1",
-        enabled_profiles: Sequence[str] = ("resident", "tool-crypto"),
+        enabled_profiles: Sequence[str] = ("resident", "tool-crypto", "web", "osint", "misc-protocols"),
     ) -> None:
         self._controller = controller
         self._executor = executor
@@ -660,14 +689,38 @@ class AttemptToolRuntime:
     ) -> ToolResult:
         """Dispatch one resident capability from its locked catalogue policy."""
 
-        component = self._controller.resident_component(capability_id)
+        self._controller.resident_component(capability_id)
+        return self.invoke_capability(
+            generation_id=generation_id,
+            attempt_id=attempt_id,
+            step_id=step_id,
+            workspace=workspace,
+            capability_id=capability_id,
+            input_path=input_path,
+        )
+
+    def invoke_capability(
+        self,
+        *,
+        generation_id: str,
+        attempt_id: str,
+        step_id: str,
+        workspace: Path,
+        capability_id: str,
+        input_path: Path,
+    ) -> ToolResult:
+        """Dispatch any enabled profile capability from its immutable policy."""
+
+        component = self._controller.component(capability_id)
+        if not set(component.profiles).intersection(self._enabled_profiles):
+            raise PermissionError("Tool capability is unavailable")
         if component.input_paths != 1:
-            raise PermissionError("resident Tool capability is unavailable")
+            raise PermissionError("Tool capability is unavailable")
         root = Path(workspace).resolve()
         try:
             relative = Path(input_path).resolve().relative_to(root)
         except ValueError:
-            raise PermissionError("resident Tool input is outside its workspace") from None
+            raise PermissionError("Tool input is outside its workspace") from None
         resources = dict(component.resource_limits)
         invocation = ToolInvocation(
             capability_id,

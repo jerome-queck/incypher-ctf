@@ -1,0 +1,42 @@
+{
+  "bind9-dnsutils": {
+    "version": "1:9.20.27-2",
+    "license": "MPL-2.0",
+    "source": "https://packages.debian.org/source/stable/bind9"
+  },
+  "Holehe": {
+    "version": "1.61",
+    "license": "GPL-3.0-or-later",
+    "source": "https://pypi.org/project/holehe/1.61/"
+  },
+  "Piexif": {
+    "version": "1.1.3-2",
+    "license": "MIT",
+    "source": "https://packages.debian.org/source/stable/piexif"
+  },
+  "Sherlock": {
+    "version": "0.16.0-3",
+    "license": "MIT",
+    "source": "https://packages.debian.org/source/stable/sherlock"
+  },
+  "StaticMap": {
+    "version": "0.5.7",
+    "license": "MIT",
+    "source": "https://pypi.org/project/staticmap/0.5.7/"
+  },
+  "geopy": {
+    "version": "2.4.1-3",
+    "license": "MIT",
+    "source": "https://packages.debian.org/source/stable/geopy"
+  },
+  "theHarvester": {
+    "version": "4.11.1-0kali1",
+    "license": "GPL-2.0-or-later",
+    "source": "https://pkg.kali.org/pkg/theharvester"
+  },
+  "whois": {
+    "version": "5.6.6",
+    "license": "GPL-2.0-or-later",
+    "source": "https://packages.debian.org/source/stable/whois"
+  }
+}

@@ -283,11 +283,8 @@ def _validate_sbom(document: Mapping[str, Any], evidence: _BuildEvidence) -> tup
     if observed != expected:
         raise ReceiptInvalid("SBOM digests and sizes do not equal the embedded locked closure")
     component = evidence.component
-    if (
-        sbom["packages"] != component["packages"]
-        or version != component["version"]
-        or entrypoint != component["entrypoint"]
-    ):
+    locked_packages = sorted(component["packages"], key=lambda item: item["name"])
+    if sbom["packages"] != locked_packages or version != component["version"] or entrypoint != component["entrypoint"]:
         raise ReceiptInvalid("SBOM identity does not equal the locked component")
     if entrypoint not in observed or observed[entrypoint][0] != entrypoint_digest:
         raise ReceiptInvalid("SBOM does not bind the locked entrypoint")

@@ -234,25 +234,23 @@ class CapabilityAuthority:
         """Durably revoke prior-Boot handles before replacement authority is issued."""
 
         with self._lock:
-            latest: dict[str, dict[str, object]] = {}
-            for event in self._store.events():
-                if event.event_type != "capability-custody.recorded":
-                    continue
-                payload = event.payload
-                if payload.get("scope") == scope and payload.get("handle_digest"):
-                    latest[str(payload["handle_digest"])] = payload
-            stale = [
-                payload
-                for payload in latest.values()
-                if payload.get("boot_id") != self._boot_id
-                and payload.get("record") not in {CapabilityRecord.REVOKED.value, CapabilityRecord.DENIED.value}
-            ]
-            for payload in stale:
-                self._audit_serial += 1
-                self._store.append(
-                    CapabilityCustodyRecorded(
-                        event_id=self._event_id(),
-                        fact=HandleDecision(
+            with self._store.writer_batch():
+                latest: dict[str, dict[str, object]] = {}
+                for event in self._store.events():
+                    if event.event_type != "capability-custody.recorded":
+                        continue
+                    payload = event.payload
+                    if payload.get("scope") == scope and payload.get("handle_digest"):
+                        latest[str(payload["handle_digest"])] = payload
+                stale = [
+                    payload
+                    for payload in latest.values()
+                    if payload.get("boot_id") != self._boot_id
+                    and payload.get("record") not in {CapabilityRecord.REVOKED.value, CapabilityRecord.DENIED.value}
+                ]
+                for payload in stale:
+                    self._append(
+                        HandleDecision(
                             record=CapabilityRecord.REVOKED,
                             handle_digest=str(payload["handle_digest"]),
                             run_id=str(payload["run_id"]),
@@ -266,34 +264,25 @@ class CapabilityAuthority:
                             peer_identity_digest=str(payload["peer_identity_digest"]),
                             reason="restart-reconciled",
                         ),
-                        ts=self._timestamp(),
-                    ),
-                    body=b"",
-                )
-            return tuple(str(payload["generation_id"]) for payload in stale)
+                    )
+                return tuple(str(payload["generation_id"]) for payload in stale)
 
     def _record_denied(self, handle_digest: str, peer: PeerIdentity, reason: str) -> None:
-        self._audit_serial += 1
-        self._store.append(
-            CapabilityCustodyRecorded(
-                event_id=self._event_id(),
-                fact=HandleDecision(
-                    record=CapabilityRecord.DENIED,
-                    handle_digest=handle_digest,
-                    run_id="",
-                    boot_id="",
-                    generation_id="",
-                    lane_id="",
-                    attempt_id="",
-                    step_id="",
-                    scope="",
-                    peer_uid=peer.uid,
-                    peer_identity_digest=peer.digest,
-                    reason=reason,
-                ),
-                ts=self._timestamp(),
+        self._append(
+            HandleDecision(
+                record=CapabilityRecord.DENIED,
+                handle_digest=handle_digest,
+                run_id="",
+                boot_id="",
+                generation_id="",
+                lane_id="",
+                attempt_id="",
+                step_id="",
+                scope="",
+                peer_uid=peer.uid,
+                peer_identity_digest=peer.digest,
+                reason=reason,
             ),
-            body=b"",
         )
 
     def _record(
@@ -304,46 +293,44 @@ class CapabilityAuthority:
         *,
         reason: str = "",
     ) -> None:
-        self._audit_serial += 1
         binding = issued.binding
-        self._store.append(
-            CapabilityCustodyRecorded(
-                event_id=self._event_id(),
-                fact=HandleDecision(
-                    record=record,
-                    handle_digest=issued.handle_digest,
-                    run_id=binding.run_id,
-                    boot_id=binding.boot_id,
-                    generation_id=binding.generation_id,
-                    lane_id=binding.lane_id,
-                    attempt_id=binding.attempt_id,
-                    step_id=binding.step_id,
-                    scope=issued.scope,
-                    peer_uid=peer.uid,
-                    peer_identity_digest=peer.digest,
-                    reason=reason,
-                ),
-                ts=self._timestamp(),
+        self._append(
+            HandleDecision(
+                record=record,
+                handle_digest=issued.handle_digest,
+                run_id=binding.run_id,
+                boot_id=binding.boot_id,
+                generation_id=binding.generation_id,
+                lane_id=binding.lane_id,
+                attempt_id=binding.attempt_id,
+                step_id=binding.step_id,
+                scope=issued.scope,
+                peer_uid=peer.uid,
+                peer_identity_digest=peer.digest,
+                reason=reason,
             ),
-            body=b"",
         )
 
-    def _event_id(self) -> str:
-        return f"capability:{self._boot_id}:{self._audit_serial:06d}"
+    def _append(self, fact: HandleDecision | PeerAuthenticationFailure) -> None:
+        with self._store.writer_batch():
+            existing = {
+                str(event.payload["event_id"])
+                for event in self._store.events()
+                if event.event_type == "capability-custody.recorded"
+            }
+            self._audit_serial = len(existing) + 1
+            while (event_id := f"capability:{self._boot_id}:{self._audit_serial:06d}") in existing:
+                self._audit_serial += 1
+            self._store.append(
+                CapabilityCustodyRecorded(event_id=event_id, fact=fact, ts=self._timestamp()),
+                body=b"",
+            )
 
     def record_peer_authentication_failure(self) -> None:
         """Durably record a sanitized failure when no trusted peer can be derived."""
 
         with self._lock:
-            self._audit_serial += 1
-            self._store.append(
-                CapabilityCustodyRecorded(
-                    event_id=self._event_id(),
-                    fact=PeerAuthenticationFailure("peer-authentication-unavailable"),
-                    ts=self._timestamp(),
-                ),
-                body=b"",
-            )
+            self._append(PeerAuthenticationFailure("peer-authentication-unavailable"))
 
     def _is_current(self, generation_id: str) -> bool:
         return any(

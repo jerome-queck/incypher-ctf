@@ -1,0 +1,4 @@
+admin
+api
+graphql
+hidden-route

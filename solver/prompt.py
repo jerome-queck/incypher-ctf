@@ -141,7 +141,7 @@ def compose(
 def _opening(challenge: Sighting, rules: Rules, workdir: Path, budget_s: int) -> str:
     return (
         f"You are solving one Capture The Flag Challenge on {rules.url}, alone and unattended, with "
-        f"a root shell in a container and the forensics, crypto and reversing tooling the image "
+        f"a root shell in a container and the forensics, crypto, reversing, Web, OSINT and protocol tooling the image "
         f"ships.\n"
         f"Your working directory is {workdir}. It is yours, it already holds this Challenge's files, "
         f"and it survives into your next turn on this Challenge — anything you want later, leave "
@@ -219,7 +219,8 @@ def _instance(lease: Lease) -> str:
     until = lease.until.isoformat() if isinstance(lease.until, dt.datetime) else "an unstated time"
     return (
         "A Target is available only through the generation-bound Target broker. Use "
-        "`/target-client.py tcp '<payload>'` or `/target-client.py http <METHOD> <PATH>` from an "
+        "`/target-client.py tcp '<payload>'`, `/target-client.py http <METHOD> <PATH>`, or the "
+        "typed `http-session`, `tcp-session`, and `browser` JSON operations from an "
         f"authorised Tool; its raw address is withheld. It stops answering at {until}."
     )
 

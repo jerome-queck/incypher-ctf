@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,70 @@ def test_opaque_handle_grants_only_its_trusted_binding_and_scope(tmp_path):
     assert handle not in json.dumps(audit_records(tmp_path))
     assert [record["record"] for record in audit_records(tmp_path)] == ["issued", "authorized"]
     assert peers.calls == 1
+
+
+def test_independent_brokers_allocate_one_canonical_capability_event_sequence(tmp_path):
+    fence(tmp_path).acquire("work-1", "attempt-1")
+    first = CapabilityAuthority(
+        state=tmp_path,
+        run_id="run-1",
+        boot_id="boot-000001",
+        redactor=Redactor({}),
+        token_bytes=lambda count: b"a" * count,
+        timestamp=lambda: "2026-09-11T00:00:00Z",
+    )
+    second = CapabilityAuthority(
+        state=tmp_path,
+        run_id="run-1",
+        boot_id="boot-000001",
+        redactor=Redactor({}),
+        token_bytes=lambda count: b"b" * count,
+        timestamp=lambda: "2026-09-11T00:00:00Z",
+    )
+
+    first.issue(binding(), "tool.view:first", PEER)
+    second.issue(binding(), "target.exchange", PEER)
+
+    assert [record["event_id"] for record in audit_records(tmp_path)] == [
+        "capability:boot-000001:000001",
+        "capability:boot-000001:000002",
+    ]
+
+
+def test_concurrent_restart_reconciliation_revokes_each_stale_handle_once(tmp_path):
+    old = authority(tmp_path, Peers())
+    old.issue(binding(), "target.exchange", PEER)
+    replacements = [
+        CapabilityAuthority(
+            state=tmp_path,
+            run_id="run-1",
+            boot_id="boot-000002",
+            redactor=Redactor({}),
+            timestamp=lambda: "2026-09-11T00:00:00Z",
+        )
+        for _ in range(2)
+    ]
+    rendezvous = threading.Barrier(2)
+    for replacement in replacements:
+        append = replacement._append
+
+        def delayed(fact, *, append=append):
+            try:
+                rendezvous.wait(timeout=0.2)
+            except threading.BrokenBarrierError:
+                pass
+            append(fact)
+
+        replacement._append = delayed  # type: ignore[method-assign]
+    threads = [threading.Thread(target=item.reconcile_restart, args=("target.exchange",)) for item in replacements]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    reconciled = [record for record in audit_records(tmp_path) if record["reason"] == "restart-reconciled"]
+    assert len(reconciled) == 1
 
 
 @pytest.mark.parametrize(

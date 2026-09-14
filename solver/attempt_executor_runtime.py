@@ -224,6 +224,8 @@ class AttemptRuntime:
                     service.close()
                 self.research_broker.revoke_generation(binding.generation_id)
                 self._close_target(envelope_id)
+                if target_available:
+                    self.target_broker.revoke_generation(binding.generation_id)  # type: ignore[union-attr]
                 self.pool.release(slot)
                 raise RuntimeUnavailable(f"Research broker preparation failed: {error}") from error
         self._reservations[envelope_id] = slot, cgroup, baseline_bytes, nonce
@@ -380,6 +382,7 @@ class AttemptRuntime:
             network = bool(response and response.get("network_breach") is True)
             if response is not None:
                 self._close_target(envelope_id)
+                self._close_research(envelope_id)
                 sample = self._sample(request, slot, cgroup, baseline, baseline_bytes)
             cause = _first_cause(
                 cancelled,
@@ -920,17 +923,23 @@ def _workspace_usage(path: Path, *, allowed_socket_inodes: set[int] | None = Non
         unsafe = True
     for entry in entries[: MAX_WORKSPACE_FILES + 1]:
         try:
-            mode = entry.lstat().st_mode
+            observed = entry.lstat()
+            mode = observed.st_mode
             if stat.S_ISREG(mode):
-                total += entry.stat().st_size
+                total += observed.st_size
             elif not stat.S_ISDIR(mode):
                 allowed = (
                     allowed_socket_inodes is not None
                     and entry.name in {".target.sock", ".research.sock"}
                     and stat.S_ISSOCK(mode)
-                    and entry.lstat().st_ino in allowed_socket_inodes
+                    and observed.st_ino in allowed_socket_inodes
                 )
                 unsafe = unsafe or not allowed
+        except FileNotFoundError:
+            # Attempts may create and remove bounded temporary files between the
+            # directory snapshot and this metadata read. A vanished entry is no
+            # longer part of the workspace; the next sample observes replacements.
+            continue
         except OSError:
             unsafe = True
     return total, unsafe

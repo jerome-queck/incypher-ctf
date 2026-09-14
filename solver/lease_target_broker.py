@@ -23,7 +23,17 @@ from solver.target_broker_contracts import (
     TargetResult,
 )
 
-DEFAULT_TARGET_LIMITS = TargetLimits(32, 1024 * 1024, 8 * 1024 * 1024, 20)
+DEFAULT_TARGET_LIMITS = TargetLimits(
+    32,
+    1024 * 1024,
+    8 * 1024 * 1024,
+    20,
+    max_exchanges=128,
+    max_total_request_bytes=16 * 1024 * 1024,
+    max_total_response_bytes=64 * 1024 * 1024,
+    max_redirects=8,
+    max_total_seconds=300,
+)
 
 
 @dataclass(frozen=True)
@@ -170,6 +180,24 @@ class LeaseTargetBroker:
         return handle
 
     def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
+        return self._operation("exchange", connection, handle, request)
+
+    def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
+        return self._operation("http_session", connection, handle, request)
+
+    def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
+        return self._operation("tcp_session", connection, handle, request)
+
+    def browser(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult:
+        return self._operation("browser", connection, handle, request)
+
+    def _operation(
+        self,
+        operation: str,
+        connection: socket.socket,
+        handle: str,
+        request: Mapping[str, object],
+    ) -> TargetResult:
         with self._lock:
             current = self._handles.get(handle)
             if current is None:
@@ -177,7 +205,7 @@ class LeaseTargetBroker:
             if not self._target_authority.reauthorize(current.grant):
                 self.revoke_generation(current.grant.generation_id)
                 return TargetResult(TargetOutcome.REVOKED)
-        return current.runtime.exchange(connection, handle, request)
+        return getattr(current.runtime, operation)(connection, handle, request)
 
     def revoke(self, handle: str) -> None:
         with self._lock:

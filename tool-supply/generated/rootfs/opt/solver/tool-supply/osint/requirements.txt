@@ -1,0 +1,6 @@
+--require-hashes
+holehe==1.61 \
+    --hash=sha256:1a02e7c103b9abcb485eb0aaca36d950ac6bff4ec001d644362cc46739916b3b
+staticmap==0.5.7 \
+    --hash=sha256:f4ffc40ee4502b92e91045e0df85a46a2fd68483b4e7e404a6b545fd7396ea01 \
+    --hash=sha256:c7a96b902ba61292e818c20b0810619d6b81a6cdb50bcc1ab92d50ac4db20a7f

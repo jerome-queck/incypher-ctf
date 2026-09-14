@@ -1,0 +1,1 @@
+{"language":"dash","source":"printf '%s\\n' $((6 * 7))"}

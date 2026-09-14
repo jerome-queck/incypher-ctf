@@ -1,0 +1,7 @@
+{
+  "Chromium": {"version": "150.0.7871.181", "license": "BSD-3-Clause", "source": "https://chromium.googlesource.com/chromium/src/"},
+  "Playwright": {"version": "1.55.0", "license": "Apache-2.0", "source": "https://github.com/microsoft/playwright"},
+  "SecLists": {"version": "2026.2", "license": "MIT", "source": "https://github.com/danielmiessler/SecLists"},
+  "PayloadsAllTheThings": {"version": "2026.08", "license": "MIT", "source": "https://github.com/swisskyrepo/PayloadsAllTheThings"},
+  "ffuf": {"version": "2.2.1", "license": "MIT", "source": "https://github.com/ffuf/ffuf"}
+}

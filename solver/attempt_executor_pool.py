@@ -23,6 +23,7 @@ ATTEMPT_UID = 20_000
 WORKER_SOURCE = Path("/opt/solver/solver/attempt_executor_worker.py")
 TARGET_CLIENT_SOURCE = Path("/opt/solver/solver/target_broker_worker_client.py")
 RESEARCH_CLIENT_SOURCE = Path("/opt/solver/solver/research_broker_worker_client.py")
+TOOL_SUPPLY_ROOT = Path("/opt/solver/tool-supply")
 BROKER_SOURCE = Path("/opt/solver/solver/attempt_executor_broker.py")
 REQUIRED_CONTROLLERS = ("cpu", "memory", "pids")
 POOL_ENV = "INCYPHER_ATTEMPT_POOL"
@@ -152,6 +153,13 @@ def _fixed_worker_command(work: Path, control_fd: int = 3, seccomp_fd: int = 4, 
         "--ro-bind",
         "/etc/john",
         "/etc/john",
+        "--dir",
+        "/opt",
+        "--dir",
+        "/opt/solver",
+        "--ro-bind",
+        str(TOOL_SUPPLY_ROOT),
+        str(TOOL_SUPPLY_ROOT),
         "--tmpfs",
         "/tmp",
         "--chmod",

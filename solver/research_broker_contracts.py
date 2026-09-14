@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import base64
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -20,6 +21,57 @@ class ResearchOutcome(str, enum.Enum):
     REVOKED = "revoked"
     CAPABILITY_REFUSED = "capability-refused"
     STALE_CACHE = "stale-cache"
+    BUDGET_EXHAUSTED = "budget-exhausted"
+
+
+class ResearchKind(str, enum.Enum):
+    DNS = "dns"
+    IDENTITY = "identity"
+    EMAIL = "email"
+    DOMAIN = "domain"
+    GEO = "geo"
+
+
+@dataclass(frozen=True)
+class ResearchSource:
+    kind: ResearchKind
+    url_template: str
+    terms: str
+    robots: str
+
+
+@dataclass(frozen=True)
+class ResearchQuery:
+    kind: ResearchKind
+    source_id: str
+    subject: str
+    body: bytes = b""
+    content_type: str = ""
+
+    @classmethod
+    def live(cls, kind: ResearchKind, source_id: str, subject: str) -> "ResearchQuery":
+        return cls(kind, source_id, subject)
+
+    @classmethod
+    def recorded(
+        cls,
+        kind: ResearchKind,
+        source_id: str,
+        subject: str,
+        body: bytes,
+        *,
+        content_type: str,
+    ) -> "ResearchQuery":
+        return cls(kind, source_id, subject, bytes(body), content_type)
+
+    def document(self) -> dict[str, object]:
+        return {
+            "kind": self.kind.value,
+            "source_id": self.source_id,
+            "subject": self.subject,
+            "body": base64.b64encode(self.body).decode(),
+            "content_type": self.content_type,
+        }
 
 
 @dataclass(frozen=True)
@@ -28,9 +80,22 @@ class ResearchLimits:
     timeout_seconds: float
     max_redirects: int
     cache_seconds: int
+    max_requests: int = 32
+    max_total_bytes: int = 1024 * 1024
+    max_total_seconds: float = 60
+    min_interval_ms: int = 0
 
     def __post_init__(self) -> None:
-        if self.max_body_bytes <= 0 or self.timeout_seconds <= 0 or self.max_redirects < 0 or self.cache_seconds < 0:
+        if (
+            self.max_body_bytes <= 0
+            or self.timeout_seconds <= 0
+            or self.max_redirects < 0
+            or self.cache_seconds < 0
+            or self.max_requests <= 0
+            or self.max_total_bytes <= 0
+            or self.max_total_seconds <= 0
+            or self.min_interval_ms < 0
+        ):
             raise ValueError("Research limits are invalid")
 
 
@@ -56,6 +121,12 @@ class ResearchProvenance:
     observed_at: str = ""
     expires_at: str = ""
     elapsed_ms: int = 0
+    kind: ResearchKind | None = None
+    source_id: str = ""
+    terms: str = ""
+    robots: str = ""
+    origin: str = ""
+    query_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -90,6 +161,16 @@ class ResearchBrokerRecorded:
     timeout_ms: int
     max_redirects: int
     cache_seconds: int
+    kind: ResearchKind | None
+    source_id: str
+    terms: str
+    robots: str
+    origin: str
+    query_digest: str
+    max_requests: int
+    max_total_bytes: int
+    max_total_seconds_ms: int
+    min_interval_ms: int
 
     @property
     def event_type(self) -> str:
@@ -124,6 +205,16 @@ class ResearchBrokerRecorded:
             "timeout_ms": self.timeout_ms,
             "max_redirects": self.max_redirects,
             "cache_seconds": self.cache_seconds,
+            "kind": self.kind.value if self.kind else "",
+            "source_id": self.source_id,
+            "terms": self.terms,
+            "robots": self.robots,
+            "origin": self.origin,
+            "query_digest": self.query_digest,
+            "max_requests": self.max_requests,
+            "max_total_bytes": self.max_total_bytes,
+            "max_total_seconds_ms": self.max_total_seconds_ms,
+            "min_interval_ms": self.min_interval_ms,
             "blob_digest": blob_digest,
             "blob_bytes": blob_bytes,
         }
@@ -152,11 +243,23 @@ class ResearchBrokerRecorded:
             "timeout_ms",
             "max_redirects",
             "cache_seconds",
+            "kind",
+            "source_id",
+            "terms",
+            "robots",
+            "origin",
+            "query_digest",
+            "max_requests",
+            "max_total_bytes",
+            "max_total_seconds_ms",
+            "min_interval_ms",
         }
         if set(payload) != expected:
             raise InvalidEventError("Research-broker event fields are invalid", sequence=sequence)
         try:
             ResearchOutcome(str(payload["outcome"]))
+            if payload["kind"]:
+                ResearchKind(str(payload["kind"]))
         except ValueError as error:
             raise InvalidEventError("Research-broker outcome is invalid", sequence=sequence) from error
 
@@ -165,8 +268,11 @@ __all__ = [
     "RESEARCH_BROKER_RECORDED",
     "ResearchBrokerRecorded",
     "ResearchLimits",
+    "ResearchKind",
     "ResearchOutcome",
     "ResearchProvenance",
+    "ResearchQuery",
     "ResearchResult",
     "ResearchTransportResult",
+    "ResearchSource",
 ]

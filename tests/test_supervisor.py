@@ -94,6 +94,29 @@ def test_replay_and_storage_admission_precede_the_effect_capable_boot(tmp_path):
     assert result.disposition == NORMAL
 
 
+def test_controller_boot_inherits_the_pre_admitted_browser_launcher(monkeypatch):
+    captured = {}
+
+    class Pool:
+        def controller_environment(self):
+            return '{"slots":[]}', (11,)
+
+    class Process:
+        pid = 123
+
+    def launch(*args, **options):
+        captured.update(args=args, options=options)
+        return Process()
+
+    monkeypatch.setattr(supervisor_module.subprocess, "Popen", launch)
+    monkeypatch.setattr(supervisor_module, "browser_launcher_environment", lambda: ("17", (17,)))
+
+    supervisor_module.launch_boot("boot-1", {"RUN_ID": "run-1"}, Pool())
+
+    assert captured["options"]["env"]["INCYPHER_BROWSER_LAUNCHER_FD"] == "17"
+    assert captured["options"]["pass_fds"] == (11, 17)
+
+
 def test_supervisor_reconstructs_its_persisted_process_adapter_after_probe_crash(tmp_path, monkeypatch):
     boots = iter((ExitedBoot(1), ExitedBoot(0)))
     original = os.fsync

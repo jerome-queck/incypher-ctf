@@ -347,7 +347,18 @@ RUN set -eu; \
     rm -rf /root/.cache/mamba /root/.local/share/mamba /tmp/micromamba \
       /tmp/verify-sage-closure.py /tmp/sage-closure
 COPY tool-supply/generated/rootfs/ /
-COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json /opt/solver/tool-supply/
+RUN set -eu; \
+    for requirements in \
+      /opt/solver/tool-supply/web/requirements.txt \
+      /opt/solver/tool-supply/osint/requirements.txt \
+      /opt/solver/tool-supply/misc-protocols/requirements.txt; do \
+      python3 -m pip install --ignore-installed --no-cache-dir --require-hashes --no-deps \
+        -r "$requirements"; \
+    done; \
+    npm ci --omit=dev --ignore-scripts \
+      --prefix /opt/solver/tool-supply/misc-protocols; \
+    rm -rf /root/.cache/pip /root/.npm
+COPY tool-supply/generated/inventory.json tool-supply/generated/receipt.json tool-supply/generated/capabilities.json /opt/solver/tool-supply/
 COPY solver/ solver/
 COPY scripts/apply_tool_supply_modes.py scripts/apply_tool_supply_modes.py
 RUN python3 -m scripts.apply_tool_supply_modes \

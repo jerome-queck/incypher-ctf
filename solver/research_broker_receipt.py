@@ -39,11 +39,23 @@ def receipt_document(run_id: str, events: Sequence[CommittedEvent]) -> dict[str,
                 "observed_at": row["observed_at"],
                 "expires_at": row["expires_at"],
                 "cached": row["cached"],
+                "query": {
+                    "kind": row["kind"],
+                    "source_id": row["source_id"],
+                    "terms": row["terms"],
+                    "robots": row["robots"],
+                    "origin": row["origin"],
+                    "subject_digest": row["query_digest"],
+                },
                 "limits": {
                     "max_body_bytes": row["max_body_bytes"],
                     "timeout_ms": row["timeout_ms"],
                     "max_redirects": row["max_redirects"],
                     "cache_seconds": row["cache_seconds"],
+                    "requests": row["max_requests"],
+                    "total_bytes": row["max_total_bytes"],
+                    "total_seconds_ms": row["max_total_seconds_ms"],
+                    "min_interval_ms": row["min_interval_ms"],
                 },
             }
         )

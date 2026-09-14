@@ -43,7 +43,7 @@ STRICT_PROFILE = {
     "profile_id": STRICT_PROFILE_ID,
     "runtime_pin": STRICT_RUNTIME_PIN,
     "controls": list(STRICT_CONTROLS),
-    "uids": {"attempt": 20000, "broker": 30000},
+    "uids": {"attempt": 20000, "broker": 30000, "browser": 30001},
     "cgroup": {"cpu": "20000 100000", "memory": 33554432, "pids": 16, "work_bytes": 8388608},
     "network": "private-with-unix-target-broker",
     "filesystem": "readonly-tools-one-workdir",

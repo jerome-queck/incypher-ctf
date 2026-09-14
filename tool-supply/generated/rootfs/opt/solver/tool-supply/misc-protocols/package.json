@@ -1,0 +1,12 @@
+{
+  "name": "incypher-misc-protocols",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.19.0 <25"
+  },
+  "dependencies": {
+    "cyberchef": "11.4.0",
+    "webcrack": "2.16.0"
+  }
+}

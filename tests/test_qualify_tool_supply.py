@@ -42,6 +42,21 @@ def test_build_metadata_binds_the_loaded_config_to_the_oci_manifest(monkeypatch)
     ]
 
 
+def test_native_docker_build_does_not_require_colima(monkeypatch) -> None:
+    runner = Runner()
+
+    def unexpected_colima_verification() -> int:
+        raise AssertionError("native Docker qualification must not verify Colima")
+
+    monkeypatch.setattr(qualify_tool_supply.runtime, "verify", unexpected_colima_verification)
+
+    assert qualify_tool_supply.build_image(runner, runtime_host="native-docker") == (
+        "linux/arm64",
+        MANIFEST,
+        CONFIG,
+    )
+
+
 def test_strict_observation_cleans_only_its_cgroup() -> None:
     observation = {"component_id": "fixture.identity", "outcome": "pass"}
     runner = Runner(observation)
@@ -60,6 +75,21 @@ def test_strict_observation_cleans_only_its_cgroup() -> None:
         MANIFEST, MANIFEST, CONFIG, "linux/arm64", "fixture.identity"
     )
     assert runner.commands[-1] == ["colima", "ssh", "--", "sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
+
+
+def test_native_docker_observation_cleans_its_host_cgroup_directly() -> None:
+    runner = Runner({"component_id": "fixture.identity", "outcome": "pass"})
+
+    qualify_tool_supply.strict_observation(
+        "fixture.identity",
+        platform="linux/arm64",
+        manifest_digest=MANIFEST,
+        config_digest=CONFIG,
+        runtime_host="native-docker",
+        runner=runner,
+    )
+
+    assert runner.commands[-1] == ["sudo", "rmdir", strict_runtime.CGROUP_SOURCE]
 
 
 def test_tool_handle_qualification_retains_state_until_merge(tmp_path, monkeypatch) -> None:

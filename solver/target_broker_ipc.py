@@ -15,10 +15,17 @@ from solver.event_store_storage import canonical_bytes
 from solver.local_ipc import receive_line
 from solver.target_broker_contracts import (
     TARGET_EXCHANGE_COMMAND,
+    TARGET_BROWSER_COMMAND,
+    TARGET_HTTP_SESSION_COMMAND,
+    TARGET_TCP_SESSION_COMMAND,
+    BrowserObservations,
+    BrowserSessionRequest,
+    HttpSessionRequest,
     TargetOutcome,
     TargetProtocol,
     TargetProvenance,
     TargetResult,
+    TcpSessionRequest,
 )
 
 MAX_CLIENTS = 8
@@ -29,6 +36,12 @@ class TargetBroker(Protocol):
     def claim(self, connection: socket.socket, generation_id: str) -> str: ...
 
     def exchange(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
+
+    def http_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
+
+    def tcp_session(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
+
+    def browser(self, connection: socket.socket, handle: str, request: Mapping[str, object]) -> TargetResult: ...
 
     def revoke(self, handle: str) -> None: ...
 
@@ -49,15 +62,27 @@ class TargetBrokerClient:
     def http(self, method: str, path: str, body: bytes = b"") -> TargetResult:
         return self._exchange({"method": method, "path": path, "body": base64.b64encode(body).decode()})
 
+    def http_session(self, request: HttpSessionRequest) -> TargetResult:
+        return self._request(TARGET_HTTP_SESSION_COMMAND, request.document())
+
     def tcp(self, payload: bytes) -> TargetResult:
         return self._exchange({"body": base64.b64encode(payload).decode()})
 
+    def tcp_session(self, request: TcpSessionRequest) -> TargetResult:
+        return self._request(TARGET_TCP_SESSION_COMMAND, request.document())
+
+    def browser(self, request: BrowserSessionRequest) -> TargetResult:
+        return self._request(TARGET_BROWSER_COMMAND, request.document())
+
     def _exchange(self, request: dict[str, object]) -> TargetResult:
+        return self._request(TARGET_EXCHANGE_COMMAND, request)
+
+    def _request(self, command: str, request: dict[str, object]) -> TargetResult:
         if self._closed:
             return TargetResult(TargetOutcome.REVOKED)
         answer = _request(
             self._path,
-            {"command": TARGET_EXCHANGE_COMMAND, "handle": self._handle, "request": request},
+            {"command": command, "handle": self._handle, "request": request},
         )
         return self._decode(answer)
 
@@ -66,6 +91,7 @@ class TargetBrokerClient:
         if not isinstance(result, dict):
             return TargetResult(TargetOutcome.UNREACHABLE)
         provenance = result.get("provenance", {})
+        browser = result.get("browser", {})
         return TargetResult(
             TargetOutcome(str(result["outcome"])),
             base64.b64decode(str(result.get("body", ""))),
@@ -79,8 +105,24 @@ class TargetBrokerClient:
                 response_bytes=int(provenance.get("response_bytes", 0)),
                 transcript_digest=str(provenance.get("transcript_digest", "")),
                 elapsed_ms=int(provenance.get("elapsed_ms", 0)),
+                resolved_address=str(provenance.get("resolved_address", "")),
+                server_name=str(provenance.get("server_name", "")),
+                certificate_sha256=str(provenance.get("certificate_sha256", "")),
             ),
             str(result.get("request_id", "")),
+            tuple((str(name), str(value)) for name, value in result.get("headers", [])),
+            tuple(str(value) for value in result.get("redirect_chain", [])),
+            tuple((str(name), str(value)) for name, value in result.get("cookies", [])),
+            BrowserObservations(
+                str(browser.get("dom", "")),
+                tuple(
+                    (str(method), str(url), int(status), int(size))
+                    for method, url, status, size in browser.get("network", [])
+                ),
+                tuple((str(name), str(value)) for name, value in browser.get("local_storage", [])),
+                tuple((str(name), str(value)) for name, value in browser.get("session_storage", [])),
+                tuple((str(name), str(digest), int(size)) for name, digest, size in browser.get("downloads", [])),
+            ),
         )
 
     def close(self) -> None:
@@ -161,6 +203,15 @@ class TargetBrokerService:
             elif command == TARGET_EXCHANGE_COMMAND and isinstance(request.get("request"), dict):
                 result = self._runtime.exchange(connection, str(request.get("handle", "")), request["request"])
                 answer = {"status": "answered", "result": _document(result)}
+            elif command == TARGET_HTTP_SESSION_COMMAND and isinstance(request.get("request"), dict):
+                result = self._runtime.http_session(connection, str(request.get("handle", "")), request["request"])
+                answer = {"status": "answered", "result": _document(result)}
+            elif command == TARGET_TCP_SESSION_COMMAND and isinstance(request.get("request"), dict):
+                result = self._runtime.tcp_session(connection, str(request.get("handle", "")), request["request"])
+                answer = {"status": "answered", "result": _document(result)}
+            elif command == TARGET_BROWSER_COMMAND and isinstance(request.get("request"), dict):
+                result = self._runtime.browser(connection, str(request.get("handle", "")), request["request"])
+                answer = {"status": "answered", "result": _document(result)}
             elif command == "revoke":
                 self._runtime.revoke(str(request.get("handle", "")))
                 answer = {"status": "revoked"}
@@ -181,6 +232,16 @@ def _document(result: TargetResult) -> dict[str, object]:
         "body": base64.b64encode(result.body).decode(),
         "status": result.status,
         "request_id": result.request_id,
+        "headers": [list(field) for field in result.headers],
+        "redirect_chain": list(result.redirect_chain),
+        "cookies": [list(field) for field in result.cookies],
+        "browser": {
+            "dom": result.browser.dom,
+            "network": [list(item) for item in result.browser.network],
+            "local_storage": [list(item) for item in result.browser.local_storage],
+            "session_storage": [list(item) for item in result.browser.session_storage],
+            "downloads": [list(item) for item in result.browser.downloads],
+        },
         "provenance": {
             "challenge_id": provenance.challenge_id,
             "generation_id": provenance.generation_id,
@@ -190,6 +251,9 @@ def _document(result: TargetResult) -> dict[str, object]:
             "response_bytes": provenance.response_bytes,
             "transcript_digest": provenance.transcript_digest,
             "elapsed_ms": provenance.elapsed_ms,
+            "resolved_address": provenance.resolved_address,
+            "server_name": provenance.server_name,
+            "certificate_sha256": provenance.certificate_sha256,
         },
     }
 

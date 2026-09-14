@@ -135,5 +135,6 @@
   "tests/test_tool_supply_image.py",
   "tests/test_tool_supply_probe.py",
   "tests/test_tool_supply_receipt.py",
+  "tests/test_web_tool.py",
   "tests/test_verify_sage_closure.py",
 ]

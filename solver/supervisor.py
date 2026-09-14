@@ -48,6 +48,12 @@ from solver.supervisor_process import ProcessOutcome, ProcessOwner, SpawnedBoot
 from solver.supervisor_services import ServiceName, SupervisorServices
 from solver.supervisor_custody import SupervisorCustody
 from solver.supervisor_lifecycle import LifecycleWriter
+from solver.target_broker_browser import (
+    BROWSER_LAUNCHER_FD_ENV,
+    browser_launcher_environment,
+    close_browser_launcher,
+    prepare_browser_launcher,
+)
 from solver.work_generation import GenerationFence
 
 NORMAL = "normal"
@@ -454,6 +460,9 @@ def launch_boot(
     pass_fds: tuple[int, ...] = ()
     if attempt_pool is not None:
         controller_environment[POOL_ENV], pass_fds = attempt_pool.controller_environment()
+        browser_descriptor, browser_fds = browser_launcher_environment()
+        controller_environment[BROWSER_LAUNCHER_FD_ENV] = browser_descriptor
+        pass_fds = (*pass_fds, *browser_fds)
     credential_read = credential_write = None
     if cpa_credential is not None:
         credential_read, credential_write = os.pipe()
@@ -517,6 +526,7 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
     """Run PID 1 and report its terminal classification."""
 
     attempt_pool: AttemptPool | None = None
+    browser_launcher_prepared = False
     cpa_credential: bytearray | None = None
     try:
         from solver.clock import qualification_from_environment
@@ -543,8 +553,10 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
         )
 
         def prepare_pool() -> None:
-            nonlocal attempt_pool
+            nonlocal attempt_pool, browser_launcher_prepared
             attempt_pool = prepare_attempt_pool()
+            prepare_browser_launcher()
+            browser_launcher_prepared = True
 
         def open_custody(boot_id: str):
             nonlocal cpa_credential
@@ -609,6 +621,8 @@ def main(environ, *, state: Path = RUN_STATE, stay_quiescent: bool = True) -> in
             quiesce_refusal()
         return REFUSED_EXIT
     finally:
+        if browser_launcher_prepared:
+            close_browser_launcher()
         close_attempt_pool(attempt_pool)
     print(f"{result.disposition}: Run {result.run_id}, Boot {result.boot_id}", flush=True)
     return {
