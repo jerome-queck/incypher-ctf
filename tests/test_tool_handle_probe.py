@@ -64,6 +64,7 @@ def test_jail_reason_adapter_executes_all_languages_from_one_directory(tmp_path:
     def run(arguments, *args, **kwargs):
         if arguments and arguments[0] == "/usr/bin/node":
             arguments = [node, *arguments[1:]]
+            kwargs["timeout"] = 10
         return real_run(arguments, *args, **kwargs)
 
     monkeypatch.setattr(module.subprocess, "run", run)
