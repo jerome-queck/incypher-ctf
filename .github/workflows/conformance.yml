@@ -3,8 +3,9 @@ name: Conformance
 # The conformance rules, vendored into `conformance/` rather than called from the Organisation's
 # hub (ADR-0002). In Jerome-Group this file was a pinned `uses:` call so that a rule agreed once
 # reached every repository as a pin bump; standalone, there is no fleet to reach, and the call
-# would be permanently red — its gating rule reads required checks this repository cannot have on
-# a free private plan. The scripts are the hub's, unmodified; the manifest beside them is this
+# was permanently red while private — its gating rule read required checks that plan could not
+# have. ADR-0060 makes this public and restores a local ruleset, but the scripts remain the hub's
+# vendored snapshot; the manifest beside them is this
 # repository's own contract, edited in the same pull request as any file it binds.
 #
 # Its own file rather than a job inside `ci.yml`, still: `ci.yml` is the repository's checks and
@@ -60,10 +61,9 @@ jobs:
       - if: github.event_name == 'pull_request'
         run: sh conformance/install-gitleaks.sh "$RUNNER_TEMP/scanners"
 
-      # On a free private repository GitHub's own secret scanning and push protection are paid
-      # features, so this scan is the only control there is. It fires **after** the push: by the
-      # time it goes red the credential has reached GitHub's servers, so the response is rotate
-      # first, then clean up — CONTRIBUTING.md carries the full order.
+      # Public native secret scanning and push protection now stop new known patterns before the
+      # push. Keep this independent scanner as defence in depth and as an exact PR-history check;
+      # if it fires, treat the credential as published — CONTRIBUTING.md carries the full order.
       - if: github.event_name == 'pull_request'
         env:
           GITLEAKS: ${{ runner.temp }}/scanners/gitleaks
@@ -84,5 +84,5 @@ jobs:
 
       # The hub's final step — required-checks gating (check-gating.sh, resolve-required-checks.sh)
       # — is not vendored. It compares the workflows against the branch's required status checks,
-      # which a free-plan private repository cannot have (ADR-0003). Restore both scripts from
-      # Jerome-Group/.github if this repository ever gains rulesets.
+      # which the old private plan could not have (ADR-0003). ADR-0060 adds a local ruleset; the
+      # upstream scripts remain omitted until a deliberate re-vendor rather than being recreated.

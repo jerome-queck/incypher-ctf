@@ -1,5 +1,9 @@
 # v2 is the complete pre-final Solver, and v3 is only the official delta
 
+> **Superseded by [ADR-0059](0059-v2-is-the-final-competition-candidate.md).** v2 is now the final
+> competition candidate; official integration and the live 5.5-hour rehearsal no longer wait for
+> a planned v3.
+
 > **The unlimited v2 scope and sequential-calendar clauses are superseded by
 > [ADR-0051](0051-v2-has-a-finite-core-and-proof-earned-capability-packs.md).** v2 now has a finite
 > mandatory Core and three proof-earned Capability Packs. v3 may progress beside late v2 work;

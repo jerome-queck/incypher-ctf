@@ -1,5 +1,9 @@
 # One score basis qualifies one release-candidate profile
 
+> **Selection campaign superseded by [ADR-0059](0059-v2-is-the-final-competition-candidate.md).** A
+> six-arm campaign is not required before fielding; choose one working configuration through
+> bounded smoke/rehearsal evidence and spend the remaining time on official compatibility.
+
 [What objective and evidence qualify the selected v2
 policy?](https://github.com/jerome-queck/incypher-ctf/issues/243) resolves the contradiction between
 ADR-0043's inferential promotion rule and ADR-0049's descriptive three-pair rule. **The Solver

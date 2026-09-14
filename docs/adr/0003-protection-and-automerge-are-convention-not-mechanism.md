@@ -1,5 +1,9 @@
 # Branch protection and auto-merge are convention here, not mechanism
 
+> **Historical private-repository decision.** ADR-0060 supersedes its protection and secret-
+> scanning consequences now that the repository is public. Manual squash/attribution conventions
+> remain; public rulesets now enforce the minimum merge gate.
+
 This repository is **private** on the GitHub **Free** plan, with four collaborators. Two platform
 features the organisation's workflow leaned on are unavailable in that combination, confirmed
 against GitHub's own documentation at setup:
